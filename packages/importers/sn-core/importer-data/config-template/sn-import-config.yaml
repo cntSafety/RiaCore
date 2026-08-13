@@ -1,0 +1,24 @@
+namespace: SphinxNeedsModel
+source_name: Sphinx Needs Source
+sourceType: sphinx_needs_json
+format: sphinx_needs
+
+# Base folder for needs.json discovery. Absolute, or relative to the WORKSPACE
+# ROOT (the folder holding ria-data/) — never relative to this config file.
+# Prefer a relative path with forward slashes so the workspace stays portable
+# across machines and operating systems.
+project_dir: "docs/_build/html"
+
+# Optional direct path to needs.json, absolute or relative to the workspace root.
+# Leave blank to discover it via the `files.include` patterns under project_dir.
+needs_file: ""
+
+# Optional explicit version key from needs.json versions map
+# version: ""
+files:
+  include:
+    - "**/needs.json"
+  exclude: []
+elements:
+  concepts: true
+  relationships: true

@@ -1,0 +1,117 @@
+{
+    "componentFailureModes": [
+        {
+            "key": "loss-of-function",
+            "name": "Loss of function",
+            "description": "The system element does not provide its intended function at all (complete omission of the function when it is required), e.g. due to element unavailability, failure to start, or a blocked activation path.",
+            "measures": "Define the required availability of the function and specify a defined system reaction to its loss (degraded mode, fail-safe state, redundancy or fallback element). Ensure the loss is detectable (heartbeat, alive-monitoring, plausibility of downstream effect) within the fault-tolerant time interval."
+        },
+        {
+            "key": "unintended-function",
+            "name": "Unintended function / activation",
+            "description": "The system element provides its function when it is not required, or activates without a valid command or precondition (spurious activation, wrong operating mode, unintended state transition).",
+            "measures": "Define the full enable predicate (all preconditions and gating conditions) for every function and verify each gate. Where unintended activation is safety-relevant, add an independent confirmation or arbitration path so a single fault cannot trigger the function."
+        },
+        {
+            "key": "incorrect-function",
+            "name": "Incorrect function (wrong output/behavior)",
+            "description": "The system element performs the intended function incorrectly — wrong value, wrong magnitude, wrong direction/sign, or wrong behavior for the current operating condition.",
+            "measures": "Specify acceptance criteria and plausibility ranges for the element's output. Add monitoring, cross-checks, or redundant computation where an incorrect output is safety-relevant. Element-specific analysis is required to identify the credible incorrect behaviors."
+        },
+        {
+            "key": "degraded-performance",
+            "name": "Degraded performance / accuracy",
+            "description": "The function is delivered but with reduced accuracy, resolution, range, or capacity (drift, reduced dynamic range, saturation, wear over lifetime), such that system-level requirements are no longer met.",
+            "measures": "Allocate an end-to-end performance/accuracy budget across the contributing elements. Specify tolerances, drift limits, and lifetime effects per element and monitor for degradation where it is safety-relevant."
+        },
+        {
+            "key": "timing-availability",
+            "name": "Timing / availability failure",
+            "description": "The function is delivered too late, too early, intermittently, or not within its deadline (missed reaction time, excessive latency, intermittent dropout, startup or recovery too slow).",
+            "measures": "Define the fault-tolerant time interval and the required reaction time at system level, and allocate timing budgets to each element. Supervise timing (watchdog, deadline monitoring, alive counters) and define the safe reaction when a timing violation is detected."
+        },
+        {
+            "key": "mode-management",
+            "name": "Mode / state management failure",
+            "description": "Incorrect system mode or state handling: an illegal mode is reached, a required transition to a safe/degraded mode does not occur, or modes are inconsistent between cooperating elements.",
+            "measures": "Define the complete set of system modes and their allowed transitions, including explicit handling of undefined transitions. Verify safe-state entry and mode consistency across elements, especially across restart, recovery, and reconfiguration paths."
+        },
+        {
+            "key": "redundancy-arbitration",
+            "name": "Redundancy / arbitration failure",
+            "description": "A redundancy or voting/arbitration concept does not work as intended (common-cause failure defeats redundancy, wrong lane selected, arbitration accepts a faulty source, degraded lane not detected).",
+            "measures": "Analyze common-cause and dependent failures for redundant elements (shared power, clock, resource, environment). Ensure faulty lanes are detected and excluded, and that the arbitration/voting logic itself is monitored."
+        },
+        {
+            "key": "resource-sharing",
+            "name": "Shared-resource conflict",
+            "description": "Multiple elements contend for a shared resource (power, bus bandwidth, memory, compute, actuator authority) leading to starvation, interference, or unintended coupling between otherwise independent functions.",
+            "measures": "Identify shared resources and specify freedom-from-interference measures (resource budgeting, partitioning, quotas, priority/authority arbitration). Verify that a fault in one function cannot exhaust a resource needed by a safety-relevant function."
+        },
+        {
+            "key": "environmental-robustness",
+            "name": "Environmental / operating-condition robustness",
+            "description": "The element does not tolerate the specified operating conditions (temperature, vibration, EMC, voltage, contamination, ageing), leading to malfunction under foreseeable conditions.",
+            "measures": "Specify the operating envelope and qualification conditions for each element. Verify robustness by analysis and environmental testing, and define behavior at and beyond the specified limits."
+        },
+        {
+            "key": "initialization-recovery",
+            "name": "Initialization / recovery failure",
+            "description": "The element is not correctly initialized or recovered (wrong startup state, dependencies started in the wrong order, persistent state not restored or not cleared, unsafe state after warm restart).",
+            "measures": "Define the required initialization order and preconditions across cooperating elements. Distinguish reset/restart sources and define how persistent state is treated for each. Verify that outputs are held in a defined safe state during the unavailable window."
+        },
+        {
+            "key": "systematic-design-fault",
+            "name": "Systematic design fault (new technology / new design)",
+            "description": "A latent systematic fault introduced by new technology, a novel design concept, or insufficiently validated requirements — the dominant occurrence driver in system-level FMEA.",
+            "measures": "Increase the occurrence rating for new or unproven design and reduce it as experience and validation evidence accumulate. Apply additional analysis, prototyping, and verification proportional to the novelty of the design."
+        }
+    ],
+    "interfaceFailureModes": [
+        {
+            "key": "missing-signal",
+            "name": "Missing signal / no update",
+            "description": "An interface signal or message is not received or stops updating (timeout, silent source, link down, connection not established, receiver not handling the missing update)."
+        },
+        {
+            "key": "stuck-frozen",
+            "name": "Stuck-at / frozen value",
+            "description": "An interface value repeats or freezes (last value held, source stuck) even though the underlying physical quantity changes."
+        },
+        {
+            "key": "out-of-range",
+            "name": "Out-of-range / implausible value",
+            "description": "A received value is outside allowed bounds or implausible given other signals (range or plausibility checks missing or incorrect, cross-signal consistency not verified)."
+        },
+        {
+            "key": "corrupted-data",
+            "name": "Corrupted data / integrity not checked",
+            "description": "End-to-end protection (CRC, checksum, MAC, parity) fails or is not validated by the receiver, allowing corrupted interface data to be used."
+        },
+        {
+            "key": "freshness-sequence",
+            "name": "Freshness / sequence failure",
+            "description": "The receiver does not properly validate message freshness or order (missing timestamp/counter checks, out-of-sequence messages accepted, duplicate or replayed messages)."
+        },
+        {
+            "key": "latency-jitter",
+            "name": "Latency / jitter on interface",
+            "description": "Variable or excessive interface delay breaks control or coordination assumptions (late arrival, bursty delivery, queueing delay)."
+        },
+        {
+            "key": "wrong-scaling-units",
+            "name": "Wrong scaling / units at interface",
+            "description": "Encoding or decoding mismatch between sender and receiver (e.g. resolution per bit, deg vs rad, percent vs fraction, unit mismatch) leading to systematic error."
+        },
+        {
+            "key": "wrong-mapping",
+            "name": "Wrong signal mapping / wrong source",
+            "description": "The wrong message, signal, channel, or source is connected or decoded (wrong ID, swapped channels, wrong redundant lane, wrong instance subscribed)."
+        },
+        {
+            "key": "interface-mismatch",
+            "name": "Interface specification mismatch",
+            "description": "Sender and receiver assume different interface definitions (datatype, semantics, valid range, invalid-value marker, or protocol version), causing misinterpretation."
+        }
+    ]
+}

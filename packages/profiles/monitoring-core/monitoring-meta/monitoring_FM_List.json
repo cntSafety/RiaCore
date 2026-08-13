@@ -1,0 +1,130 @@
+{
+  "componentFailureModes": [
+    {
+      "key": "loss-of-function",
+      "name": "Loss of function / no output",
+      "description": "The device or one of its functional channels stops providing its intended result. Examples include a camera producing no image, a sensor providing no measurement, or an actuator producing no movement, force, pressure, or flow.",
+      "measures": "Use alive monitoring, heartbeat, update-rate supervision, supply monitoring, or observation of the expected downstream effect. Detect the loss within the fault-tolerant time interval and define a degraded or safe reaction."
+    },
+    {
+      "key": "degraded-sensing",
+      "name": "Degraded sensing / transduction",
+      "description": "The sensing path still operates but loses sensitivity, resolution, contrast, dynamic range, or coverage. Examples include dead or hot image pixels, reduced detector sensitivity, damage or misalignment in an electro-optical path, or degradation of an electrical, acoustic, pressure, or position transducer.",
+      "measures": "Monitor signal quality indicators, calibration references, usable range, bad-channel counts, image-quality metrics, or agreement with a diverse sensor or physical model. Define limits beyond which the measurement is no longer trusted."
+    },
+    {
+      "key": "measurement-drift",
+      "name": "Measurement drift / bias",
+      "description": "The reported value gradually shifts from the true value because of ageing, temperature cycling, humidity-related electrical degradation, reference drift, calibration loss, or sensor wear, while remaining superficially plausible.",
+      "measures": "Perform reference or zero-point checks, monitor long-term trends, compare redundant or diverse measurements, and apply model-based plausibility checks. Recalibrate or reject the channel when drift exceeds its tolerance."
+    },
+    {
+      "key": "noisy-intermittent-output",
+      "name": "Noisy / intermittent output",
+      "description": "The device output contains excessive noise, dropouts, flicker, sporadic invalid samples, or unstable connections. The fault may appear only at certain temperatures, vibration levels, loads, or operating conditions.",
+      "measures": "Monitor variance, dropout rate, invalid-sample count, discontinuities, and connection health over a time window. Avoid masking a recurring fault with filtering alone; latch or escalate the diagnostic when recurrence exceeds a threshold."
+    },
+    {
+      "key": "incorrect-processing",
+      "name": "Incorrect internal processing",
+      "description": "The processor executes the intended processing incorrectly because runtime hardware is degraded or corrupted. Examples include wrong image processing, filtering, colour correction, focus evaluation, sensor fusion, control calculation, or output encoding despite valid inputs.",
+      "measures": "Use end-to-end plausibility checks, reasonableness checks on intermediate and final results, control-flow or lock-step monitoring, and independent calculation for safety-critical results. This mode concerns random execution faults, not a systematic defect in the designed algorithm."
+    },
+    {
+      "key": "memory-state-corruption",
+      "name": "Memory / internal state corruption",
+      "description": "Working data, calibration data, configuration, program memory, or internal state becomes corrupted or is lost, leading to incorrect processing, wrong operating mode, invalid calibration, or unpredictable output.",
+      "measures": "Protect memory and stored data with ECC, parity, CRC, redundant storage, range checks, and periodic read-back or scrubbing. Reinitialize to a validated state or enter a safe state when integrity cannot be restored."
+    },
+    {
+      "key": "timing-clock-fault",
+      "name": "Timing / clock fault",
+      "description": "Internal timing is lost or becomes inaccurate because a clock stops, drifts, becomes unstable, or loses synchronization. Processing or actuation may then be too late, too early, irregular, or performed at the wrong rate.",
+      "measures": "Use an independent clock supervisor, window watchdog, deadline monitoring, timestamp/rate checks, or comparison with a second time base. Define the reaction to clock loss, excessive drift, or missed deadlines."
+    },
+    {
+      "key": "power-supply-fault",
+      "name": "Power supply degradation / interruption",
+      "description": "Internal or supplied power is absent, intermittent, noisy, or outside its valid voltage/current range. The device may reset, operate unpredictably, lose performance under load, or disable only part of its sensing, processing, or actuation chain.",
+      "measures": "Monitor relevant rails for under-voltage, over-voltage, ripple, brown-out, and unexpected reset. Supervise current where useful and hold outputs in a defined safe state outside the valid supply window."
+    },
+    {
+      "key": "actuation-loss",
+      "name": "Loss of internal actuation",
+      "description": "An integrated motor, solenoid, pump, valve, positioning stage, or similar electrically commanded mechanism does not move or generate the requested force, pressure, or flow. Examples include a camera focus motor that no longer moves or an electrohydraulic valve that does not respond.",
+      "measures": "Compare commanded and measured position, speed, current, pressure, force, or flow. Detect lack of response, excessive current, timeout, or failure to reach the commanded state and transition to a defined fallback."
+    },
+    {
+      "key": "degraded-actuation",
+      "name": "Degraded / inaccurate actuation",
+      "description": "An integrated actuator still responds but is slow, weak, inaccurate, oscillatory, or unable to hold its commanded state because of ageing or degradation in its motor, driver, feedback sensor, valve, pump, or transmission path.",
+      "measures": "Monitor tracking error, response time, settling time, current or pressure signature, achieved force/flow, oscillation, and position stability. Trend these indicators so gradual degradation is detected before complete loss."
+    },
+    {
+      "key": "feedback-control-fault",
+      "name": "Internal feedback / regulation fault",
+      "description": "An internal closed-loop function uses missing, biased, noisy, or stuck feedback and therefore regulates the wrong value or becomes unstable. Examples include autofocus, image stabilization, speed, position, voltage, temperature, or pressure control.",
+      "measures": "Check command-to-feedback consistency, controller saturation, persistent control error, convergence, and oscillation. Where practical, compare feedback with an independent limit switch, sensor, or observable physical effect."
+    },
+    {
+      "key": "internal-data-path-fault",
+      "name": "Internal communication / data-path fault",
+      "description": "Data between sensing, processing, memory, and actuation stages is lost, delayed, frozen, corrupted, or assigned to the wrong channel, so individually healthy subfunctions no longer work together correctly.",
+      "measures": "Use end-to-end CRC, sequence counters, freshness monitoring, timeout supervision, channel identifiers, and interface self-tests. Detect partial communication loss rather than relying only on an overall device heartbeat."
+    },
+    {
+      "key": "transient-upset",
+      "name": "Transient upset (radiation / EMC / electrical disturbance)",
+      "description": "A temporary disturbance corrupts logic, memory, sensing, communication, or control without necessarily causing permanent damage. Examples include a radiation-induced single-event upset, EMC-induced glitch, electrostatic discharge effect, or short supply disturbance.",
+      "measures": "Use ECC/parity, retries, temporal plausibility checks, redundant execution, watchdog recovery, and controlled reinitialization. Count recurrences and escalate repeated transient events because they may indicate permanent degradation or an unsuitable environment."
+    },
+    {
+      "key": "temperature-related-degradation",
+      "name": "Temperature-related functional degradation",
+      "description": "The device remains powered but its sensing accuracy, processing reliability, communication, or actuation capability deteriorates at high or low temperature or after repeated thermal cycling and ageing.",
+      "measures": "Monitor internal temperature and temperature-dependent quality/performance indicators. Apply validated compensation where possible and derate, disable, or enter a safe state outside the qualified operating range."
+    }
+  ],
+  "interfaceFailureModes": [
+    {
+      "key": "missing-output",
+      "name": "Missing output / no update",
+      "description": "A measurement, message, or status is absent or stops updating although the function is expected to be active."
+    },
+    {
+      "key": "stuck-output",
+      "name": "Stuck / frozen output",
+      "description": "The output remains fixed or repeats old data even though the observed quantity or commanded state changes."
+    },
+    {
+      "key": "incorrect-output",
+      "name": "Incorrect / implausible output",
+      "description": "The output is present but has a wrong value, sign, state, range, or physical relationship to other signals."
+    },
+    {
+      "key": "drifting-output",
+      "name": "Drifting / biased output",
+      "description": "The output changes gradually away from its correct value while remaining within a superficially valid range."
+    },
+    {
+      "key": "noisy-intermittent-interface",
+      "name": "Noisy / intermittent interface",
+      "description": "The interface exhibits excessive noise, glitches, sporadic dropouts, flicker, or unstable communication."
+    },
+    {
+      "key": "timing-freshness",
+      "name": "Timing / freshness failure",
+      "description": "Data or response arrives too late, too early, irregularly, or with an invalid age, update rate, sequence, or timestamp."
+    },
+    {
+      "key": "corrupted-data",
+      "name": "Corrupted / incomplete data",
+      "description": "The transferred data is altered, truncated, internally inconsistent, or accepted despite a failed integrity check."
+    },
+    {
+      "key": "wrong-channel",
+      "name": "Wrong channel / source assignment",
+      "description": "A valid-looking signal or command belongs to the wrong sensor, actuator, redundant lane, or logical channel."
+    }
+  ]
+}

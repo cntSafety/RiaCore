@@ -1,0 +1,13 @@
+{
+  "name": "@riacore/profile-safety-core",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Safety analysis profile assets for RIACore",
+  "scripts": {
+    "legacy:import": "npx tsx safety-src/safety-importer.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
+  }
+}

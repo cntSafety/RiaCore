@@ -1,0 +1,473 @@
+##
+## safety-analysis-base.linkml.yaml
+##
+## SHARED BASE for the FMEA-style analysis profiles (SW safety, system safety,
+## monitoring, ...). It holds the ~90% that is identical across those profiles:
+## the classes (malfunction, risk_rating, requirement, safety_task, safety_note,
+## tag, review_item), all slots, and the enums that do not change between
+## profiles (AsilLevel, SeverityLevel, TaskStatus, ReviewStatus, ReviewerVerdict).
+##
+## It is NOT parsed on its own. A concrete profile is composed at registration
+## time from an ordered layer list [ this base, <profile>.overlay.linkml.yaml ]
+## via composeProfileSchema(). The overlay carries only the per-profile deltas:
+##   - identity (name/title/description/version)
+##   - the OccurrenceLevel / DetectionLevel / TaskType enums (their wording is
+##     profile-specific), and
+##   - the profile_review annotation (review instructions + optional catalog).
+##
+## Overlay merge rules (see composeProfileSchema):
+##   classes/slots -> field-level merge (overlay fields win, others kept)
+##   enums         -> whole-enum replace
+##   annotations   -> overlay wins
+
+id: https://ria.io/schema/analysis-base/meta
+name: safety_analysis_base
+title: Safety Analysis Base Metamodel — Shared Structure
+description: >-
+  Shared base for FMEA-style analysis profiles. Composed with a profile overlay
+  before parsing; not used standalone.
+version: "1.0.1"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  analysis: https://example.org/analysis-base#
+
+default_prefix: analysis
+default_range: string
+
+display_identifier_attrs:
+  - has_name
+
+imports:
+  - linkml:types
+
+##############################################################################
+# ENUMERATIONS (profile-invariant only)
+#
+# OccurrenceLevel, DetectionLevel and TaskType are intentionally NOT defined
+# here — their wording differs per profile and is supplied by the overlay.
+##############################################################################
+
+enums:
+
+  AsilLevel:
+    description: >-
+      ISO 26262 Automotive Safety Integrity Level including decomposition
+      bracket notation (e.g. QM(A), B(C)).
+    permissible_values:
+      QM:      { description: "Quality Management — no ASIL requirement" }
+      A:       { description: "ASIL A — lowest safety integrity requirement" }
+      B:       {}
+      C:       {}
+      D:       { description: "ASIL D — highest safety integrity requirement" }
+      "QM(A)": {}
+      "QM(B)": {}
+      "QM(C)": {}
+      "QM(D)": {}
+      "A(A)":  {}
+      "A(B)":  {}
+      "A(C)":  {}
+      "A(D)":  {}
+      "B(B)":  {}
+      "B(C)":  {}
+      "B(D)":  {}
+      "C(C)":  {}
+      "C(D)":  {}
+      "D(D)":  {}
+
+  SeverityLevel:
+    description: >-
+      Classification of impact severity for a failure mode.
+      Safety-Impact indicates a potential violation of safety requirements;
+      QM-Impact indicates quality-only impact with no safety relevance.
+    permissible_values:
+      "Safety-Impact": { description: "Failure leads to potential violation of safety requirements" }
+      "QM-Impact":     { description: "Failure affects quality related requirements; standard quality management applies" }
+
+  TaskStatus:
+    description: Workflow status for safety_task items.
+    permissible_values:
+      "open":        { description: "Task is identified but not yet started" }
+      "To Do":       { description: "Task is queued and ready to be worked on" }
+      "started":     { description: "Task work is in progress" }
+      "In Progress": { description: "Task is actively being worked on" }
+      "In Review":   { description: "Task is completed and under review" }
+      "Confirmed":   { description: "Task result has been confirmed" }
+      "Done":        { description: "Task is completed" }
+      "finished":    { description: "Task is finished" }
+      "see Ticket":  { description: "Task is tracked externally; see the task_reference field" }
+
+  ReviewStatus:
+    description: >-
+      Author response status used with ReviewerVerdict in the two-axis review
+      workflow. It tracks the author's handling of a reviewer verdict.
+    permissible_values:
+      "open":        { description: "No author response has been completed" }
+      "in_analysis": { description: "Author is analyzing the review comment" }
+      "resolved":    { description: "Author has addressed and acknowledged the review" }
+      "rejected":    { description: "Author rejected the review comment with justification" }
+
+  ReviewerVerdict:
+    description: >-
+      The reviewer's verdict on the reviewed element. A verdict records the
+      reviewed-content snapshot independently of the author's response status.
+    permissible_values:
+      "OK":              { description: "Element is acceptable as-is" }
+      "NOK":             { description: "Element is not acceptable, action required" }
+      "OK_with_comment": { description: "Element is acceptable but reviewer has a comment" }
+
+##############################################################################
+# CLASSES
+##############################################################################
+
+classes:
+
+  malfunction:
+    description: >-
+      A specific way in which an element can fail or malfunction, identified
+      during FMEA. The uuid is the stable MALFUNCTION node identifier.
+    slots:
+      - uuid
+      - has_name
+      - malfunction_description
+      - malfunction_asil
+      - occurs_at
+      - has_risk_rating
+      - has_safety_requirements
+      - has_direct_requirements
+      - has_safety_tasks
+      - propagates_to
+      - has_notes
+
+  risk_rating:
+    description: >-
+      An FMEA-style risk assessment for a failure mode, combining Severity,
+      Occurrence, and Detection ratings to compute a Risk Priority Number (RPN).
+      Inlined inside its parent malfunction. The uuid is the stable RISKRATING
+      node identifier.
+    slots:
+      - uuid
+      - has_name
+      - has_severity
+      - has_occurrence_level
+      - has_detection_level
+      - risk_priority_number
+      - risk_rating_note
+
+  requirement:
+    description: >-
+      A safety or quality requirement managed in an external requirements
+      management system (e.g. Jama, DOORS, Polarion). The uuid is the canonical
+      SAFETYREQ node identifier.
+    slots:
+      - uuid
+      - req_name
+      - req_id
+      - req_asil
+      - req_text
+      - req_linked_to
+
+  safety_task:
+    description: >-
+      A mitigation, monitoring, or verification task derived from analysis.
+      One task may cover multiple failure modes. The uuid is the stable
+      SAFETYTASK node identifier.
+    slots:
+      - uuid
+      - has_name
+      - task_description
+      - task_status
+      - task_type
+      - task_responsible
+      - task_reference
+
+  safety_note:
+    description: >-
+      A free-text annotation attached to any analysis or imported element.
+      The graph edge is the sole authoritative link. The uuid is the stable
+      SAFETYNOTE node identifier.
+    slots:
+      - uuid
+      - note_text
+
+  tag:
+    description: >-
+      A reusable label attached to any analysis or imported element for
+      categorization, filtering, and batch management. The uuid is the stable
+      TAG node identifier.
+    slots:
+      - uuid
+      - has_name
+      - tag_description
+      - tag_color
+
+  review_item:
+    description: >-
+      A review comment attached to any analysis element. Two independent axes:
+      reviewer_verdict (reviewer decision) and author_status (author response).
+      The uuid is the stable REVIEWITEM node identifier.
+    slots:
+      - uuid
+      - has_name
+      - reviewer_comment
+      - reviewer_verdict
+      - review_status
+      - author_status
+      - author_comment
+      - reviewed_element_id
+      - reviewed_content_hash
+
+##############################################################################
+# SLOTS
+##############################################################################
+
+slots:
+
+  uuid:
+    range: string
+    required: true
+    identifier: true
+    description: >-
+      Stable identifier of the element as stored in the graph database.
+      Constant across export runs — must not be regenerated on re-export.
+
+  has_name:
+    range: string
+    required: true
+    description: Human-readable name or identifier for the entity.
+
+  malfunction_description:
+    domain: malfunction
+    range: string
+    description: Detailed description of the malfunction, including conditions and effects.
+
+  malfunction_asil:
+    domain: malfunction
+    range: AsilLevel
+    description: >-
+      ISO 26262 ASIL classification for the malfunction.
+      Allowed values: QM, A, B, C, D and decomposition bracket notation.
+
+  occurs_at:
+    domain: malfunction
+    range: string
+    description: >-
+      Cross-namespace relationship to the element at which this failure mode
+      can manifest. Resolved at runtime via RIA_UNIV_CROSSNS_INSTANCE_REL.
+
+  has_risk_rating:
+    domain: malfunction
+    range: risk_rating
+    inlined: true
+    description: >-
+      Inline FMEA risk assessment (severity, occurrence, detection, RPN).
+      Omitted when no risk rating exists for the failure mode.
+
+  has_safety_requirements:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of requirements linked to this failure mode. Each value
+      references a requirement.uuid in the top-level safety_requirements section.
+
+  has_direct_requirements:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Node IDs of requirement elements from imported namespaces linked directly
+      to this malfunction. Stored as RIA_UNIV_CROSSNS_INSTANCE_REL with
+      relationship='has_direct_requirements'.
+
+  has_safety_tasks:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of reusable safety tasks linked to this failure mode. Each
+      value references a safety_task.uuid in the top-level safety_tasks section.
+
+  propagates_to:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of failure modes that this failure mode can cause or propagate
+      to. Each value references a malfunction.uuid in the same failure_modes section.
+
+  has_failure_mode:
+    range: malfunction
+    multivalued: true
+    description: >-
+      Inverse of occurs_at. Associates any element in a source namespace with
+      the failure modes that can manifest at it. Resolved via
+      RIA_UNIV_CROSSNS_INSTANCE_REL.
+
+  has_notes:
+    range: safety_note
+    multivalued: true
+    description: >-
+      Links any analysis element or imported element to its safety notes.
+      Intra-namespace: RIA_UNIV_INSTANCE_REL with relationship = 'has_notes'.
+      Cross-namespace: RIA_UNIV_CROSSNS_INSTANCE_REL with relationship = 'has_notes'.
+
+  has_severity:
+    domain: risk_rating
+    range: SeverityLevel
+    ifabsent: string(Safety-Impact)
+    description: Severity classification (Safety-Impact or QM-Impact).
+
+  has_occurrence_level:
+    domain: risk_rating
+    range: OccurrenceLevel
+    ifabsent: string(Level3)
+    description: Occurrence level (Level1–Level5); see the profile OccurrenceLevel enum.
+
+  has_detection_level:
+    domain: risk_rating
+    range: DetectionLevel
+    ifabsent: string(Level3)
+    description: Detection level (Level1–Level5); see the profile DetectionLevel enum.
+
+  risk_priority_number:
+    domain: risk_rating
+    range: integer
+    description: >-
+      RPN = Severity weight × Occurrence level number × Detection level number.
+      Zero when any component value is unavailable.
+
+  risk_rating_note:
+    domain: risk_rating
+    range: string
+    description: Justification for the selected risk rating.
+
+  req_name:
+    domain: requirement
+    range: string
+    description: Human-readable name of the requirement.
+
+  req_id:
+    domain: requirement
+    range: string
+    description: Unique requirement identifier from the requirements management system.
+
+  req_asil:
+    domain: requirement
+    range: AsilLevel
+    description: ASIL classification assigned to the requirement.
+
+  req_text:
+    domain: requirement
+    range: string
+    description: Full text or statement of the requirement.
+
+  req_linked_to:
+    domain: requirement
+    range: uri
+    description: External URL to the requirement in a requirements management system. Optional.
+
+  task_description:
+    domain: safety_task
+    range: string
+    description: Description of the task including rationale and acceptance criteria.
+
+  task_status:
+    domain: safety_task
+    range: TaskStatus
+    ifabsent: string(open)
+    description: >-
+      Workflow status. Valid values: open, To Do, started, In Progress,
+      In Review, Confirmed, Done, finished, see Ticket.
+
+  task_type:
+    domain: safety_task
+    range: TaskType
+    ifabsent: string(dev-time measures)
+    description: Task type; see the profile TaskType enum.
+
+  task_responsible:
+    domain: safety_task
+    range: string
+    description: Responsible person or team.
+
+  task_reference:
+    domain: safety_task
+    range: string
+    description: External reference — ticket ID, URL, or document reference.
+
+  tag_description:
+    domain: tag
+    range: string
+    description: Optional description of the tag's purpose or usage.
+
+  tag_color:
+    domain: tag
+    range: string
+    description: Optional hex color code (e.g. "#FF5733") for visual display.
+
+  has_tag:
+    range: tag
+    multivalued: true
+    description: >-
+      Links any element to tags for categorization.
+      Intra-namespace: RIA_UNIV_INSTANCE_REL with relationship = 'has_tag'.
+      Cross-namespace: RIA_UNIV_CROSSNS_INSTANCE_REL with relationship = 'has_tag'.
+
+  note_text:
+    domain: safety_note
+    range: string
+    description: Free-text content of the note. Tag notes (<Tag> prefix) are excluded.
+
+  reviewer_comment:
+    domain: review_item
+    range: string
+    required: true
+    description: The reviewer's comment or finding.
+
+  review_status:
+    domain: review_item
+    range: ReviewStatus
+    required: true
+    description: >-
+      Legacy compatibility field initialized to open. Current review behavior
+      and presentation use reviewer_verdict together with author_status.
+
+  reviewer_verdict:
+    domain: review_item
+    range: ReviewerVerdict
+    description: >-
+      The reviewer's verdict on the element: OK, Not OK (NOK), or Note
+      (OK_with_comment). Setting a verdict captures a content snapshot.
+
+  author_status:
+    domain: review_item
+    range: ReviewStatus
+    ifabsent: string(open)
+    description: >-
+      The author's independent response status: open, in_analysis, resolved, or
+      rejected. Resolving captures a content snapshot; reopening or moving to
+      in_analysis clears it.
+
+  author_comment:
+    domain: review_item
+    range: string
+    description: The author's response to the reviewer comment, used when resolving or rejecting.
+
+  reviewed_element_id:
+    domain: review_item
+    range: string
+    required: true
+    description: Stable identifier (uuid) of the analysis element being reviewed.
+
+  reviewed_content_hash:
+    domain: review_item
+    range: string
+    description: >-
+      Deterministic hash of the reviewed element's serialized attributes,
+      captured on verdict and on resolve; cleared when open/in_analysis.
+
+  has_review:
+    range: review_item
+    multivalued: true
+    description: Links any analysis element to its review items.

@@ -1,0 +1,248 @@
+/* ── RIACore Global Styles — Desktop-feel overrides ─────────────────────── */
+
+/* 1. Prevent overscroll bounce (browser rubberbanding feel) */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* Clip the document itself: the app is a fully height-bounded flex layout where
+     scrolling belongs to inner containers (tree, malfunction table, etc.). Without
+     this, sub-pixel/content overflow produces a redundant document-level scrollbar
+     that appears alongside an inner panel's scrollbar (two vertical bars). */
+  overflow: hidden;
+  overscroll-behavior: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 2. Slim scrollbars — VS Code / Windows 11 Explorer style */
+::-webkit-scrollbar        { width: 8px; height: 8px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: rgba(128,128,128,0.4); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.7); }
+
+/* 3. No text selection on UI chrome */
+.ant-layout-sider,
+.ant-layout-header,
+.ant-menu,
+.ant-tree,
+.status-bar,
+.riacore-topbar,
+.riacore-sidebar {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow selection in content areas */
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 4. No pointer cursor on selectable rows (native list feel) */
+.ant-tree-node-content-wrapper,
+.ant-table-row {
+  cursor: default !important;
+}
+
+/* 4b. Tree fills its scrollable parent so the background extends fully */
+.ant-tree {
+  min-height: 100%;
+}
+
+/* ── Diff view: make Ant Design Tabs content fill the available height ─────── */
+/* Ant Design's .ant-tabs-tabpane does not have height:100% by default, which   */
+/* breaks children that use height:100% (e.g. the Cytoscape graph container).   */
+.diff-result-tabs .ant-tabs-content-holder,
+.diff-result-tabs .ant-tabs-content,
+.diff-result-tabs .ant-tabs-tabpane {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 5. No pointer on tree and menu items unless they're true actions */
+.ant-menu-item,
+.ant-menu-submenu-title {
+  cursor: default;
+}
+
+/* 6. Desktop cards: no shadow, explicit border for contrast in both themes */
+.riacore-card.ant-card {
+  box-shadow: none !important;
+  border: 1px solid var(--ant-color-border) !important;
+}
+
+/* 6b. Workspace canvas — Analysis tiles get a full accent-colored border and
+   larger radius (vs. the default neutral border above) so they read as a
+   distinct, "owned workspace" tile next to Import tiles' tinted-chip style.
+   --tile-accent is set inline per card since the accent color is data-driven
+   (Safety vs. Security analysis). Declared after rule 6 so it wins the
+   cascade at equal specificity. */
+.riacore-analysis-card.ant-card {
+  border: 1px solid var(--tile-accent) !important;
+  border-radius: 10px !important;
+}
+
+/* 7. Full-height layout */
+.ant-layout {
+  height: 100%;
+}
+
+/* Import configuration modal: Ant Design layer-3 elevation with a quieter
+   settings-form rhythm. Fields stay flat; only the dialog itself floats. */
+.importer-config-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  box-shadow:
+    0 6px 16px -8px rgba(0, 0, 0, 0.08),
+    0 9px 28px 0 rgba(0, 0, 0, 0.05),
+    0 12px 48px 16px rgba(0, 0, 0, 0.03);
+}
+
+.importer-config-modal .ant-modal-title {
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.importer-config-modal .ant-form-item {
+  margin-bottom: 0;
+}
+
+.importer-config-modal .ant-form-item-label {
+  padding-bottom: 3px;
+}
+
+.importer-config-modal .ant-form-item-label > label {
+  height: auto;
+  color: var(--ant-color-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.importer-config-modal .ant-input,
+.importer-config-modal .ant-input-affix-wrapper,
+.importer-config-modal .ant-input-group-addon {
+  box-shadow: none;
+}
+
+.importer-config-modal .ant-input,
+.importer-config-modal .ant-input-affix-wrapper {
+  border-color: var(--ant-color-border);
+}
+
+.importer-config-modal .ant-input:hover,
+.importer-config-modal .ant-input-affix-wrapper:hover {
+  border-color: var(--ant-color-primary-hover);
+}
+
+.importer-config-modal .ant-input:focus,
+.importer-config-modal .ant-input-focused,
+.importer-config-modal .ant-input-affix-wrapper-focused {
+  border-color: var(--ant-color-primary);
+  box-shadow: 0 0 0 3px var(--ant-control-outline);
+}
+
+.importer-config-modal .ant-input[disabled],
+.importer-config-modal .ant-input-disabled {
+  color: var(--ant-color-text-secondary);
+  background: var(--ant-color-fill-quaternary);
+  border-color: var(--ant-color-border-secondary);
+}
+
+.importer-config-modal .ant-input-group-addon {
+  min-width: 36px;
+  padding-inline: 10px;
+  color: var(--ant-color-text-secondary);
+  background: var(--ant-color-bg-container);
+  border-color: var(--ant-color-border);
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.importer-config-modal .ant-input-group-addon:hover {
+  color: var(--ant-color-primary);
+  background: var(--ant-color-fill-tertiary);
+}
+
+.importer-config-modal .ant-alert {
+  align-items: flex-start;
+}
+
+.importer-config-modal .ant-alert-message {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.importer-config-modal .ant-alert-description {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* 8. Monospace font for code/log areas */
+.riacore-mono {
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+/* 9. Graph-Core: make Ant Spin wrapper fill flex parent so Cytoscape gets height */
+.graph-spin-wrapper.ant-spin-nested-loading,
+.graph-spin-wrapper .ant-spin-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+/* 10. Resizable table column handle */
+.riacore-resizable-th {
+  position: relative;
+  user-select: none;
+}
+.riacore-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+}
+.riacore-resize-handle:hover,
+.riacore-resize-handle.dragging {
+  background: var(--ant-color-primary, #1677ff);
+  opacity: 0.5;
+}
+
+/* 11. Diff node list: expandable row hover affordance */
+.diff-node-row-expandable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* 12. Safety tree: keep icon + name on a single line with ellipsis (no wrap)   */
+/* When the sidebar is narrowed the node label must truncate instead of         */
+/* wrapping onto a second line beneath the icon.                                 */
+.riacore-safety-tree .ant-tree-node-content-wrapper {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+.riacore-safety-tree .ant-tree-iconEle {
+  flex-shrink: 0;
+}
+.riacore-safety-tree .ant-tree-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

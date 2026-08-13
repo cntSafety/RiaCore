@@ -1,0 +1,545 @@
+##
+## security-meta.linkml.yaml
+##
+## Structural definition of the SECURITY_ANALYSIS metamodel.
+## Contains enumerations, class shapes, and slot definitions — no rules.
+##
+## TARA-style (Threat Analysis and Risk Assessment) security analysis
+## metamodel aligned with ISO/SAE 21434 for annotating structural AUTOSAR
+## architecture models with assets, damage scenarios, threat scenarios,
+## attack feasibility ratings, security requirements, mitigation tasks,
+## and security notes.
+##
+## Registered in RUMBLE as "SECURITY_ANALYSIS".
+##
+## Import this file to reuse the metamodel in other schemas.
+## Integrity rules are in security-rules.linkml.yaml.
+##
+## From this file you can generate:
+##   OWL/TTL:  gen-owl  security-meta.linkml.yaml > security.ttl
+##   SHACL:    gen-shacl security-meta.linkml.yaml > security.shacl.ttl
+##
+## Export document structure (top-level sections in order):
+##
+##   config:                  security_namespace, source_namespace
+##   assets:                  [ asset, ... ]                — items of value to protect
+##   damage_scenarios:        [ damage_scenario, ... ]      — consequence if asset is compromised
+##   threat_scenarios:        [ threat_scenario, ... ]      — how an attacker exploits a vulnerability
+##   security_requirements:   [ requirement, ... ]          — global, deduplicated by req_id
+##   security_tasks:          [ security_task, ... ]        — global flat list
+##   security_notes:          [ security_note, ... ]        — global flat list
+##
+## Cross-references:
+##   damage_scenario.compromises_asset_uuids    → asset.uuid
+##   threat_scenario.targets_at                 → element in source namespace (cross-namespace)
+##   threat_scenario.realizes_damage_scenario_uuids → damage_scenario.uuid
+##   threat_scenario.has_security_requirements → requirement.uuid
+##   threat_scenario.attack_propagates_to       → threat_scenario.uuid
+##   security_task.linked_to_threat_scenario    → threat_scenario.uuid
+
+id: https://ria.io/schema/security-analysis/meta
+name: security_analysis_meta
+display_identifier_attrs:
+  - has_name
+title: Security Analysis Metamodel — Structure (ISO/SAE 21434 TARA)
+description: >-
+  TARA-style security analysis metamodel aligned with ISO/SAE 21434 for
+  annotating architecture models with assets, damage scenarios, threat
+  scenarios, attack feasibility ratings, security requirements, mitigation
+  tasks, and security notes. Registered in RIA as "SECURITY_ANALYSIS".
+  All security model elements carry a stable UUID that is preserved across
+  export runs, enabling round-trip import and cross-tool traceability.
+  Requirements, tasks, and notes are exported as global flat lists and
+  referenced by UUID from threat scenarios — no inline embedding, no duplication.
+  The security namespace connects to source namespaces (e.g. architecture models)
+  via generic cross-namespace relationships (RIA_UNIV_CROSSNS_INSTANCE_REL).
+version: "1.0.1"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  security: https://example.org/security-meta#
+
+default_prefix: security
+default_range: string
+
+imports:
+  - linkml:types
+
+##############################################################################
+# ENUMERATIONS
+##############################################################################
+
+enums:
+
+  # ── Asset security properties (CIA triad) ─────────────────────────────────
+  SecurityProperty:
+    description: >-
+      CIA triad security properties of an asset, per ISO/SAE 21434.
+    permissible_values:
+      Confidentiality: { description: "Protection against unauthorized disclosure of information" }
+      Integrity:       { description: "Protection against unauthorized modification of data or functions" }
+      Availability:    { description: "Ensuring timely and reliable access to the asset" }
+
+  AssetType:
+    description: Classification of the type of asset being protected.
+    permissible_values:
+      Data:         { description: "Information asset — sensor data, calibration, research data, PII" }
+      Function:     { description: "Functional asset — a capability or service the system provides" }
+      Component:    { description: "A software or hardware component" }
+      Interface:    { description: "A communication interface or protocol endpoint" }
+
+  # ── Impact rating per ISO/SAE 21434 (S, F, O, P categories) ──────────────
+  ImpactLevel:
+    description: >-
+      Impact severity level per ISO/SAE 21434, evaluated from the road user
+      perspective across four categories: Safety, Financial, Operational,
+      and Privacy.
+    permissible_values:
+      Negligible: { description: "No significant impact on the road user" }
+      Moderate:   { description: "Limited impact; recoverable with moderate effort" }
+      Major:      { description: "Significant impact on safety, finances, operations, or privacy" }
+      Severe:     { description: "Critical impact; potential safety hazard, major data breach, or full system compromise" }
+
+  ImpactCategory:
+    description: >-
+      The four impact categories defined by ISO/SAE 21434 for damage
+      scenario assessment. Each damage scenario is rated across all
+      applicable categories.
+    permissible_values:
+      Safety:      { description: "Impact on the safety of road users" }
+      Financial:   { description: "Financial impact on the vehicle owner or OEM" }
+      Operational: { description: "Impact on vehicle or system operability" }
+      Privacy:     { description: "Impact on personal data and privacy of individuals" }
+
+  # ── Attack feasibility per ISO/SAE 21434 ─────────────────────────────────
+  AttackFeasibilityLevel:
+    description: >-
+      Classification of how feasible an attack is, considering elapsed time,
+      specialist expertise, knowledge of the target, window of opportunity,
+      and equipment required — per ISO/SAE 21434 attack feasibility rating.
+    permissible_values:
+      Low:      { description: "Attack requires significant resources, expertise, and time; unlikely in practice" }
+      Medium:   { description: "Attack requires moderate expertise and some insider knowledge or tooling" }
+      High:     { description: "Attack is feasible with commonly available tools and moderate skill" }
+      VeryHigh: { description: "Attack is trivially feasible with minimal skill and publicly available tools" }
+
+  # ── STRIDE-based threat classification ───────────────────────────────────
+  ThreatCategory:
+    description: >-
+      STRIDE-based threat classification categories commonly used alongside
+      ISO/SAE 21434 TARA in automotive security analysis.
+    permissible_values:
+      Spoofing:              { description: "Impersonating something or someone else" }
+      Tampering:             { description: "Modifying data or code without authorization" }
+      Repudiation:           { description: "Claiming to have not performed an action" }
+      InformationDisclosure: { description: "Exposing information to unauthorized parties" }
+      DenialOfService:       { description: "Denying or degrading service to valid users" }
+      ElevationOfPrivilege:  { description: "Gaining capabilities without proper authorization" }
+
+  # ── Risk level per ISO/SAE 21434 ─────────────────────────────────────────
+  RiskLevel:
+    description: >-
+      Overall risk level derived from combining the maximum impact rating
+      of the associated damage scenarios with the attack feasibility of
+      the threat scenario, per ISO/SAE 21434 risk determination.
+    permissible_values:
+      Low:      { description: "Risk is acceptable; monitor only" }
+      Medium:   { description: "Risk should be mitigated when practical" }
+      High:     { description: "Risk requires mitigation measures" }
+      Critical: { description: "Risk must be mitigated before deployment" }
+
+  # ── Risk treatment decision per ISO/SAE 21434 ───────────────────────────
+  RiskTreatmentDecision:
+    description: >-
+      Risk treatment decision per ISO/SAE 21434 clause 15.8.
+    permissible_values:
+      Avoiding:    { description: "Eliminate the risk by removing the threat source or asset exposure" }
+      Reducing:    { description: "Reduce the risk by implementing cybersecurity controls" }
+      Sharing:     { description: "Share the risk with another party (e.g. insurance, supplier)" }
+      Retaining:   { description: "Accept the risk as-is with justification" }
+
+  TaskStatus:
+    description: Workflow status for security_task items.
+    permissible_values:
+      "open":        { description: "Task is identified but not yet started" }
+      "To Do":       { description: "Task is queued and ready to be worked on" }
+      "started":     { description: "Task work is in progress" }
+      "In Progress": { description: "Task is actively being worked on" }
+      "In Review":   { description: "Task is completed and under review" }
+      "Confirmed":   { description: "Task result has been confirmed" }
+      "Done":        { description: "Task is completed" }
+      "finished":    { description: "Task is finished" }
+      "see Ticket":  { description: "Task is tracked externally; see the task_reference field" }
+
+  TaskType:
+    description: Classification of the type of security task.
+    permissible_values:
+      "runtime measures":  { description: "Security control active at runtime (e.g. intrusion detection, access control, secure boot)" }
+      "dev-time measures": { description: "Security measure applied during development (e.g. penetration testing, code review, secure design)" }
+      "other":             { description: "Other task type not covered by the standard categories" }
+
+
+##############################################################################
+# CLASSES
+##############################################################################
+
+classes:
+
+  # ── impact_rating ─────────────────────────────────────────────────────────
+  impact_rating:
+    description: >-
+      Per-category impact rating within a damage scenario. ISO/SAE 21434
+      requires rating impact across Safety, Financial, Operational, and
+      Privacy categories independently.
+    slots:
+      - uuid
+      - impact_category
+      - impact_level
+
+  # ── asset ─────────────────────────────────────────────────────────────────
+  asset:
+    description: >-
+      An item of value that the system must protect. Assets are identified
+      during the asset identification phase of TARA (ISO/SAE 21434 clause
+      15.3). Each asset has security properties from the CIA triad.
+    slots:
+      - uuid
+      - has_name
+      - asset_type
+      - asset_description
+      - security_properties
+
+  # ── damage_scenario ───────────────────────────────────────────────────────
+  damage_scenario:
+    description: >-
+      A damage scenario describes the adverse consequence to the road user
+      if an asset's security property is compromised (ISO/SAE 21434 clause
+      15.4). Impact is rated across the four categories S, F, O, P.
+      The maximum impact across categories determines the overall impact
+      used in risk determination.
+    slots:
+      - uuid
+      - has_name
+      - damage_description
+      - compromises_asset_uuids
+      - impact_ratings
+      - max_impact_level
+
+  # ── threat_scenario ───────────────────────────────────────────────────────
+  threat_scenario:
+    description: >-
+      A threat scenario describes how an attacker could exploit a
+      vulnerability to realize one or more damage scenarios (ISO/SAE 21434
+      clause 15.5–15.6). Includes the attack vector, attacker profile,
+      and attack feasibility rating.
+
+      Cross-references:
+        targets_at                             → element in source namespace (cross-namespace)
+        realizes_damage_scenario_uuids         → damage_scenario.uuid
+        has_security_requirements              → requirement.uuid
+        attack_propagates_to                   → threat_scenario.uuid
+    slots:
+      - uuid
+      - has_name
+      - threat_description
+      - threat_category
+      - attacker_description
+      - attack_vector
+      - targets_at
+      - realizes_damage_scenario_uuids
+      - has_attack_feasibility
+      - risk_level
+      - risk_treatment
+      - has_security_requirements
+      - attack_propagates_to
+
+  # ── requirement ───────────────────────────────────────────────────────────
+  requirement:
+    description: >-
+      A cybersecurity requirement (cybersecurity goal or derived requirement)
+      per ISO/SAE 21434 clause 15.9. Exported as a global flat list,
+      deduplicated by req_id.
+    slots:
+      - uuid
+      - req_name
+      - req_id
+      - req_text
+      - req_linked_to
+
+  # ── security_task ─────────────────────────────────────────────────────────
+  security_task:
+    description: >-
+      A cybersecurity control or verification task derived from TARA.
+      Exported as a global flat list. Links back to its parent threat
+      scenario via linked_to_threat_scenario_id.
+    slots:
+      - uuid
+      - has_name
+      - task_description
+      - task_status
+      - task_type
+      - task_responsible
+      - task_reference
+      - linked_to_threat_scenario
+      - linked_to_threat_scenario_id
+
+  # ── security_note ─────────────────────────────────────────────────────────
+  security_note:
+    description: >-
+      A free-text annotation attached to any element — either within the
+      security namespace (threat scenario, damage scenario, asset, requirement)
+      or in any linked source namespace. The target element is identified by
+      linked_to_id and resolved via the graph. linked_to_path is included when
+      the source namespace uses path addressing; omitted otherwise.
+    slots:
+      - uuid
+      - note_text
+      - linked_to_id
+      - linked_to_path
+
+##############################################################################
+# SLOTS
+##############################################################################
+
+slots:
+
+  # ── shared / identity ────────────────────────────────────────────────────
+
+  uuid:
+    range: string
+    required: true
+    identifier: true
+    description: >-
+      Stable identifier of the element as stored in the graph database.
+
+  has_name:
+    range: string
+    required: true
+    description: Human-readable name or identifier for the entity.
+
+  # ── asset ────────────────────────────────────────────────────────────────
+
+  asset_type:
+    domain: asset
+    range: AssetType
+    description: Classification of the asset being protected.
+
+  asset_description:
+    domain: asset
+    range: string
+    description: Description of the asset and its security relevance.
+
+  security_properties:
+    domain: asset
+    range: SecurityProperty
+    multivalued: true
+    description: >-
+      CIA triad properties relevant to this asset (e.g. Confidentiality,
+      Integrity, Availability).
+
+  # ── impact_rating ────────────────────────────────────────────────────────
+
+  impact_category:
+    domain: impact_rating
+    range: ImpactCategory
+    description: Which of the four ISO/SAE 21434 impact categories this rating covers.
+
+  impact_level:
+    domain: impact_rating
+    range: ImpactLevel
+    description: Impact severity for this category.
+
+  # ── damage_scenario ──────────────────────────────────────────────────────
+
+  damage_description:
+    domain: damage_scenario
+    range: string
+    description: >-
+      Description of the adverse consequence to the road user if the
+      asset's security property is compromised.
+
+  compromises_asset_uuids:
+    domain: damage_scenario
+    range: string
+    multivalued: true
+    description: >-
+      UUIDs of assets compromised by this damage scenario. Each UUID
+      references an asset.uuid in the top-level assets section.
+
+  impact_ratings:
+    domain: damage_scenario
+    range: impact_rating
+    multivalued: true
+    inlined_as_list: true
+    description: >-
+      Per-category impact ratings (Safety, Financial, Operational, Privacy).
+
+  max_impact_level:
+    domain: damage_scenario
+    range: ImpactLevel
+    description: >-
+      Maximum impact level across all four categories. Used as the impact
+      input for risk determination per ISO/SAE 21434.
+
+  # ── threat_scenario ──────────────────────────────────────────────────────
+
+  threat_description:
+    domain: threat_scenario
+    range: string
+    description: >-
+      Detailed description of the threat scenario including the attack
+      method, exploited vulnerability, and conditions.
+
+  threat_category:
+    domain: threat_scenario
+    range: ThreatCategory
+    description: STRIDE-based classification of the threat.
+
+  attacker_description:
+    domain: threat_scenario
+    range: string
+    description: >-
+      Attacker profile — motivation, capabilities, access level, and
+      resources per ISO/SAE 21434 attack feasibility parameters.
+
+  attack_vector:
+    domain: threat_scenario
+    range: string
+    description: >-
+      Description of the attack path — how the attacker reaches the
+      target (e.g. remote via network, local physical access, adjacent
+      via Bluetooth/WiFi).
+
+  targets_at:
+    domain: threat_scenario
+    range: string
+    description: >-
+      Cross-namespace relationship to the architecture element targeted
+      by this threat. Resolved at runtime via RIA_UNIV_CROSSNS_INSTANCE_REL.
+      The identifier can be a UUID, a qualified path, or any other stable key
+      used by the source namespace.
+
+  realizes_damage_scenario_uuids:
+    domain: threat_scenario
+    range: string
+    multivalued: true
+    description: >-
+      UUIDs of damage scenarios that this threat scenario can realize.
+
+  has_attack_feasibility:
+    domain: threat_scenario
+    range: AttackFeasibilityLevel
+    description: >-
+      Attack feasibility rating per ISO/SAE 21434, considering elapsed
+      time, specialist expertise, knowledge of the target, window of
+      opportunity, and equipment.
+
+  risk_level:
+    domain: threat_scenario
+    range: RiskLevel
+    description: >-
+      Overall risk level derived from max impact of associated damage
+      scenarios combined with attack feasibility, per ISO/SAE 21434
+      risk determination.
+
+  risk_treatment:
+    domain: threat_scenario
+    range: RiskTreatmentDecision
+    description: >-
+      Risk treatment decision per ISO/SAE 21434 clause 15.8 — avoiding,
+      reducing, sharing, or retaining the risk.
+
+  has_security_requirements:
+    domain: threat_scenario
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of cybersecurity requirements (goals) linked to this threat.
+
+  attack_propagates_to:
+    domain: threat_scenario
+    range: string
+    multivalued: true
+    description: >-
+      UUIDs of threat scenarios that this attack can enable or propagate to.
+
+  # ── requirement ──────────────────────────────────────────────────────────
+
+  req_name:
+    domain: requirement
+    range: string
+    description: Human-readable name of the cybersecurity requirement.
+
+  req_id:
+    domain: requirement
+    range: string
+    description: >-
+      Unique requirement identifier from the requirements management system.
+
+  req_text:
+    domain: requirement
+    range: string
+    description: Full text or statement of the cybersecurity requirement.
+
+  req_linked_to:
+    domain: requirement
+    range: uri
+    description: >-
+      External URL to the requirement in a requirements management system.
+
+  # ── security_task ────────────────────────────────────────────────────────
+
+  task_description:
+    domain: security_task
+    range: string
+    description: Description of the task including rationale and acceptance criteria.
+
+  task_status:
+    domain: security_task
+    range: TaskStatus
+    description: Workflow status of the task.
+
+  task_type:
+    domain: security_task
+    range: TaskType
+    description: Task type — runtime measures, dev-time measures, or other.
+
+  task_responsible:
+    domain: security_task
+    range: string
+    description: Responsible person or team.
+
+  task_reference:
+    domain: security_task
+    range: string
+    description: External reference — ticket ID, URL, or document reference.
+
+  linked_to_threat_scenario:
+    domain: security_task
+    range: string
+    description: has_name of the threat scenario this task is linked to.
+
+  linked_to_threat_scenario_id:
+    domain: security_task
+    range: string
+    description: Stable identifier of the threat scenario this task is linked to.
+
+  # ── security_note ────────────────────────────────────────────────────────
+
+  note_text:
+    domain: security_note
+    range: string
+    description: Free-text content of the note.
+
+  linked_to_id:
+    domain: security_note
+    range: string
+    description: Stable identifier of the element this note is attached to.
+
+  linked_to_path:
+    domain: security_note
+    range: string
+    description: >-
+      Path-based identifier of the annotated element when the source namespace
+      uses path addressing (e.g. a qualified name or hierarchical path).
+      Omitted for elements that have no path-based identifier.

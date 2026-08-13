@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SysML v2 Import Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# This file controls which serialized SysML JSON files are imported and which
+# element categories are enabled for the SysML v2 importer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+namespace: SysMLModel
+source_name: SysML v2 Model
+sourceType: sysml_v2_json
+format: sysml_v2
+
+# Root directory containing exported SysML JSON files.
+# Absolute, or relative to the WORKSPACE ROOT (the folder holding ria-data/) —
+# never relative to this config file. Prefer a relative path with forward
+# slashes so the workspace stays portable across machines and operating systems.
+project_dir: "sources/sysml"
+
+files:
+  include:
+    - "**/*.json"
+  exclude:
+    - "**/node_modules/**"
+
+elements:
+  structure: true
+  behavior: true
+  features: true
+  memberships: false
+  imports: true

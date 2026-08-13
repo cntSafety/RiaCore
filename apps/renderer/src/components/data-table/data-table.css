@@ -1,0 +1,26 @@
+/* Resizable column handle ─────────────────────────────────────────────────
+ * Styles for the shared DataTable's column resize affordance.
+ * Moved here from safety-editor.css in task 1.5.
+ * ────────────────────────────────────────────────────────────────────────── */
+.riacore-resizable-th {
+  position: relative;
+  overflow: visible !important;
+}
+
+.riacore-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+  user-select: none;
+}
+
+.riacore-resize-handle.dragging,
+.riacore-resize-handle:hover {
+  background: var(--ria-accent);
+  opacity: 0.4;
+  border-radius: 2px;
+}

@@ -1,0 +1,136 @@
+##
+## safety.overlay.linkml.yaml
+##
+## OVERLAY for the SAFETY_ANALYSIS (SW) profile. Composed on top of
+## _base/safety-analysis-base.linkml.yaml via composeProfileSchema():
+##   layers = [ safety-analysis-base.linkml.yaml, safety.overlay.linkml.yaml ]
+##
+## The base supplies all classes, slots and the invariant enums. This overlay
+## carries only the SW-safety deltas: identity, the review checklist (with the
+## component failure-mode catalog), and the OccurrenceLevel / DetectionLevel /
+## TaskType enums whose wording is SW-component specific.
+
+id: https://ria.io/schema/safety-analysis/meta
+name: safety_analysis_meta
+title: Safety Analysis Metamodel — Structure
+description: >-
+  Simplified FMEA-style safety analysis metamodel for SW component-level
+  safety analysis. Focuses on malfunctions as
+  the central element with risk ratings, requirements, tasks, notes, and
+  direct malfunction propagation. Does not model the full Fault → Error → FailureMode → Effect chain; 
+  instead the focus is just on Malfunction → propagates_to Malfunction.
+  can be extended with   additional concepts (e.g. Cause, Effect, FTA events) if needed.
+version: "4.0.5"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  safety: https://example.org/safety-meta#
+
+default_prefix: safety
+
+annotations:
+  profile_review:
+    tag: profile_review
+    value: |-
+      {
+        "version": 2,
+        "workflow": {
+          "verdicts": [
+            {"value": "OK", "label": "OK", "description": "Element is acceptable as-is", "color": "#52c41a", "tag": "success"},
+            {"value": "NOK", "label": "Not OK", "description": "Element is not acceptable; action is required", "color": "#ff4d4f", "tag": "error", "showAuthorStatusBreakdown": true},
+            {"value": "OK_with_comment", "label": "Note", "description": "Element is acceptable but the reviewer has a comment", "color": "#faad14", "tag": "warning", "showAuthorStatusBreakdown": true}
+          ],
+          "authorStatuses": [
+            {"value": "open", "label": "Open", "description": "No author response has been completed", "color": "#8c8c8c", "tag": "default"},
+            {"value": "in_analysis", "label": "In Analysis", "description": "The author is analyzing the review comment", "color": "#1677ff", "tag": "processing"},
+            {"value": "resolved", "label": "Resolved", "description": "The author has addressed and acknowledged the review", "color": "#52c41a", "tag": "success", "isResolution": true},
+            {"value": "rejected", "label": "Rejected", "description": "The author rejected the review comment with justification", "color": "#ff4d4f", "tag": "error"}
+          ],
+          "snapshotPolicy": "Capture the reviewed element content when the reviewer sets a verdict and again when the author resolves the review. Clear the snapshot when the author reopens the review or moves it to in_analysis. A verdict with a changed snapshot is suspect."
+        },
+        "instructions": {
+          "title": "Safety Analysis Review Checklist",
+          "catalogSource": "FM_List.json",
+          "catalogTitles": {
+            "componentFailureModes": "Component Failure Modes",
+            "interfaceFailureModes": "Interface Related Failure Modes"
+          },
+          "sections": [
+            {
+              "id": "analysis-input",
+              "title": "Question 1: Analysis Input sufficient?",
+              "paragraphs": [
+                "Does the SW Safety Analysis reflect the **current** SW Architecture? Are all SW components and interfaces of SW components listed in the Safety Analysis?",
+                "For each component SW Safety Analysis there should be a description of the main functions of that component."
+              ]
+            },
+            {
+              "id": "failure-modes",
+              "title": "Question 2: Are all relevant failure modes for the SW covered?",
+              "paragraphs": [
+                "The following list of potential failure modes does not need to be applied for every SW component analysis. Instead, the **relevant failure modes shall be selected per component**. For those which are related to the overall architecture, provide an argument (for example, regarding the risk that several components access shared resources, an exclusive lock is used)."
+              ],
+              "catalogs": ["componentFailureModes", "interfaceFailureModes"]
+            },
+            {
+              "id": "requirements",
+              "title": "Question 3: Are the safety requirements linked?",
+              "paragraphs": [
+                "The failure modes of an analysis should have a relation to the main SW Safety Requirements. For example, if a component does not execute the specified function, what is the Safety Requirement which is violated?",
+                "It is **NOT sufficient** to just select an ASIL — the requirement which is related to the ASIL shall be linked."
+              ]
+            },
+            {
+              "id": "risk-rating",
+              "title": "Question 4: Is the risk rating performed?",
+              "paragraphs": [
+                "For SW Safety Analysis there should be at least one risk rating documented describing the main aspects:"
+              ],
+              "bullets": [
+                "What is the **occurrence** of the failure scenarios?",
+                "What are the **measures to prevent** this from occurring?",
+                "Are **further measures required** to monitor this scenario during runtime?"
+              ],
+              "note": "For interface failure modes it is NOT required to perform a risk rating. The risk rating is performed for the functional failure modes of a SW component."
+            },
+            {
+              "id": "tasks",
+              "title": "Question 5: Are the tasks managed?",
+              "paragraphs": [
+                "If during the safety analysis risk reduction tasks are defined related to dedicated runtime measures (for example, additional plausibility checks) or development-time measures (for example, additional fault injection tests), then a ticket shall be created in the task tracking system to manage the tasks."
+              ]
+            }
+          ]
+        }
+      }
+
+enums:
+
+  OccurrenceLevel:
+    description: >-
+      Five-level classification of failure likelihood based on software
+      component complexity.
+    permissible_values:
+      Level1: { description: "Level 1 — Very Low: simple, mostly stateless software with straightforward algorithms" }
+      Level2: { description: "Level 2 — Low: moderate algorithmic complexity with limited branching" }
+      Level3: { description: "Level 3 — Medium: some state management or multiple execution paths" }
+      Level4: { description: "Level 4 — High: complex state machines, event-driven behavior, complex dependencies" }
+      Level5: { description: "Level 5 — Very High: highly complex and highly stateful behavior" }
+
+  DetectionLevel:
+    description: >-
+      Five-level classification of detection capability for potential problems
+      during development or runtime. Higher level = weaker detection capability.
+    permissible_values:
+      Level1: { description: "Level 1 — Proven: proven detection method, virtually certain to catch the defect before release (e.g. dedicated test or runtime monitoring to cover this specific scenario)" }
+      Level2: { description: "Level 2 — Good: automatic detection with high coverage (e.g. detected by static analysis, automated test suites with coverage of corner cases, covered by runtime measures like timing monitoring)" }
+      Level3: { description: "Level 3 — Moderate: semi-automatic or manual detection with moderate coverage (e.g. may be detected during integration testing, no runtime monitoring)" }
+      Level4: { description: "Level 4 — Limited: detection only under specific conditions; issues may escape to later phases" }
+      Level5: { description: "Level 5 — None: no detection opportunity or no control exists; latent failures possible" }
+
+  TaskType:
+    description: Classification of the type of safety task.
+    permissible_values:
+      "runtime measures":  { description: "Safety measure implemented and active at runtime (e.g. monitoring, diagnostics, fault reaction)" }
+      "dev-time measures": { description: "Safety measure applied during development (e.g. review, analysis, testing, design constraint)" }
+      "other":             { description: "Other task type not covered by the standard categories" }

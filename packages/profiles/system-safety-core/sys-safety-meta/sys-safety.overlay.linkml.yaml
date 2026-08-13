@@ -1,0 +1,155 @@
+##
+## sys-safety.overlay.linkml.yaml
+##
+## OVERLAY for the SYSTEM_SAFETY_ANALYSIS profile. Composed on top of
+## _base/safety-analysis-base.linkml.yaml via composeProfileSchema():
+##   layers = [ safety-analysis-base.linkml.yaml, sys-safety.overlay.linkml.yaml ]
+##
+## Structurally identical to the SW safety profile (shared base); this overlay
+## carries only the system-development deltas: identity, the system-level review
+## checklist (with Sys_FM_List.json), and the OccurrenceLevel / DetectionLevel /
+## TaskType enums whose wording is framed for system development (design maturity
+## / new technology) instead of software complexity.
+
+id: https://ria.io/schema/system-safety-analysis/meta
+name: system_safety_analysis_meta
+title: System Safety Analysis Metamodel — Structure
+description: >-
+  System-level FMEA-style safety analysis metamodel for system component and
+  interface safety analysis. Focuses on malfunctions as the central element
+  with risk ratings, requirements, tasks, notes, and direct malfunction
+  propagation. Does not model the full Fault → Error → FailureMode → Effect
+  chain; instead the focus is just on Malfunction → propagates_to Malfunction.
+  Can be extended with additional concepts (e.g. Cause, Effect, FTA events) if
+  needed. Structurally identical to the SW SAFETY_ANALYSIS profile; the
+  occurrence rating, review instructions, and failure-mode catalog are framed
+  for system development.
+version: "1.0.0"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  syssafety: https://example.org/sys-safety-meta#
+
+default_prefix: syssafety
+
+annotations:
+  profile_review:
+    tag: profile_review
+    value: |-
+      {
+        "version": 2,
+        "workflow": {
+          "verdicts": [
+            {"value": "OK", "label": "OK", "description": "Element is acceptable as-is", "color": "#52c41a", "tag": "success"},
+            {"value": "NOK", "label": "Not OK", "description": "Element is not acceptable; action is required", "color": "#ff4d4f", "tag": "error", "showAuthorStatusBreakdown": true},
+            {"value": "OK_with_comment", "label": "Note", "description": "Element is acceptable but the reviewer has a comment", "color": "#faad14", "tag": "warning", "showAuthorStatusBreakdown": true}
+          ],
+          "authorStatuses": [
+            {"value": "open", "label": "Open", "description": "No author response has been completed", "color": "#8c8c8c", "tag": "default"},
+            {"value": "in_analysis", "label": "In Analysis", "description": "The author is analyzing the review comment", "color": "#1677ff", "tag": "processing"},
+            {"value": "resolved", "label": "Resolved", "description": "The author has addressed and acknowledged the review", "color": "#52c41a", "tag": "success", "isResolution": true},
+            {"value": "rejected", "label": "Rejected", "description": "The author rejected the review comment with justification", "color": "#ff4d4f", "tag": "error"}
+          ],
+          "snapshotPolicy": "Capture the reviewed element content when the reviewer sets a verdict and again when the author resolves the review. Clear the snapshot when the author reopens the review or moves it to in_analysis. A verdict with a changed snapshot is suspect."
+        },
+        "instructions": {
+          "title": "System Safety Analysis Review Checklist",
+          "catalogSource": "Sys_FM_List.json",
+          "catalogTitles": {
+            "componentFailureModes": "System Element Failure Modes",
+            "interfaceFailureModes": "Interface Related Failure Modes"
+          },
+          "sections": [
+            {
+              "id": "analysis-input",
+              "title": "Question 1: Analysis Input sufficient?",
+              "paragraphs": [
+                "Does the System Safety Analysis reflect the **current** System Design and System Architecture? Are all system elements and the interfaces between them listed in the Safety Analysis?",
+                "For each system element there should be a description of its main functions and its role in the overall system."
+              ]
+            },
+            {
+              "id": "failure-modes",
+              "title": "Question 2: Are all relevant failure modes for the system covered?",
+              "paragraphs": [
+                "The following list of potential failure modes does not need to be applied for every system element analysis. Instead, the **relevant failure modes shall be selected per element**. For those which are related to the overall architecture, provide an argument (for example, regarding the risk that several elements share a common resource, a redundancy or arbitration concept is in place)."
+              ],
+              "catalogs": ["componentFailureModes", "interfaceFailureModes"]
+            },
+            {
+              "id": "requirements",
+              "title": "Question 3: Are the safety requirements linked?",
+              "paragraphs": [
+                "The failure modes of an analysis should have a relation to the main System Safety Requirements. For example, if a system element does not deliver its specified function, what is the Safety Requirement which is violated?",
+                "It is **NOT sufficient** to just select an ASIL — the requirement which is related to the ASIL shall be linked."
+              ]
+            },
+            {
+              "id": "risk-rating",
+              "title": "Question 4: Is the risk rating performed?",
+              "paragraphs": [
+                "For System Safety Analysis there should be at least one risk rating documented describing the main aspects:"
+              ],
+              "bullets": [
+                "What is the **occurrence** of the failure scenarios, considering design maturity and the amount of new technology involved?",
+                "What are the **measures to prevent** this from occurring?",
+                "Are **further measures required** to monitor this scenario during operation?"
+              ],
+              "note": "For interface failure modes it is NOT required to perform a risk rating. The risk rating is performed for the functional failure modes of a system element."
+            },
+            {
+              "id": "tasks",
+              "title": "Question 5: Are the tasks managed?",
+              "paragraphs": [
+                "If during the safety analysis risk reduction tasks are defined related to dedicated operational measures (for example, additional monitoring) or development-time measures (for example, additional analysis or testing), then a ticket shall be created in the task tracking system to manage the tasks."
+              ]
+            }
+          ]
+        }
+      }
+
+enums:
+
+  OccurrenceLevel:
+    description: >-
+      Five-level estimate of how likely the design causes behind this
+      malfunction are to be present over the product's service life, judged
+      against the strength of the preventive measures in place (proven design,
+      design rules, prior field experience). Design maturity and the amount of
+      new technology or new design are the main drivers: novel, unproven design
+      with weak prevention raises the likelihood; mature, well-proven design
+      with strong prevention and field history lowers it. Higher level = more
+      likely. Rated on the malfunction directly, as this profile has no separate
+      cause concept. Occurrence covers only measures that change the design to
+      make the cause less likely; measures that merely check an existing design
+      to reveal whether the problem is present belong to detection, not
+      occurrence. Do not credit the same measure to both axes.
+    permissible_values:
+      Level1: { description: "Level 1 — Very Low: cause very unlikely — mature, well-proven design reused unchanged, with strong preventive measures and extensive field experience" }
+      Level2: { description: "Level 2 — Low: cause unlikely — established design with only minor adaptations and effective prevention, backed by substantial prior experience" }
+      Level3: { description: "Level 3 — Medium: cause plausible — partially new design or moderate changes to a known concept, with some prevention and some prior experience" }
+      Level4: { description: "Level 4 — High: cause likely — significant new design or new technology, with limited prevention and little prior experience" }
+      Level5: { description: "Level 5 — Very High: cause very likely — novel technology or an unproven design concept, with weak or no preventive measures and no prior experience" }
+
+  DetectionLevel:
+    description: >-
+      Five-level estimate of the confidence that the verification measures
+      reveal the potential design problem in the finished design before release
+      (analysis, reviews, and testing). Higher level = weaker coverage and lower
+      detection confidence. Detection covers only measures that check an
+      existing design to reveal whether the problem is present; measures that
+      change the design to make the cause less likely belong to occurrence, not
+      detection. Do not credit the same measure to both axes.
+    permissible_values:
+      Level1: { description: "Level 1 — Proven: comprehensive verification covering all relevant operating conditions reveals the potential design problem with very high confidence" }
+      Level2: { description: "Level 2 — Good: strong verification covering the main operating conditions reveals the problem with high confidence, though not exhaustive over every condition" }
+      Level3: { description: "Level 3 — Moderate: standard analysis, review, and testing covering nominal and some boundary conditions; moderate confidence, corner cases may be missed" }
+      Level4: { description: "Level 4 — Limited: only basic reviews or limited checks performed; does not cover all operating conditions, so detection confidence is low" }
+      Level5: { description: "Level 5 — None: no effective verification measure to reveal the potential design problem; latent design faults can escape to operation" }
+
+  TaskType:
+    description: Classification of the type of safety task.
+    permissible_values:
+      "runtime measures":  { description: "Safety measure implemented and active during operation (e.g. monitoring, diagnostics, fault reaction)" }
+      "dev-time measures": { description: "Safety measure applied during development (e.g. review, analysis, testing, design constraint)" }
+      "other":             { description: "Other task type not covered by the standard categories" }

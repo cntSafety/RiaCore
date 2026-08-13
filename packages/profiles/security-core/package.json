@@ -1,0 +1,6 @@
+{
+  "name": "@riacore/profile-security-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Security analysis profile assets for RIACore"
+}

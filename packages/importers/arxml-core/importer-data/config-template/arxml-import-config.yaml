@@ -1,0 +1,129 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ARXML Import Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# This file controls which .arxml files are imported and which AUTOSAR element
+# categories are enabled.
+#
+# Usage
+#   UI:   Add Importer → select this file as the configuration
+#
+# All settings are optional. Omitted values use sensible defaults.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Namespace ────────────────────────────────────────────────────────────────
+# The namespace name registered in RUMBLE. Must be unique per workspace.
+# Use a short, descriptive identifier — no spaces (use underscores or hyphens).
+namespace: MyProject
+
+# ── Source name ──────────────────────────────────────────────────────────────
+# Human-readable display name shown in the UI. Defaults to namespace if omitted.
+source_name: My ARXML Project
+
+# ── Project directory ────────────────────────────────────────────────────────
+# Root directory containing the .arxml files to import.
+# Absolute, or relative to the WORKSPACE ROOT (the folder holding ria-data/).
+# Relative paths are never resolved against this config file's own location.
+# If omitted, the workspace root itself is scanned.
+#
+# Prefer a relative path: it keeps the workspace portable across machines and
+# operating systems. Use forward slashes so the same value works on Windows,
+# macOS and Linux.
+#
+# Examples:
+#   project_dir: "sources/arxml"              # inside the workspace
+#   project_dir: "../shared-sources/arxml"     # workspace and sources as siblings
+#   project_dir: "C:/projects/my-ecu/arxml"    # absolute (machine-specific)
+project_dir: "sources/arxml"
+
+# ── File selection ───────────────────────────────────────────────────────────
+# Controls which files under project_dir are imported.
+# If omitted, all **/*.arxml files are included automatically.
+#
+# Option 1: auto-discover all .arxml files (default when omitted)
+# files:
+#   include:
+#     - "**/*.arxml"
+#
+# Option 2: explicit file list (faster for large projects)
+# files:
+#   include:
+#     - ComponentTypes/*.arxml
+#     - DataTypes.arxml
+#     - PortInterfaces.arxml
+#     - ECUProjects/*.arxml
+#     - ServiceComponents/*.arxml
+#     - InternalBehavior/*.arxml
+#
+# Option 3: include everything but exclude certain directories
+# files:
+#   include:
+#     - "**/*.arxml"
+#   exclude:
+#     - "ECUC/**"
+#     - "McData/**"
+#     - "Databases/**"
+
+# ── Element categories ───────────────────────────────────────────────────────
+# Each category controls which AUTOSAR element types are imported.
+# Set to false to skip a category entirely (speeds up import, reduces DB size).
+# Omitted categories default to true.
+
+elements:
+
+  # ── SW-Component Types ───────────────────────────────────────────────────
+  # APPLICATION-SW-COMPONENT-TYPE, COMPOSITION-SW-COMPONENT-TYPE,
+  # ECU-ABSTRACTION-SW-COMPONENT-TYPE, SERVICE-SW-COMPONENT-TYPE,
+  # COMPLEX-DEVICE-DRIVER-SW-COMPONENT-TYPE, SENSOR-ACTUATOR-SW-COMPONENT-TYPE,
+  # NV-BLOCK-SW-COMPONENT-TYPE, PARAMETER-SW-COMPONENT-TYPE,
+  # SERVICE-PROXY-SW-COMPONENT-TYPE, SW-COMPONENT-PROTOTYPE
+  swc_types: true
+
+  # ── Ports ────────────────────────────────────────────────────────────────
+  # P-PORT-PROTOTYPE, R-PORT-PROTOTYPE, PR-PORT-PROTOTYPE
+  ports: true
+
+  # ── Port Interfaces ──────────────────────────────────────────────────────
+  # SENDER-RECEIVER-INTERFACE, CLIENT-SERVER-INTERFACE, MODE-SWITCH-INTERFACE,
+  # NV-DATA-INTERFACE, PARAMETER-INTERFACE, TRIGGER-INTERFACE
+  # Also includes VARIABLE-DATA-PROTOTYPE, CLIENT-SERVER-OPERATION,
+  # MODE-DECLARATION-GROUP
+  port_interfaces: true
+
+  # ── Data Types ───────────────────────────────────────────────────────────
+  # IMPLEMENTATION-DATA-TYPE (VALUE, STRUCTURE, ARRAY, TYPE_REFERENCE),
+  # APPLICATION-PRIMITIVE-DATA-TYPE, APPLICATION-RECORD-DATA-TYPE,
+  # APPLICATION-ARRAY-DATA-TYPE, SW-BASE-TYPE, COMPU-METHOD, DATA-CONSTR,
+  # UNIT, DATA-TYPE-MAPPING-SET
+  data_types: true
+
+  # ── SWC Behavior ─────────────────────────────────────────────────────────
+  # SWC-INTERNAL-BEHAVIOR, RUNNABLE-ENTITY, TIMING-EVENT, INIT-EVENT,
+  # DATA-RECEIVED-EVENT, MODE-SWITCH-EVENT, EXCLUSIVE-AREA,
+  # AR-TYPED-PER-INSTANCE-MEMORY, SWC-IMPLEMENTATION
+  swc_behavior: true
+
+  # ── BSW Modules ──────────────────────────────────────────────────────────
+  # BSW-MODULE-DESCRIPTION, BSW-INTERNAL-BEHAVIOR, BSW-MODULE-ENTRY,
+  # BSW-SCHEDULABLE-ENTITY, BSW-CALLED-ENTITY
+  bsw_modules: true
+
+  # ── Connectors ───────────────────────────────────────────────────────────
+  # ASSEMBLY-SW-CONNECTOR, DELEGATION-SW-CONNECTOR
+  connectors: true
+
+  # ── Communication ────────────────────────────────────────────────────────
+  # CAN-CLUSTER, LIN-CLUSTER, CAN-FRAME, LIN-UNCONDITIONAL-FRAME,
+  # I-SIGNAL, I-SIGNAL-I-PDU, I-SIGNAL-I-PDU-GROUP, SYSTEM-SIGNAL,
+  # SENDER-RECEIVER-TO-SIGNAL-MAPPING
+  # Tip: disable if you only need SW-component architecture (saves ~30% import time)
+  communication: false
+
+  # ── System ───────────────────────────────────────────────────────────────
+  # SYSTEM, ROOT-SW-COMPOSITION-PROTOTYPE, ECU-INSTANCE,
+  # FLAT-MAP, FLAT-INSTANCE-DESCRIPTOR, SYSTEM-MAPPING
+  system: false
+
+  # ── ECU Configuration ────────────────────────────────────────────────────
+  # ECUC-VALUE-COLLECTION, ECUC-MODULE-CONFIGURATION-VALUES,
+  # ECUC-CONTAINER-VALUE
+  ecuc: false

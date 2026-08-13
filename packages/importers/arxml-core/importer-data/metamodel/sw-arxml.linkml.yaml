@@ -1,0 +1,899 @@
+##
+## SW-ARXML LinkML Schema
+##
+## Single source of truth for the SW-component architecture metamodel
+## imported into RUMBLE as "SW_ARXML".
+##
+## Class names and slot names are intentionally in snake_case, matching
+## RUMBLE concept/relationship names exactly — no mapping layer is needed.
+##
+## From this file you can also generate OWL/TTL via the LinkML toolchain:
+##   gen-owl sw-arxml.linkml.yaml > sw-arxml.ttl
+##
+## Descriptions are intentionally set to the element's own name: the upstream
+## specification wording is not redistributable, so no prose is carried here.
+
+id: https://autosar.org/schema/r4.0/sw-arxml
+name: sw_arxml
+title: SW-ARXML Metamodel
+description: sw_arxml
+version: "2.0.3"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  arxml:  https://autosar.org/schema/r4.0/meta#
+
+default_prefix: arxml
+default_range: string
+
+display_identifier_attrs:
+  - short_name
+
+imports:
+  - linkml:types
+
+##############################################################################
+# CONCEPTS (OWL Classes → RUMBLE concepts)
+##############################################################################
+
+classes:
+
+  # ── Common mixin ────────────────────────────────────────────────────────────
+
+  named_element:
+    mixin: true
+    description: named_element
+    attributes:
+      stable_path:
+        identifier: true
+        required: true
+        description: stable_path
+
+  # ── Abstract bases ──────────────────────────────────────────────────────────
+
+  swc_type:
+    abstract: true
+    mixins:
+      - named_element
+    description: swc_type
+
+  port_prototype:
+    abstract: true
+    mixins:
+      - named_element
+    description: port_prototype
+
+  port_interface:
+    abstract: true
+    mixins:
+      - named_element
+    description: port_interface
+
+  sw_connector:
+    abstract: true
+    mixins:
+      - named_element
+    description: sw_connector
+
+  # ── Concrete concepts ───────────────────────────────────────────────────────
+
+  ar_package:
+    mixins:
+      - named_element
+    description: ar_package
+
+  application_swc:
+    is_a: swc_type
+    description: application_swc
+
+  composition_swc:
+    is_a: swc_type
+    description: composition_swc
+
+  ecu_abstraction_swc:
+    is_a: swc_type
+    description: ecu_abstraction_swc
+
+  service_swc:
+    is_a: swc_type
+    description: service_swc
+
+  swc_prototype:
+    mixins:
+      - named_element
+    description: swc_prototype
+
+  p_port:
+    is_a: port_prototype
+    description: p_port
+
+  r_port:
+    is_a: port_prototype
+    description: r_port
+
+  sr_interface:
+    is_a: port_interface
+    description: sr_interface
+
+  cs_interface:
+    is_a: port_interface
+    description: cs_interface
+
+  variable_data_proto:
+    mixins:
+      - named_element
+    description: variable_data_proto
+
+  cs_operation:
+    mixins:
+      - named_element
+    description: cs_operation
+
+  swc_internal_behavior:
+    mixins:
+      - named_element
+    description: swc_internal_behavior
+
+  swc_implementation:
+    mixins:
+      - named_element
+    description: swc_implementation
+
+  assembly_connector:
+    is_a: sw_connector
+    description: assembly_connector
+
+  delegation_connector:
+    is_a: sw_connector
+    description: delegation_connector
+
+  system:
+    mixins:
+      - named_element
+    description: system
+
+  root_swc_prototype:
+    mixins:
+      - named_element
+    description: root_swc_prototype
+
+  # ── Phase A: Additional SWC types ──────────────────────────────────────────
+
+  cdd_swc:
+    is_a: swc_type
+    description: cdd_swc
+
+  sensor_actuator_swc:
+    is_a: swc_type
+    description: sensor_actuator_swc
+
+  nv_block_swc:
+    is_a: swc_type
+    description: nv_block_swc
+
+  parameter_swc:
+    is_a: swc_type
+    description: parameter_swc
+
+  service_proxy_swc:
+    is_a: swc_type
+    description: service_proxy_swc
+
+  # ── Phase A: PR-port prototype ─────────────────────────────────────────────
+
+  pr_port:
+    is_a: port_prototype
+    description: pr_port
+
+  # ── Phase A: Additional port interface types ───────────────────────────────
+
+  ms_interface:
+    is_a: port_interface
+    description: ms_interface
+
+  nv_data_interface:
+    is_a: port_interface
+    description: nv_data_interface
+
+  parameter_interface:
+    is_a: port_interface
+    description: parameter_interface
+
+  trigger_interface:
+    is_a: port_interface
+    description: trigger_interface
+
+  # ── Phase A: Implementation data types and base types ──────────────────────
+
+  impl_data_type:
+    mixins:
+      - named_element
+    description: impl_data_type
+
+  impl_data_type_element:
+    mixins:
+      - named_element
+    description: impl_data_type_element
+
+  sw_base_type:
+    mixins:
+      - named_element
+    description: sw_base_type
+
+  compu_method:
+    mixins:
+      - named_element
+    description: compu_method
+
+  data_constr:
+    mixins:
+      - named_element
+    description: data_constr
+
+  mode_declaration_group:
+    mixins:
+      - named_element
+    description: mode_declaration_group
+
+  data_type_mapping_set:
+    mixins:
+      - named_element
+    description: data_type_mapping_set
+
+  unit:
+    mixins:
+      - named_element
+    description: unit
+
+  constant_specification:
+    mixins:
+      - named_element
+    description: constant_specification
+
+  # ── Phase A: Application data types ────────────────────────────────────────
+
+  app_data_type:
+    abstract: true
+    mixins:
+      - named_element
+    description: app_data_type
+
+  app_primitive_data_type:
+    is_a: app_data_type
+    description: app_primitive_data_type
+
+  app_record_data_type:
+    is_a: app_data_type
+    description: app_record_data_type
+
+  app_array_data_type:
+    is_a: app_data_type
+    description: app_array_data_type
+
+  # ── Phase A: SWC behavior details ─────────────────────────────────────────
+
+  runnable_entity:
+    mixins:
+      - named_element
+    description: runnable_entity
+
+  swc_event:
+    abstract: true
+    mixins:
+      - named_element
+    description: swc_event
+
+  timing_event:
+    is_a: swc_event
+    description: timing_event
+
+  init_event:
+    is_a: swc_event
+    description: init_event
+
+  data_received_event:
+    is_a: swc_event
+    description: data_received_event
+
+  mode_switch_event:
+    is_a: swc_event
+    description: mode_switch_event
+
+  # ── Phase A: Exclusive areas and per-instance memory ───────────────────────
+
+  exclusive_area:
+    mixins:
+      - named_element
+    description: exclusive_area
+
+  per_instance_memory:
+    mixins:
+      - named_element
+    description: per_instance_memory
+
+  # ── Phase A: BSW module descriptions ───────────────────────────────────────
+
+  bsw_module_description:
+    mixins:
+      - named_element
+    description: bsw_module_description
+
+  bsw_internal_behavior:
+    mixins:
+      - named_element
+    description: bsw_internal_behavior
+
+  bsw_module_entry:
+    mixins:
+      - named_element
+    description: bsw_module_entry
+
+  bsw_entity:
+    mixins:
+      - named_element
+    description: bsw_entity
+
+  # ── Phase B: Communication clusters ────────────────────────────────────────
+
+  comm_cluster:
+    abstract: true
+    mixins:
+      - named_element
+    description: comm_cluster
+
+  can_cluster:
+    is_a: comm_cluster
+    description: can_cluster
+
+  lin_cluster:
+    is_a: comm_cluster
+    description: lin_cluster
+
+  # ── Phase B: Communication frames ─────────────────────────────────────────
+
+  comm_frame:
+    abstract: true
+    mixins:
+      - named_element
+    description: comm_frame
+
+  can_frame:
+    is_a: comm_frame
+    description: can_frame
+
+  lin_frame:
+    is_a: comm_frame
+    description: lin_frame
+
+  lin_sporadic_frame:
+    mixins:
+      - named_element
+    description: lin_sporadic_frame
+
+  # ── Phase B: ECU instance, signals, PDUs, and system mappings ──────────────
+
+  ecu_instance:
+    mixins:
+      - named_element
+    description: ecu_instance
+
+  i_signal:
+    mixins:
+      - named_element
+    description: i_signal
+
+  i_signal_i_pdu:
+    mixins:
+      - named_element
+    description: i_signal_i_pdu
+
+  i_pdu_group:
+    mixins:
+      - named_element
+    description: i_pdu_group
+
+  system_signal:
+    mixins:
+      - named_element
+    description: system_signal
+
+  system_signal_group:
+    mixins:
+      - named_element
+    description: system_signal_group
+
+  i_signal_group:
+    mixins:
+      - named_element
+    description: i_signal_group
+
+  sr_to_signal_mapping:
+    mixins:
+      - named_element
+    description: sr_to_signal_mapping
+
+  flat_map:
+    mixins:
+      - named_element
+    description: flat_map
+
+  flat_instance_descriptor:
+    mixins:
+      - named_element
+    description: flat_instance_descriptor
+
+  # ── Phase C: ECUC configuration values ─────────────────────────────────────
+
+  ecuc_value_collection:
+    mixins:
+      - named_element
+    description: ecuc_value_collection
+
+  ecuc_module_config:
+    mixins:
+      - named_element
+    description: ecuc_module_config
+
+  ecuc_container_value:
+    mixins:
+      - named_element
+    description: ecuc_container_value
+
+  # ── Phase D: Memory addressing ─────────────────────────────────────────────
+
+  sw_addr_method:
+    mixins:
+      - named_element
+    description: sw_addr_method
+
+##############################################################################
+# RELATIONSHIPS (OWL Object Properties → RUMBLE relationships)
+##############################################################################
+
+slots:
+
+  # ── Package hierarchy ───────────────────────────────────────────────────────
+
+  contains_package:
+    domain: ar_package
+    range:  ar_package
+    is_containment: true
+    description: contains_package
+
+  contains_swc_type:
+    domain: ar_package
+    range:  swc_type
+    is_containment: true
+    description: contains_swc_type
+
+  contains_port_interface:
+    domain: ar_package
+    range:  port_interface
+    is_containment: true
+    description: contains_port_interface
+
+  contains_port_interface_ms_nv_param_trigger:
+    domain: ar_package
+    range:  port_interface
+    is_containment: true
+    description: contains_port_interface_ms_nv_param_trigger
+
+  contains_swc_implementation:
+    domain: ar_package
+    range:  swc_implementation
+    is_containment: true
+    description: contains_swc_implementation
+
+  contains_system:
+    domain: ar_package
+    range:  system
+    is_containment: true
+    description: contains_system
+
+  # ── Ports on components ─────────────────────────────────────────────────────
+
+  has_p_port:
+    domain: swc_type
+    range:  p_port
+    is_containment: true
+    description: has_p_port
+
+  has_r_port:
+    domain: swc_type
+    range:  r_port
+    is_containment: true
+    description: has_r_port
+
+  # ── Composition internals ───────────────────────────────────────────────────
+
+  has_component:
+    domain: composition_swc
+    range:  swc_prototype
+    is_containment: true
+    description: has_component
+
+  typed_by:
+    domain: swc_prototype
+    range:  swc_type
+    description: typed_by
+
+  has_connector:
+    domain: composition_swc
+    range:  sw_connector
+    is_containment: true
+    description: has_connector
+
+  # ── Port ↔ Interface bindings ───────────────────────────────────────────────
+
+  provides_interface:
+    domain: p_port
+    range:  port_interface
+    description: provides_interface
+
+  requires_interface:
+    domain: r_port
+    range:  port_interface
+    description: requires_interface
+
+  # ── Interface contents ──────────────────────────────────────────────────────
+
+  has_data_element:
+    domain: sr_interface
+    range:  variable_data_proto
+    is_containment: true
+    description: has_data_element
+
+  has_operation:
+    domain: cs_interface
+    range:  cs_operation
+    is_containment: true
+    description: has_operation
+
+  # ── Behavior & implementation ───────────────────────────────────────────────
+
+  has_internal_behavior:
+    domain: swc_type
+    range:  swc_internal_behavior
+    is_containment: true
+    description: has_internal_behavior
+
+  implements_behavior:
+    domain: swc_implementation
+    range:  swc_internal_behavior
+    description: implements_behavior
+
+  # ── Assembly connector port references ─────────────────────────────────────
+
+  provider_port:
+    domain: assembly_connector
+    range:  p_port
+    description: provider_port
+
+  requester_port:
+    domain: assembly_connector
+    range:  r_port
+    description: requester_port
+
+  # ── Delegation connector port references ────────────────────────────────────
+
+  inner_port:
+    domain: delegation_connector
+    range:  port_prototype
+    description: inner_port
+
+  outer_port:
+    domain: delegation_connector
+    range:  port_prototype
+    description: outer_port
+
+  # ── System level ────────────────────────────────────────────────────────────
+
+  has_root_composition:
+    domain: system
+    range:  root_swc_prototype
+    is_containment: true
+    description: has_root_composition
+
+  software_composition_tref:
+    domain: root_swc_prototype
+    range:  composition_swc
+    description: software_composition_tref
+
+  # ── Phase A: Data types and base types ──────────────────────────────────────
+
+  contains_impl_data_type:
+    domain: ar_package
+    range:  impl_data_type
+    is_containment: true
+    description: contains_impl_data_type
+
+  has_sub_element:
+    domain: impl_data_type
+    range:  impl_data_type_element
+    is_containment: true
+    description: has_sub_element
+
+  references_type:
+    domain: impl_data_type_element
+    range:  impl_data_type
+    description: references_type
+
+  contains_sw_base_type:
+    domain: ar_package
+    range:  sw_base_type
+    is_containment: true
+    description: contains_sw_base_type
+
+  based_on:
+    domain: impl_data_type
+    range:  sw_base_type
+    description: based_on
+
+  # ── Phase A: Computation methods and data constraints ───────────────────────
+
+  contains_compu_method:
+    domain: ar_package
+    range:  compu_method
+    is_containment: true
+    description: contains_compu_method
+
+  contains_data_constr:
+    domain: ar_package
+    range:  data_constr
+    is_containment: true
+    description: contains_data_constr
+
+  contains_constant_specification:
+    domain: ar_package
+    range:  constant_specification
+    is_containment: true
+    description: contains_constant_specification
+
+  has_compu_method:
+    domain: impl_data_type
+    range:  compu_method
+    description: has_compu_method
+
+  has_data_constr:
+    domain: impl_data_type
+    range:  data_constr
+    description: has_data_constr
+
+  # ── Phase A: Mode declarations and mapping sets ─────────────────────────────
+
+  contains_mode_declaration_group:
+    domain: ar_package
+    range:  mode_declaration_group
+    is_containment: true
+    description: contains_mode_declaration_group
+
+  has_mode_group:
+    domain: ms_interface
+    range:  mode_declaration_group
+    description: has_mode_group
+
+  contains_data_type_mapping_set:
+    domain: ar_package
+    range:  data_type_mapping_set
+    is_containment: true
+    description: contains_data_type_mapping_set
+
+  # ── Phase A: SWC behavior details ──────────────────────────────────────────
+
+  has_runnable:
+    domain: swc_internal_behavior
+    range:  runnable_entity
+    is_containment: true
+    description: has_runnable
+
+  has_event:
+    domain: swc_internal_behavior
+    range:  swc_event
+    is_containment: true
+    description: has_event
+
+  triggers_runnable:
+    domain: swc_event
+    range:  runnable_entity
+    description: triggers_runnable
+
+  has_exclusive_area:
+    domain: swc_internal_behavior
+    range:  exclusive_area
+    is_containment: true
+    description: has_exclusive_area
+
+  has_per_instance_memory:
+    domain: swc_internal_behavior
+    range:  per_instance_memory
+    is_containment: true
+    description: has_per_instance_memory
+
+  # ── Phase A: BSW module descriptions ────────────────────────────────────────
+
+  contains_bsw_module_description:
+    domain: ar_package
+    range:  bsw_module_description
+    is_containment: true
+    description: contains_bsw_module_description
+
+  has_bsw_behavior:
+    domain: bsw_module_description
+    range:  bsw_internal_behavior
+    is_containment: true
+    description: has_bsw_behavior
+
+  contains_bsw_module_entry:
+    domain: ar_package
+    range:  bsw_module_entry
+    is_containment: true
+    description: contains_bsw_module_entry
+
+  has_bsw_entity:
+    domain: bsw_internal_behavior
+    range:  bsw_entity
+    is_containment: true
+    description: has_bsw_entity
+
+  implements_entry:
+    domain: bsw_entity
+    range:  bsw_module_entry
+    description: implements_entry
+
+  # ── Phase A: Application data types and units ──────────────────────────────
+
+  contains_app_data_type:
+    domain: ar_package
+    range:  app_data_type
+    is_containment: true
+    description: contains_app_data_type
+
+  contains_unit:
+    domain: ar_package
+    range:  unit
+    is_containment: true
+    description: contains_unit
+
+  # ── Phase A: Variable data prototype type reference ─────────────────────────
+
+  typed_by_impl:
+    domain: variable_data_proto
+    range:  impl_data_type
+    description: typed_by_impl
+
+  # ── Phase A: PR-port and its interface binding ─────────────────────────────
+
+  has_pr_port:
+    domain: swc_type
+    range:  pr_port
+    is_containment: true
+    description: has_pr_port
+
+  provides_requires_interface:
+    domain: pr_port
+    range:  port_interface
+    description: provides_requires_interface
+
+  # ── Phase B: Communication, signals, and system mappings ────────────────────
+
+  contains_ecu_instance:
+    domain: ar_package
+    range:  ecu_instance
+    is_containment: true
+    description: contains_ecu_instance
+
+  contains_comm_cluster:
+    domain: ar_package
+    range:  comm_cluster
+    is_containment: true
+    description: contains_comm_cluster
+
+  contains_comm_frame:
+    domain: ar_package
+    range:  comm_frame
+    is_containment: true
+    description: contains_comm_frame
+
+  contains_lin_sporadic_frame:
+    domain: ar_package
+    range:  lin_sporadic_frame
+    is_containment: true
+    description: contains_lin_sporadic_frame
+
+  contains_i_signal:
+    domain: ar_package
+    range:  i_signal
+    is_containment: true
+    description: contains_i_signal
+
+  contains_i_signal_group:
+    domain: ar_package
+    range:  i_signal_group
+    is_containment: true
+    description: contains_i_signal_group
+
+  contains_i_pdu:
+    domain: ar_package
+    range:  i_signal_i_pdu
+    is_containment: true
+    description: contains_i_pdu
+
+  maps_signal:
+    domain: i_signal_i_pdu
+    range:  i_signal
+    description: maps_signal
+
+  contains_i_pdu_group:
+    domain: ar_package
+    range:  i_pdu_group
+    is_containment: true
+    description: contains_i_pdu_group
+
+  contains_system_signal:
+    domain: ar_package
+    range:  system_signal
+    is_containment: true
+    description: contains_system_signal
+
+  contains_system_signal_group:
+    domain: ar_package
+    range:  system_signal_group
+    is_containment: true
+    description: contains_system_signal_group
+
+  maps_to_system_signal:
+    domain: sr_to_signal_mapping
+    range:  system_signal
+    description: maps_to_system_signal
+
+  has_flat_instance:
+    domain: flat_map
+    range:  flat_instance_descriptor
+    is_containment: true
+    description: has_flat_instance
+
+  contains_flat_map:
+    domain: ar_package
+    range:  flat_map
+    is_containment: true
+    description: contains_flat_map
+
+  has_signal_mapping:
+    domain: flat_instance_descriptor
+    range:  sr_to_signal_mapping
+    is_containment: true
+    description: has_signal_mapping
+
+  # ── Phase C: ECUC configuration relationships ──────────────────────────────
+
+  contains_ecuc_value_collection:
+    domain: ar_package
+    range:  ecuc_value_collection
+    is_containment: true
+    description: contains_ecuc_value_collection
+
+  contains_ecuc_module_config:
+    domain: ar_package
+    range:  ecuc_module_config
+    is_containment: true
+    description: contains_ecuc_module_config
+
+  has_ecuc_container:
+    domain: ecuc_module_config
+    range:  ecuc_container_value
+    is_containment: true
+    description: has_ecuc_container
+
+  has_ecuc_sub_container:
+    domain: ecuc_container_value
+    range:  ecuc_container_value
+    is_containment: true
+    description: has_ecuc_sub_container
+
+  # ── Phase D: Memory addressing ─────────────────────────────────────────────
+
+  contains_sw_addr_method:
+    domain: ar_package
+    range:  sw_addr_method
+    is_containment: true
+    description: contains_sw_addr_method

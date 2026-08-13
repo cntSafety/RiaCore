@@ -1,0 +1,153 @@
+/*
+ * Copyright (c) Samir Sarkic and Simon Roth
+ *
+ * This file is part of RiaCore.
+ *
+ * RiaCore is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ */
+/**
+ * sysml-textual-mapper.ts
+ *
+ * Maps SysmlTextualElementInfo[] → ConceptBatch[] + RelationshipBatch[]
+ * for the importer SDK write service.
+ *
+ * Mirrors the structure of the JSON importer's sysml-v2-mapper.ts, using
+ * the same concept names so the same metamodel (sysml-v2.linkml.yaml) works.
+ */
+import type { ConceptBatch, RelationshipBatch } from '@riacore/app-contracts';
+import type { SysmlTextualModel, SysmlTextualElementInfo } from './sysml-textual-parser.js';
+
+function compact(attrs: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(attrs).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  );
+}
+
+export function mapModelToConceptBatches(model: SysmlTextualModel): ConceptBatch[] {
+  const batchMap = new Map<string, ConceptBatch>();
+
+  for (const el of model.elements) {
+    let batch = batchMap.get(el.concept);
+    if (!batch) {
+      batch = { concept: el.concept, items: [] };
+      batchMap.set(el.concept, batch);
+    }
+    batch.items.push({
+      stablePath: el.stablePath,
+      attributes: {
+        // `sysml_id` is the metamodel's identity attribute (identifier: true on
+        // the abstract `sysml_element` base — see sysml-v2-textual.linkml.yaml).
+        // The persistor resolves relationship endpoints through this attribute
+        // when serializing (store) and re-linking (load); if it is absent the
+        // stable-id lookup is empty and load() aborts with "stable-id lookup is
+        // empty after inserting N concept(s)". The Langium AST has no stable
+        // UUID (unlike the JSON importer's `@id`), so the slash-joined stable
+        // path — unique per element and always present — is used as the identity
+        // value. `stable_path` is kept as a separate (non-identity) attribute
+        // for parity with the JSON importer's serialized shape.
+        sysml_id:      el.stablePath,
+        stable_path:   el.stablePath,
+        ...compact({
+          sysml_type:    el.sysmlType,
+          name:          el.name,
+          declared_name: el.name,
+          qualified_name: el.qualifiedName,
+          is_abstract:   el.isAbstract,
+          source_file:   el.sourceFile,
+        }),
+      },
+    });
+  }
+
+  // Emit packages first (matches the JSON importer's ordering convention)
+  const concepts = [...batchMap.keys()].sort((a, b) => {
+    if (a === 'package') return -1;
+    if (b === 'package') return 1;
+    return a.localeCompare(b);
+  });
+
+  return concepts.map((c) => batchMap.get(c)!);
+}
+
+export function mapModelToRelationshipBatches(model: SysmlTextualModel): RelationshipBatch[] {
+  // Build a lookup: qualifiedName → stablePath
+  // Needed to resolve supertype references (best-effort within the same import run)
+  const qnToPath = new Map<string, string>(
+    model.elements.map((el) => [el.qualifiedName, el.stablePath]),
+  );
+
+  // Also index by short name for same-package resolution
+  const nameToPath = new Map<string, string>();
+  for (const el of model.elements) {
+    // Only store if name is unique (first wins on collision)
+    if (!nameToPath.has(el.name)) {
+      nameToPath.set(el.name, el.stablePath);
+    }
+  }
+
+  const batchMap = new Map<string, RelationshipBatch>();
+
+  function addRel(relationship: string, sourcePath: string, targetPath: string): void {
+    if (!sourcePath || !targetPath || sourcePath === targetPath) return;
+    let batch = batchMap.get(relationship);
+    if (!batch) {
+      batch = { relationship, items: [] };
+      batchMap.set(relationship, batch);
+    }
+    batch.items.push({ sourceStablePath: sourcePath, targetStablePath: targetPath });
+  }
+
+  function resolveTarget(typeName: string, ownerQN: string): string | undefined {
+    // Try fully-qualified first
+    const byQN = qnToPath.get(typeName);
+    if (byQN) return byQN;
+
+    // Try scoped: prepend the owner's top-level package
+    const ownerPkg = ownerQN.split('::')[0];
+    if (ownerPkg) {
+      const scoped = qnToPath.get(`${ownerPkg}::${typeName}`);
+      if (scoped) return scoped;
+    }
+
+    // Short name fallback
+    return nameToPath.get(typeName);
+  }
+
+  for (const el of model.elements) {
+    // owns_element: parent → child (parent is everything before the last segment)
+    const segments = el.qualifiedName.split('::');
+    if (segments.length > 1) {
+      const parentQN = segments.slice(0, -1).join('::');
+      const parentPath = qnToPath.get(parentQN);
+      if (parentPath) {
+        addRel('owns_element', parentPath, el.stablePath);
+        addRel('in_namespace', parentPath, el.stablePath);
+      }
+    }
+
+    // has_type: element → supertype definition (best-effort resolution)
+    for (const superTypeName of el.superTypeNames) {
+      const targetPath = resolveTarget(superTypeName, el.qualifiedName);
+      if (targetPath) {
+        addRel('has_type', el.stablePath, targetPath);
+        addRel('has_definition', el.stablePath, targetPath);
+      }
+    }
+  }
+
+  return [...batchMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([, batch]) => batch);
+}

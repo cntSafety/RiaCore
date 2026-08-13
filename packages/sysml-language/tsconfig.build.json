@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": [
+    "src/index.ts",
+    "src/sysml-module.ts",
+    "src/generated/*.ts"
+  ],
+  "exclude": [
+    "src/spike.ts",
+    "node_modules",
+    "dist"
+  ]
+}

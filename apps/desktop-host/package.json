@@ -1,0 +1,32 @@
+{
+  "name": "@riacore/desktop-host",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && electron dist/main.js",
+    "test": "vitest --run",
+    "prepare:package": "node scripts/prepare-package.cjs",
+    "package:dir": "pnpm run prepare:package && electron-builder --config electron-builder.yml --dir",
+    "package:win": "pnpm run prepare:package && electron-builder --config electron-builder.yml --win --x64",
+    "package:mac": "pnpm run prepare:package && electron-builder --config electron-builder.yml --mac --arm64",
+    "package:linux": "pnpm run prepare:package && electron-builder --config electron-builder.yml --linux --x64"
+  },
+  "dependencies": {
+    "@riacore/app-contracts": "workspace:*",
+    "@riacore/app-core": "workspace:*",
+    "@riacore/importer-sdk": "workspace:*",
+    "@riacore/git-service": "workspace:*",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@vitest/ui": "^3.2.4",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "fast-check": "^3.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

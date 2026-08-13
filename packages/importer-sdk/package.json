@@ -1,0 +1,19 @@
+{
+  "name": "@riacore/importer-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run --passWithNoTests"
+  },
+  "dependencies": {
+    "@riacore/app-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

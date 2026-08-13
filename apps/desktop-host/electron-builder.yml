@@ -1,0 +1,39 @@
+appId: com.riacore.desktop
+productName: RiaCore
+asar: false
+npmRebuild: false
+directories:
+  app: .release/app
+  output: dist-electron
+files:
+  - '**/*'
+extraResources:
+  - from: .release/sidecar
+    to: node-sidecar
+    filter:
+      - '**/*'
+  - from: "../../node_modules/.pnpm/dugite@2.7.1/node_modules/dugite/git"
+    to: git
+    filter:
+      - '**/*'
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+nsis:
+  include: build/installer.nsh
+win:
+  icon: build/icons/win/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+mac:
+  icon: build/icons/mac/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - arm64
+linux:
+  icon: build/icons/png
+  target:
+    - target: AppImage
+      arch:
+        - x64

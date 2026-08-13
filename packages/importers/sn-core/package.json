@@ -1,0 +1,22 @@
+{
+  "name": "@riacore/importer-sn",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run --passWithNoTests"
+  },
+  "dependencies": {
+    "@riacore/importer-sdk": "workspace:*",
+    "@riacore/app-contracts": "workspace:*",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@ladybugdb/core": "*",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

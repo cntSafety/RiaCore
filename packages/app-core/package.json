@@ -1,0 +1,35 @@
+{
+  "name": "@riacore/app-core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^4.0.111",
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/google-vertex": "^4.0.140",
+    "@ai-sdk/openai": "^3.0.67",
+    "@riacore/app-contracts": "workspace:*",
+    "@riacore/git-service": "workspace:*",
+    "@riacore/importer-arxml": "workspace:*",
+    "@riacore/importer-sdk": "workspace:*",
+    "@riacore/importer-sn": "workspace:*",
+    "@riacore/importer-sysml-v2": "workspace:*",
+    "@riacore/importer-sysml-v2-textual": "workspace:*",
+    "ai": "^6.0.193",
+    "exceljs": "^4.4.0",
+    "@ladybugdb/core": "^0.17.1",
+    "yaml": "^2.7.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "fast-check": "^3.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

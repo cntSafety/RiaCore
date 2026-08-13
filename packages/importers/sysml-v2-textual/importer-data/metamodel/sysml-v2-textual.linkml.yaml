@@ -1,0 +1,304 @@
+name: SysMLv2Textual
+title: SysML v2 Textual Baseline
+description: >-
+  SysML v2 textual importer metamodel for .sysml source files parsed via Langium.
+  Type hierarchy follows the OMG SysML v2 and KerML specifications.
+  Abstract classes (abstract: true) serve as hierarchy nodes only;
+  concrete classes correspond to element types extracted from the Langium AST.
+version: 0.1.0
+
+classes:
+  sysml_element:
+    abstract: true
+    description: Abstract root for all imported SysML v2 / KerML elements.
+    attributes:
+      sysml_id:
+        identifier: true
+        required: true
+        range: string
+      sysml_type:
+        range: string
+        description: PascalCase $type from the Langium AST
+      name:
+        range: string
+      declared_name:
+        range: string
+      qualified_name:
+        range: string
+      stable_path:
+        range: string
+        description: Slash-separated qualified-name path used as stable identity key
+      is_abstract:
+        range: boolean
+      source_file:
+        range: string
+        description: Absolute path to the .sysml file that defined this element
+
+  # ── Namespace layer ────────────────────────────────────────────────────────
+
+  namespace_base:
+    abstract: true
+    is_a: sysml_element
+    description: Abstract base for all KerML Namespaces
+
+  namespace:
+    is_a: namespace_base
+    description: Generic KerML Namespace element
+
+  package:
+    is_a: namespace_base
+    description: Namespace container for model elements
+    rendering:
+      icon: FolderOutlined
+      color: '#8c8c8c'
+
+  library_package:
+    is_a: package
+    description: Standard/reusable library package
+    rendering:
+      hidden: true
+
+  # ── Type layer ─────────────────────────────────────────────────────────────
+
+  type_base:
+    abstract: true
+    is_a: namespace_base
+    description: Abstract base for all KerML Types
+
+  # ── Classifier layer ───────────────────────────────────────────────────────
+
+  classifier_base:
+    abstract: true
+    is_a: type_base
+    description: Abstract base for all KerML Classifiers
+
+  # ── Definition layer ───────────────────────────────────────────────────────
+
+  definition:
+    abstract: true
+    is_a: classifier_base
+    description: Abstract base for all SysML v2 Definitions
+
+  attribute_definition:
+    is_a: definition
+    description: Defines a value-typed attribute
+    rendering:
+      icon: DatabaseOutlined
+      color: '#36cfc9'
+
+  enumeration_definition:
+    is_a: definition
+    description: Enumeration type definition
+
+  item_definition:
+    is_a: definition
+    description: Defines a non-composite item
+    rendering:
+      icon: ContainerOutlined
+      color: '#d4b106'
+
+  part_definition:
+    is_a: definition
+    description: Defines the structure of a part
+    rendering:
+      icon: BlockOutlined
+      color: '#4096ff'
+
+  port_definition:
+    is_a: definition
+    description: Defines the interaction profile of a port
+    rendering:
+      icon: ApiOutlined
+      color: '#73d13d'
+
+  connection_definition:
+    is_a: definition
+    description: Defines a connection between parts
+    rendering:
+      icon: ShareAltOutlined
+      color: '#bfbfbf'
+
+  interface_definition:
+    is_a: connection_definition
+    description: Defines an interface connection
+    rendering:
+      icon: SwapOutlined
+      color: '#b37feb'
+
+  flow_connection_definition:
+    is_a: connection_definition
+    description: Defines a flow connection (item flow between parts)
+    rendering:
+      icon: SwapOutlined
+      color: '#08979c'
+
+  metadata_definition:
+    is_a: definition
+    description: Defines a metadata annotation type
+
+  action_definition:
+    is_a: definition
+    description: Defines a behavior (SysML ActionDefinition)
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#597ef7'
+
+  state_definition:
+    is_a: definition
+    description: Defines a state machine (SysML StateDefinition)
+    rendering:
+      icon: BranchesOutlined
+      color: '#36cfc9'
+
+  constraint_definition:
+    is_a: definition
+    description: Defines a boolean constraint
+    rendering:
+      icon: AuditOutlined
+      color: '#ffa940'
+
+  requirement_definition:
+    is_a: constraint_definition
+    description: Defines a requirement (SysML RequirementDefinition)
+    rendering:
+      icon: FileTextOutlined
+      color: '#9254de'
+
+  use_case_definition:
+    is_a: definition
+    description: Defines a use case (SysML UseCaseDefinition)
+
+  view_definition:
+    is_a: definition
+    description: Defines a model view (SysML ViewDefinition)
+
+  viewpoint_definition:
+    is_a: definition
+    description: Defines a viewpoint (SysML ViewpointDefinition)
+
+  # ── Usage layer ────────────────────────────────────────────────────────────
+
+  usage:
+    abstract: true
+    is_a: classifier_base
+    description: Abstract base for all SysML v2 Usages
+
+  attribute_usage:
+    is_a: usage
+    description: Usage of an attribute definition
+    rendering:
+      icon: DatabaseOutlined
+      color: '#13c2c2'
+
+  item_usage:
+    is_a: usage
+    description: Usage of an item definition
+
+  part_usage:
+    is_a: usage
+    description: Usage of a part definition
+    rendering:
+      icon: BlockOutlined
+      color: '#1677ff'
+
+  port_usage:
+    is_a: usage
+    description: Interaction point on a part
+    rendering:
+      icon: ApiOutlined
+      color: '#52c41a'
+
+  connection_usage:
+    is_a: usage
+    description: Connection between ports or parts
+    rendering:
+      icon: ShareAltOutlined
+      color: '#8c8c8c'
+
+  interface_usage:
+    is_a: connection_usage
+    description: Interface connection between ports
+    rendering:
+      icon: SwapOutlined
+      color: '#9254de'
+
+  flow_connection_usage:
+    is_a: connection_usage
+    description: Flow of items between parts
+    rendering:
+      icon: SwapOutlined
+      color: '#08979c'
+
+  action_usage:
+    is_a: usage
+    description: Usage of an action definition
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#2f54eb'
+
+  state_usage:
+    is_a: usage
+    description: State in a state machine
+    rendering:
+      icon: BranchesOutlined
+      color: '#13c2c2'
+
+  exhibit_state_usage:
+    is_a: state_usage
+    description: Exhibits a state machine on a part
+
+  constraint_usage:
+    is_a: usage
+    description: Usage of a constraint predicate
+    rendering:
+      icon: AuditOutlined
+      color: '#fa8c16'
+
+  requirement_usage:
+    is_a: constraint_usage
+    description: Requirement statement usage
+    rendering:
+      icon: FileTextOutlined
+      color: '#722ed1'
+
+  # Generic fallbacks — catch any Definition/Usage subtype not covered above.
+  # These are concrete so the persistor can assign an identity attribute.
+  # Elements emitted with these concepts are real model elements that happen to
+  # use a SysML construct not yet explicitly mapped.
+
+  unclassified_definition:
+    is_a: definition
+    description: >-
+      Concrete fallback for any Definition subtype not explicitly mapped
+      (e.g. AllocationDefinition, CaseDefinition, OccurrenceDefinition).
+    rendering:
+      icon: CodeOutlined
+      color: '#8c8c8c'
+
+  unclassified_usage:
+    is_a: usage
+    description: >-
+      Concrete fallback for any Usage subtype not explicitly mapped
+      (e.g. AllocationUsage, CaseUsage, OccurrenceUsage).
+    rendering:
+      icon: CodeOutlined
+      color: '#8c8c8c'
+
+slots:
+  owns_element:
+    domain: sysml_element
+    range: sysml_element
+    is_containment: true
+    description: Primary ownership — single canonical containment relationship
+  in_namespace:
+    domain: sysml_element
+    range: sysml_element
+    description: Namespace membership (parent contains child)
+  has_type:
+    domain: sysml_element
+    range: sysml_element
+    description: Typing relationship (usage typed by definition)
+  has_definition:
+    domain: sysml_element
+    range: sysml_element
+    description: Definition specialization (subtype → supertype)

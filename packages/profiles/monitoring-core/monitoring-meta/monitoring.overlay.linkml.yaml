@@ -1,0 +1,130 @@
+##
+## monitoring.overlay.linkml.yaml
+##
+## OVERLAY for the MONITORING_ANALYSIS profile. Composed on top of
+## _base/safety-analysis-base.linkml.yaml via composeProfileSchema():
+##   layers = [ safety-analysis-base.linkml.yaml, monitoring.overlay.linkml.yaml ]
+##
+## The base supplies malfunction, risk_rating, requirement, safety_task,
+## safety_note, tag, review_item and all slots + the invariant enums
+## (AsilLevel, SeverityLevel, TaskStatus, ReviewStatus, ReviewerVerdict).
+##
+## This overlay adds only what is specific to a MONITORING analysis:
+##   - OccurrenceLevel: likelihood of the (random) fault the monitor guards against
+##   - DetectionLevel:  capability of the runtime monitoring to detect the fault
+##   - TaskType
+##   - the review instructions
+## Severity stays the base two-level scale (Safety-Impact / QM-Impact).
+
+id: https://ria.io/schema/monitoring-analysis/meta
+name: monitoring_analysis_meta
+title: Monitoring Analysis Metamodel — Overlay
+description: >-
+  Monitoring analysis profile. Same FMEA structure as the safety profiles, but
+  the risk rating is read from a monitoring viewpoint: Occurrence is the
+  likelihood of the (random) fault to be monitored, and Detection is the
+  capability of the runtime monitoring to reveal it.
+version: "1.0.0"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  monitoring: https://example.org/monitoring-meta#
+
+default_prefix: monitoring
+
+annotations:
+  profile_review:
+    tag: profile_review
+    value: |-
+      {
+        "version": 2,
+        "workflow": {
+          "verdicts": [
+            {"value": "OK", "label": "OK", "description": "Element is acceptable as-is", "color": "#52c41a", "tag": "success"},
+            {"value": "NOK", "label": "Not OK", "description": "Element is not acceptable; action is required", "color": "#ff4d4f", "tag": "error", "showAuthorStatusBreakdown": true},
+            {"value": "OK_with_comment", "label": "Note", "description": "Element is acceptable but the reviewer has a comment", "color": "#faad14", "tag": "warning", "showAuthorStatusBreakdown": true}
+          ],
+          "authorStatuses": [
+            {"value": "open", "label": "Open", "description": "No author response has been completed", "color": "#8c8c8c", "tag": "default"},
+            {"value": "in_analysis", "label": "In Analysis", "description": "The author is analyzing the review comment", "color": "#1677ff", "tag": "processing"},
+            {"value": "resolved", "label": "Resolved", "description": "The author has addressed and acknowledged the review", "color": "#52c41a", "tag": "success", "isResolution": true},
+            {"value": "rejected", "label": "Rejected", "description": "The author rejected the review comment with justification", "color": "#ff4d4f", "tag": "error"}
+          ],
+          "snapshotPolicy": "Capture the reviewed element content when the reviewer sets a verdict and again when the author resolves the review. Clear the snapshot when the author reopens the review or moves it to in_analysis. A verdict with a changed snapshot is suspect."
+        },
+        "instructions": {
+          "title": "Monitoring Analysis Review Checklist",
+          "catalogSource": "monitoring_FM_List.json",
+          "catalogTitles": {
+            "componentFailureModes": "Electrical / Electronic Component Failure Modes",
+            "interfaceFailureModes": "Signal / Interface Failure Modes"
+          },
+          "sections": [
+            {
+              "id": "monitored-fault",
+              "title": "Question 1: Is the monitored fault clearly defined?",
+              "paragraphs": [
+                "Each monitoring entry should reference a specific fault (or failure mode) it is meant to detect, and the element it occurs at.",
+                "The occurrence rating reflects how likely that (random) fault is over the service life — independent of the monitor.",
+                "The following list of common electrical/electronic failure modes is a starting point — select the **relevant** ones per monitored element rather than applying all of them."
+              ],
+              "catalogs": ["componentFailureModes", "interfaceFailureModes"]
+            },
+            {
+              "id": "detection-capability",
+              "title": "Question 2: Is the detection capability justified?",
+              "paragraphs": [
+                "The detection rating reflects the capability of the runtime monitoring. A simple plausibility check that catches only some failure modes is a low capability; detecting the failure modes across the different operating conditions with high confidence (for example a diverse sensor of similar accuracy where a narrow delta band is monitored and deviations are detected) is a high capability.",
+                "State the independence of the monitor from the monitored function so a single cause cannot defeat both."
+              ]
+            },
+            {
+              "id": "system-response",
+              "title": "Question 3: Is the system response defined?",
+              "paragraphs": [
+                "On detection, what does the system do (e.g. enter the safe state, degrade, notify the operator)? The response is what turns a potential single-point fault into a monitored one."
+              ]
+            },
+            {
+              "id": "tasks",
+              "title": "Question 4: Are the tasks managed?",
+              "paragraphs": [
+                "If additional monitoring, independence measures, or verification are required, a ticket shall be created to manage the task."
+              ]
+            }
+          ]
+        }
+      }
+
+enums:
+
+  OccurrenceLevel:
+    description: >-
+      Five-level likelihood of the (random) fault that the monitoring is meant
+      to guard against, over the product service life. Level 1 = low occurrence
+      of random faults; Level 5 = high occurrence of random faults. Rated on the
+      fault itself, independent of the monitor.
+    permissible_values:
+      Level1: { description: "Level 1 — Very Low: random fault very unlikely; robust, proven design with a very low random failure rate" }
+      Level2: { description: "Level 2 — Low: random fault unlikely; established design with a low failure rate" }
+      Level3: { description: "Level 3 — Medium: random fault plausible; moderate failure rate" }
+      Level4: { description: "Level 4 — High: random fault likely; elevated failure rate" }
+      Level5: { description: "Level 5 — Very High: random fault very likely; high random failure rate" }
+
+  DetectionLevel:
+    description: >-
+      Five-level capability of the runtime monitoring to detect the fault.
+      Level 1 = high detection capability; Level 5 = low detection capability.
+    permissible_values:
+      Level1: { description: "Level 1 — High capability: the failure modes across the different operating conditions are detected with high confidence (e.g. a diverse sensor of similar accuracy, so a narrow delta band can be monitored and deviations detected)" }
+      Level2: { description: "Level 2 — Good capability: most failure modes detected across the main operating conditions, with some conditions less well covered" }
+      Level3: { description: "Level 3 — Moderate capability: the common failure modes are detected under nominal conditions; corner cases and some operating conditions may be missed" }
+      Level4: { description: "Level 4 — Limited capability: only a subset of failure modes detected, under specific conditions" }
+      Level5: { description: "Level 5 — Low capability: a simple plausibility check that catches only some failure modes" }
+
+  TaskType:
+    description: Classification of the type of task.
+    permissible_values:
+      "runtime measures":  { description: "Measure implemented and active at runtime (e.g. monitoring, diagnostics, fault reaction)" }
+      "dev-time measures": { description: "Measure applied during development (e.g. review, analysis, testing, design constraint)" }
+      "other":             { description: "Other task type not covered by the standard categories" }

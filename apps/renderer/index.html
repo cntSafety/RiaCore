@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Tell Chromium to honor the OS color scheme for the canvas/scrollbars.
+         Without this the document defaults to light, causing a white flash
+         in dark mode before our CSS / antd theme load. -->
+    <meta name="color-scheme" content="dark light" />
+    <!-- Inline pre-paint background to avoid the white flash on dark-mode
+         systems before React mounts and ThemeProvider runs. Mirrors the
+         Electron BrowserWindow backgroundColor seeded in main.ts. -->
+    <style>
+      html, body { background-color: #ffffff; }
+      @media (prefers-color-scheme: dark) {
+        html, body { background-color: #141414; }
+      }
+    </style>
+    <title>RiaCore</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

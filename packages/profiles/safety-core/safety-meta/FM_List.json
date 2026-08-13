@@ -1,0 +1,211 @@
+{
+    "componentFailureModes": [
+        {
+            "key": "concurrency",
+            "name": "Concurrency failures",
+            "description": "Incorrect concurrent access to shared resources across execution contexts (tasks, threads, ISRs, fibers, coroutines, processes, cores) causing race/data race, lost update, torn read/write, deadlock/livelock, priority inversion, or inconsistent lock ordering, resulting in corrupted shared state or incorrect behavior.",
+            "measures": "Make the reentrancy contract of every function explicit: pure-reentrant (only stack/parameters), reentrant under lock, or non-reentrant (single-context only). For non-reentrant code, guarantee single-writer ownership and a single calling context (one task/thread/node on one core, no concurrent activation). For shared state, protect with the appropriate primitive for the platform (mutex, semaphore, spinlock, critical section, atomic, RCU, message queue) and define a documented lock order to avoid deadlock. Avoid non-reentrant library calls (errno, strtok, static buffers) in shared code paths."
+        },
+        {
+            "key": "config-calibration",
+            "name": "Config & Calibration failures",
+            "description": "Problems related to calibration and configuration data, e.g. wrong or missing calibration values, wrong configuration parameters (build-time, install-time, or runtime), unsafe default values, inconsistent parameter sets between modules.",
+            "measures": "Store calibration/configuration data in protected memory with integrity checks (CRC/checksum). If parameters can change post-release (field calibration, ground station upload, fleet update), apply range and plausibility checks on load and at use. If calibration is fixed at development time, the review and test process is the primary mitigation. Define and validate safe defaults for the case where stored data is invalid or absent."
+        },
+        {
+            "key": "debug-enabled",
+            "name": "Debug/development functionality enabled",
+            "description": "Development or test functionality remains enabled in the released software (e.g., diagnostic overrides, bypass switches, force values, test/maintenance modes, overly permissive safety gates, debug backdoors, calibration write access, verbose logging that affects timing), leading to unintended behavior in the field.",
+            "measures": "Remove development functions from the production build, or guard them behind compile-time switches, signed/authenticated unlock, or hardware jumpers that are physically absent in the released configuration. Verify by build-artifact inspection and dedicated test cases."
+        },
+        {
+            "key": "failure-to-activate",
+            "name": "Failure to activate / missing function",
+            "description": "The software function fails to activate when required (e.g., missed trigger, suppressed transition, incorrect inhibit/enable logic, blocked event, dropped activation request).",
+            "measures": "Component specific failure mode."
+        },
+        {
+            "key": "fault-handling",
+            "name": "Fault handling / fallback failure",
+            "description": "A safety mechanism detects a fault but the mitigation is incorrect or missing (unsafe default, no degraded/fail-operational/fail-safe mode, wrong fallback selection, fault not latched, fault masked by another).",
+            "measures": "Component specific failure mode."
+        },
+        {
+            "key": "incorrect-output",
+            "name": "Incorrect control output (wrong value)",
+            "description": "The computed output is incorrect due to algorithm or implementation error, including wrong magnitude, wrong sign, or wrong direction (e.g., wrong formula/branch/parameter usage; control assist inverted; actuator command sign or axis wrong; thrust/torque/force command incorrect).",
+            "measures": "Component specific failure mode."
+        },
+        {
+            "key": "initialization",
+            "name": "Initialization failures",
+            "description": "Software function is not initialized as expected: variables/buffers not set up correctly, peripherals/drivers not configured, initialization sequence not followed, dependencies started in wrong order, partial init after warm restart.",
+            "measures": "Cover application-level init by program-flow monitoring during startup. For code that runs before the OS/scheduler (boot, pre-OS self-tests, BSP), apply specific monitoring to ensure required hardware self-tests and platform checks complete before normal operation begins. Define and verify the init order across modules; assert preconditions at module entry."
+        },
+        {
+            "key": "limit-handling",
+            "name": "Limit handling failure (saturation / clamp / rate limit)",
+            "description": "Safety or physical limits are not applied correctly (missing saturation, wrong clamp bounds, rate limiter bypassed or wrongly sized, integrator wind-up), causing out-of-range, abrupt, or unstable outputs.",
+            "measures": "Component specific failure mode."
+        },
+        {
+            "key": "numeric-robustness",
+            "name": "Numeric robustness failure",
+            "description": "Numeric issues such as integer overflow/underflow, divide-by-zero, NaN/Inf propagation, unintended type promotion, signed/unsigned mix, or wraparound counters cause incorrect outputs or transitions.",
+            "measures": "Define the value range, resolution, and invalid-value representation (e.g. NaN allowed, sentinel value, separate validity flag) for every interface signal of the component, and choose data types and scaling consistent with that range plus a safety margin. Perform worst-case range analysis along the computation chain so intermediate types cannot overflow. State preconditions for numerically dangerous operations in the requirements (e.g. divisor guaranteed > epsilon, integrator reset on mode change) and decide where the check is enforced — producer, consumer, or both."
+        },
+        {
+            "key": "performance-accuracy",
+            "name": "Performance / Accuracy reduced",
+            "description": "Reduced numerical or control accuracy, e.g. due to rounding errors, fixed-point quantization, wrong filter/observer selection, insufficient sample rate, accumulated drift, or excessive latency in the dataflow.",
+            "measures": "Specify accuracy requirements per interface signal if required (tolerance, max error, noise floor, drift). Allocate an end-to-end accuracy/error budget across the chain of components (sensor → filter → control → actuator) so each component has a defined slice. Define the component's sample/update rate consistent with the dynamics being observed or controlled (Nyquist plus margin, control bandwidth) and specify the computation and communication latency budget. Specify data type precision and intermediate width so rounding/quantization through the chain stays within the budget. Constrain algorithm choice in the requirements via filter/observer characteristics (bandwidth, phase margin, settling time, steady-state error). Identify where quantization or saturation occurs and place it where the information loss is acceptable."
+        },
+        {
+            "key": "preemption-statefulness",
+            "name": "Preemption and Statefulness related failures",
+            "description": "Stateful logic is interrupted or re-entered at an unsafe point, so partially-updated internal state is observed or corrupted (e.g., ISR/task re-entrancy on shared state, torn or non-atomic multi-step updates, missing critical section around a commit, state lost or duplicated across cycles or mode switches).",
+            "measures": "Define and document the reentrancy contract of every stateful function. For non-reentrant functions, ensure they are called from exactly one execution context and that the interrupting/preempting context does not touch their variables or buffers. Where preemption is unavoidable, protect the commit step with a critical section, atomic operation, or double-buffer/snapshot pattern so observers always see a consistent state."
+        },
+        {
+            "key": "resource-exhaustion",
+            "name": "Resource exhaustion / memory corruption",
+            "description": "Resource or memory faults — stack overflow, heap fragmentation/exhaustion, buffer overflow/underflow, leak, file/handle/socket exhaustion, queue overflow — leading to incorrect behavior, denial of service, or loss of control state.",
+            "measures": "Stack: monitor at runtime (RTOS/safety-OS stack checking, MPU guard pages) and measure worst-case stack usage statically. Heap: prefer no dynamic allocation in safety-critical paths; if used, bound it and use pools with quotas. Buffers: validate with static analysis tools and protect critical regions via MPU/MMU. For other resources (queues, handles, sockets), apply quotas, timeouts, and back-pressure."
+        },
+        {
+            "key": "scaling-mismatch",
+            "name": "Scaling / unit mismatch (internal)",
+            "description": "Internal scaling or units are inconsistent across the implementation (e.g., fixed-point Q-format wrong, Nm vs %, deg vs rad, m vs ft, ms vs us), leading to incorrect results.",
+            "measures": "Mostly covered by code review and unit testing. At architecture level, the relevant case is cross-component communication: ensure interface data types, units, and scaling are explicitly defined and consistently used by producer and consumer."
+        },
+        {
+            "key": "stale-data",
+            "name": "Stale data usage",
+            "description": "Computation uses outdated or inconsistent data due to missing freshness, sequence, or timestamp checks (e.g., missed update, old sample reused, mixed-cycle signals, sensor data older than the control horizon).",
+            "measures": "Relevant when components exchange data while running at different rates (e.g. 1 ms producer to 10 ms consumer, or async sensor publishing into a periodic controller). Detect when data is not produced or consumed within the expected interval (age check, sequence counter, timestamp). Size buffers and queues so they cannot silently drop or overrun."
+        },
+        {
+            "key": "state-machine",
+            "name": "State machine / mode management failure",
+            "description": "Incorrect state transitions or mode handling: illegal state reached, wrong transition, failure to enter safe/degraded mode, state and mode out of sync between modules.",
+            "measures": "Cover all defined transitions (and explicit handling of undefined ones) by review and test. Pay attention to restart paths: e.g. if the controller has a warm reset and persistent RAM is not reset to a defined value, the state machine may skip initialization and end up in an unexpected state. Ensure persistent state has integrity checks and a defined recovery action when invalid."
+        },
+        {
+            "key": "synchronization",
+            "name": "Synchronization failures",
+            "description": "Coordination or ordering between tasks, threads, or distributed components is wrong (e.g., wrong sequencing or phase alignment, missing or incorrect handshake/event/trigger, missed notification or wake-up, lost startup event after restart).",
+            "measures": "Example: a controller waits for a specific message on the communication bus to perform a self-test, but that message does not arrive after a warm restart because the sender has already moved past the trigger. Ensure required start-up events are reproduced after every kind of reset, or that recovery logic can synthesize the missing event."
+        },
+        {
+            "key": "timing",
+            "name": "Timing failures",
+            "description": "The software function executes too late, too early, with too much jitter, or not within the deadline (missed deadline, schedule overrun, blocking call in real-time path).",
+            "measures": "Core failure mode for timing problems in software, typically covered by program-flow monitoring combined with timing supervision and a hardware (external) watchdog. Establish worst-case execution time (WCET) bounds for safety-relevant tasks and verify them by measurement and/or static timing analysis."
+        },
+        {
+            "key": "unintended-activation",
+            "name": "Unintended activation",
+            "description": "The software function activates when it should not (e.g., wrong mode gating, spurious state transition, incorrect enable conditions, false positive trigger).",
+            "measures": "Example: entering a self-test or maintenance mode while the system is in an unsafe situation because a precondition (vehicle/aircraft/robot motion, payload state, operator presence) was not used as a gating condition. Define the full enable predicate for every action and verify each gate."
+        },
+        {
+            "key": "watchdog-reset",
+            "name": "Watchdog/reset behavior unsafe",
+            "description": "Watchdog, reset, or restart behavior is unsafe (reset triggered in a critical phase, reboot loop, outputs not forced to a safe state during restart, persistent fault state lost on reset).",
+            "measures": "Distinguish the different reset sources (power-on reset, warm reset, watchdog reset, software reset, brown-out) and define how RAM data is treated for each (re-initialized, retained, cleared on integrity failure). Consider the operational context during reset (e.g. mid-flight, mid-motion, mid-procedure) and ensure outputs are commanded to a defined safe state during the unavailable window."
+        },
+        {
+            "key": "wrong-logic",
+            "name": "Wrong logic",
+            "description": "Instead of the intended function the software executes wrong logic, e.g. instead of entering sleep/idle mode the software stays in run, or the wrong control law is selected for the current mode.",
+            "measures": "Component specific failure mode."
+        }
+    ],
+    "interfaceFailureModes": [
+        {
+            "key": "corrupted-data",
+            "name": "Corrupted data / Integrity not checked",
+            "description": "End-to-end protection (CRC, checksum, MAC, parity) fails or is not validated by the receiver, allowing corrupted data to be used."
+        },
+        {
+            "key": "duplicate-replayed",
+            "name": "Duplicate / replayed message",
+            "description": "Old or duplicate messages are accepted as current (replay attack, gateway/router duplication, diagnostic or test tool injection, retried frames not deduplicated)."
+        },
+        {
+            "key": "endianness",
+            "name": "Endianness / bitfield packing error",
+            "description": "Byte order, bit offsets, alignment, or packed-struct layout mismatch causes incorrect decoding/encoding of interface data."
+        },
+        {
+            "key": "freshness-sequence",
+            "name": "Freshness / sequence failure",
+            "description": "Receiver does not properly validate message freshness or order (missing timestamp/counter checks, rollover mishandled, out-of-sequence messages accepted, clock not synchronized between sender and receiver)."
+        },
+        {
+            "key": "init-default-misuse",
+            "name": "Initialization/default value misuse",
+            "description": "Receiver uses uninitialized or default values before the first valid update arrives, or treats a default/invalid-marker value as valid without qualification."
+        },
+        {
+            "key": "latency-jitter",
+            "name": "Latency / jitter on interface",
+            "description": "Variable or excessive interface delay breaks control assumptions (late arrival, bursty delivery, jitter not handled, queueing delay in middleware/network)."
+        },
+        {
+            "key": "missing-signal",
+            "name": "Missing signal / no update",
+            "description": "Input or message is not received or stops updating (timeout, bus silent, publisher not sending, subscription not established, receiver not handling missing updates)."
+        },
+        {
+            "key": "out-of-range",
+            "name": "Out-of-range / implausible value",
+            "description": "Received value is outside allowed bounds or implausible given other signals (range or plausibility checks missing or incorrect, cross-signal consistency not verified)."
+        },
+        {
+            "key": "output-formatting",
+            "name": "Output formatting error",
+            "description": "Transmitted output is encoded incorrectly for the consumer (datatype, scale, units, or bit layout mismatch on transmit)."
+        },
+        {
+            "key": "output-not-updated",
+            "name": "Output not updated / wrong update rate",
+            "description": "Outputs are not published, are published at the wrong rate, or are published irregularly (scheduler or configuration mismatch), causing consumers to act on missing or late outputs."
+        },
+        {
+            "key": "stuck-at",
+            "name": "Stuck-at / frozen value",
+            "description": "Interface value repeats or freezes (last value held, sensor frozen, sender stuck) even though the underlying physical quantity changes."
+        },
+        {
+            "key": "wrong-datatypes",
+            "name": "Wrong datatypes",
+            "description": "Data type mismatch at the interface (e.g., signed vs unsigned, float vs integer, wrong width, enum vs integer), causing misinterpretation."
+        },
+        {
+            "key": "wrong-enum",
+            "name": "Wrong enumeration value / invalid state code",
+            "description": "Enum or state value is outside the allowed set (reserved or invalid codes), or the mapping of codes to meaning is wrong between sender and receiver."
+        },
+        {
+            "key": "wrong-scaling-interface",
+            "name": "Wrong scaling / units at interface",
+            "description": "Encoding or decoding mismatch between sender and receiver (e.g., 0.1 Nm/bit vs 1 Nm/bit, deg vs rad, percent vs fraction, m vs ft) leading to systematic error."
+        },
+        {
+            "key": "wrong-sign",
+            "name": "Wrong sign / polarity",
+            "description": "Signal polarity is inverted or sign convention differs between sender and receiver (active-low treated as active-high; torque, angle, or force sign inverted; coordinate frame flipped)."
+        },
+        {
+            "key": "wrong-signal-mapping",
+            "name": "Wrong signal mapping / wrong ID",
+            "description": "Wrong message or signal is connected or decoded (wrong bus message ID, wrong topic/port/service name, wrong port/bus element mapping, swapped channels in an I/O configuration)."
+        },
+        {
+            "key": "wrong-source",
+            "name": "Wrong source / channel swap",
+            "description": "Data from an unintended sender, channel, or source is accepted (e.g. wrong ADC channel due to routing/config error, wrong sensor instance subscribed, wrong redundant lane selected)."
+        }
+    ]
+}

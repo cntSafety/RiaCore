@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SysML v2 Textual Import Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# This file controls which .sysml files are imported and which element
+# categories are enabled for the SysML v2 textual importer.
+#
+# Point project_dir at a folder containing .sysml files. All .sysml files
+# in that folder and its subfolders are parsed and imported.
+# ─────────────────────────────────────────────────────────────────────────────
+
+namespace: SysMLModel
+source_name: SysML v2 Textual Model
+sourceType: sysml_v2_textual
+
+# Root directory containing .sysml files.
+# Set this to the folder containing your SysML v2 project files, either absolute
+# or relative to the WORKSPACE ROOT (the folder holding ria-data/) — never
+# relative to this config file. Use the folder browse button in the Config
+# panel to select it; a folder inside the workspace is stored as a relative
+# path so the workspace stays portable across machines and operating systems.
+project_dir: ""
+
+files:
+  include:
+    - "**/*.sysml"
+  exclude:
+    - "**/node_modules/**"
+    - "**/.git/**"
+
+elements:
+  structure: true
+  behavior: true
+  features: true
+  memberships: false
+  imports: true

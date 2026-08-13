@@ -1,0 +1,140 @@
+/* ── Safety Editor bespoke styles ──────────────────────────────────────────
+ * Scoped under .ria-scope so overrides don't bleed into the rest of the app.
+ * CSS variables are mapped from Ant Design's cssVar tokens (--ant-color-*)
+ * so they respond correctly to light/dark theme switches.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* 1 ── Scope root: declare --ria-* aliases from --ant-* tokens ──────────── */
+.ria-scope {
+  --ria-bg:           var(--ant-color-bg-layout);
+  --ria-bg-elev:      var(--ant-color-bg-container);
+  --ria-card-bg:      var(--ant-color-bg-container);
+  --ria-card-head-bg: var(--ant-color-fill-alter);
+  --ria-card-border:  var(--ant-color-border-secondary);
+  --ria-fg:           var(--ant-color-text);
+  --ria-fg-muted:     var(--ant-color-text-secondary);
+  --ria-fg-faint:     var(--ant-color-text-quaternary);
+  --ria-row-hover:    var(--ant-color-bg-text-hover);
+  --ria-nav-active:   var(--ant-color-primary-bg);
+  --ria-table-head:   var(--ant-color-fill-alter);
+  --ria-accent:       var(--ant-color-primary);
+  --ria-accent-soft:  var(--ant-color-primary-bg);
+
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--ria-fg);
+}
+
+/* 2 ── Typography ───────────────────────────────────────────────────────── */
+.ria-scope code,
+.ria-scope .mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+}
+
+/* 3 ── Status colour helpers ────────────────────────────────────────────── */
+.ria-fg-ok   { color: #52c41a; }
+.ria-fg-warn { color: #faad14; }
+.ria-fg-err  { color: #f5222d; }
+
+/* 4 ── RIA Card ─────────────────────────────────────────────────────────── */
+.ria-card {
+  background: var(--ria-card-bg);
+  border: 1px solid var(--ria-card-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ria-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ria-card-border);
+  background: var(--ria-card-head-bg);
+}
+
+.ria-card__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ria-fg);
+  letter-spacing: -0.005em;
+}
+
+.ria-card__sub {
+  font-size: 12px;
+  color: var(--ria-fg-muted);
+}
+
+.ria-card__body {
+  padding: 12px 16px 16px;
+}
+
+/* 5 ── Category nav items (ModelCheck left panel) ───────────────────────── */
+.ria-navitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ria-fg);
+  transition: background 120ms ease;
+}
+
+.ria-navitem:hover { background: var(--ria-row-hover); }
+.ria-navitem.is-active { background: var(--ria-nav-active); }
+
+.ria-navitem__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ria-navitem__label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ria-navitem__count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--ria-fg-muted);
+}
+
+.ria-navitem.is-active .ria-navitem__count { color: var(--ria-fg); }
+
+/* 6 ── Resizable column handle ──────────────────────────────────────────── */
+/* (Empty — resize styles live in apps/renderer/src/components/data-table/data-table.css.) */
+
+/* 7 ── Ant Design table overrides ───────────────────────────────────────── */
+.ria-scope .ant-table-thead > tr > th {
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.04em;
+  color: var(--ria-fg-muted) !important;
+  background: var(--ria-table-head) !important;
+}
+
+.ria-scope .ant-table-tbody > tr > td {
+  font-size: 12px;
+}
+
+.ria-scope .ant-table-tbody > tr:hover > td {
+  background: var(--ria-row-hover) !important;
+}
+
+/* 8 ── Ant Design tab overrides ─────────────────────────────────────────── */
+.ria-scope .ant-tabs-tab {
+  padding: 10px 0 !important;
+}
+
+.ria-scope .ant-tabs-tab + .ant-tabs-tab {
+  margin-left: 24px !important;
+}
+
+.ria-scope .ant-tabs-tab-btn {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}

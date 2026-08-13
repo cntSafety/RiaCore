@@ -1,0 +1,21 @@
+{
+  "name": "@riacore/git-service",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "dugite": "^2.7.0",
+    "simple-git": "^3.27.0",
+    "tar": "^6.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,12 @@
+name: sphinx_needs_dynamic_placeholder
+version: 0.1.0
+description: Placeholder file for digest/config; runtime schema is generated from needs.json.
+classes:
+  need_base:
+    abstract: true
+    attributes:
+      id:
+        identifier: true
+        required: true
+        range: string
+slots: {}

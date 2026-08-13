@@ -1,0 +1,2191 @@
+grammar SysML
+
+import 'KerML.interfaces'
+import 'SysML.interfaces'
+import 'KerML.expressions'
+
+// Tokens
+// ===================================================================================================
+
+fragment DefinedByToken returns string:
+    ':' | 'defined' 'by'
+;
+
+// Enums
+// ===================================================================================================
+
+PortionKind returns string:
+    'timeslice' | 'snapshot';
+RequirementConstraintKind returns string:
+    'assume' | 'require';
+
+fragment Variation:
+    isVariation?='variation'
+;
+fragment Individual:
+    isIndividual?='individual'
+;
+fragment Portion:
+    portionKind=PortionKind
+;
+
+// Entry
+// ===================================================================================================
+
+entry Model returns Namespace:
+    PackageBodyItems
+;
+
+// Dependencies
+
+Dependency returns Dependency:
+    ( prefixes+=PrefixMetadataAnnotation)* 'dependency' (Identification? 'from')?
+    client+=ElementReference ( ',' client+=ElementReference )* 'to'
+    supplier+=ElementReference ( ',' supplier+=ElementReference )*
+    RelationshipBody
+;
+
+// Annotations
+// ===================================================================================================
+
+OwnedAnnotation returns Annotation:
+    source=AnnotatingElement
+;
+
+AnnotatingMember returns OwningMembership:
+    target=AnnotatingElement
+;
+
+AnnotatingElement returns AnnotatingElement:
+    Comment 
+    | Documentation
+    | TextualRepresentation
+    | MetadataUsage
+;
+
+fragment RelationshipBody:
+    ';' | '{' RelationshipBodyElements '}'
+;
+
+fragment RelationshipBodyElements:
+    ( elements+=OwnedAnnotation )*
+;
+
+// Metadata
+// ===================================================================================================
+
+MetadataDefinition returns MetadataDefinition:
+    Abstract? PrefixMetadata? 'metadata' 'def' DefinitionSuffix
+;
+
+PrefixMetadataAnnotation returns Annotation:
+    source=PrefixMetadataUsage
+;
+
+PrefixMetadataMember returns OwningMembership:
+    target=PrefixMetadataUsage
+;
+
+fragment PrefixMetadata:
+    (prefixes+=PrefixMetadataMember)+
+;
+
+PrefixMetadataUsage returns MetadataUsage:
+    '#' heritage+=MetadataTyping
+;
+
+MetadataUsage returns MetadataUsage:
+    PrefixMetadata?
+    ('metadata' | '@') MetadataUsageDeclaration
+    ( 'about' about+=Annotation ( ',' about+=Annotation )*)?
+    MetadataBody
+;
+
+fragment MetadataUsageDeclaration:
+    ( Identification? DefinedByToken )? heritage+=MetadataTyping
+;
+
+fragment MetadataBody:
+    ';' | '{' MetadataBodyItems '}'
+;
+
+fragment MetadataBodyItems:
+    ( children+=DefinitionMember
+    | children+=RelationshipMember
+    | children+=VisibleAnnotatingMember
+    | children+=MetadataBodyUsageMember
+    | children+=AliasMember
+    | children+=Import
+    )*
+;
+
+MetadataBodyUsageMember returns FeatureMembership:
+    target=MetadataBodyUsage
+;
+
+MetadataBodyUsage returns ReferenceUsage:
+    'ref'? RedefinesToken? heritage+=OwnedRedefinition
+    FeatureSpecializationPart? ValuePart?
+    MetadataBody
+;
+
+// Packages
+// ===================================================================================================
+
+Package returns Package:
+    PrefixMetadata? PackageDeclaration PackageBody
+;
+
+LibraryPackage returns LibraryPackage:
+    Standard? 'library' PrefixMetadata? PackageDeclaration PackageBody
+;
+
+fragment PackageDeclaration:
+    'package' Identification?
+;
+
+fragment PackageBody:
+    ';' | '{' PackageBodyItems '}'
+;
+
+fragment PackageBodyItems:
+    ( PackageBodyElement )*
+;
+
+// Package bodies
+
+fragment PackageBodyElement:
+    children+=Import
+    | children+=AliasMember
+    | children+=ElementFilterMember
+    | children+=VisibleAnnotatingMember
+    | children+=UsageMember
+    | children+=DefinitionMember
+    | children+=RelationshipMember
+;
+
+UsageMember returns OwningMembership:
+    Visibility? target=UsageElement
+;
+
+RelationshipMember returns OwningMembership:
+    Visibility? target=Dependency
+;
+
+ElementFilterMember returns ElementFilterMembership:
+    Visibility? 'filter' target=OwnedExpression ';'
+;
+
+AliasMember returns Membership:
+    Visibility? isAlias?='alias' Identification? 'for' targetRef=ElementReference RelationshipBody
+;
+
+// Imports
+
+fragment ImportPrefix:
+    Visibility? 'import' ImportAll?
+;
+
+// see KerML.langium for the change
+fragment ImportedReference:
+    targetRef=ElementReference (isNamespace='::*')? ( isRecursive?='::**' )?
+;
+
+Import returns Import:
+    ImportPrefix ImportedReference (target=FilterPackage)? RelationshipBody
+;
+
+FilterPackage returns Package:
+    // imports+=FilterPackageImport
+    ( children+=FilterPackageMember )+
+;
+
+FilterPackageMember returns ElementFilterMembership:
+    '[' target=OwnedExpression ']'
+;
+
+// Package elements
+// ===================================================================================================
+
+DefinitionElement returns Namespace:
+    Package
+    | LibraryPackage
+    // | AnnotatingElement // in a separate property
+    // | Dependency // in a separate property
+    | AttributeDefinition
+    | EnumerationDefinition
+    | OccurrenceDefinition
+    | IndividualDefinition
+    | ItemDefinition
+    | MetadataDefinition
+    | PartDefinition
+    | ConnectionDefinition
+    | FlowConnectionDefinition
+    | InterfaceDefinition
+    | AllocationDefinition
+    | PortDefinition
+    | ActionDefinition
+    | CalculationDefinition
+    | StateDefinition
+    | ConstraintDefinition
+    | RequirementDefinition
+    | ConcernDefinition
+    | CaseDefinition
+    | AnalysisCaseDefinition
+    | VerificationCaseDefinition
+    | UseCaseDefinition
+    | ViewDefinition
+    | ViewpointDefinition
+    | RenderingDefinition
+    | ExtendedDefinition
+;
+
+UsageElement returns Usage:
+    NonOccurrenceUsageElement
+    | OccurrenceUsageElement
+;
+
+// Classifiers
+// ===================================================================================================
+
+
+fragment SubclassificationPart:
+    SpecializesToken heritage+=OwnedSubclassification ( ',' heritage+=OwnedSubclassification )*
+;
+
+OwnedSubclassification returns Subclassification:
+    targetRef=ClassifierReference
+;
+
+// Features
+// ===================================================================================================
+
+fragment FeatureDeclaration:
+    Identification FeatureSpecializationPart?
+    | FeatureSpecializationPart
+;
+
+fragment FeatureSpecializationPart:
+    FeatureSpecialization+
+    | FeatureSpecialization+ MultiplicityPart FeatureSpecialization*
+    | MultiplicityPart FeatureSpecialization*
+;
+
+
+fragment MultiplicityPart:
+    multiplicity=OwnedMultiplicity MultiplicityProperties?
+    | MultiplicityProperties
+;
+
+fragment FeatureSpecialization:
+    Typings | Subsettings | References | Crosses | Redefinitions
+;
+
+fragment Typings:
+    TypedBy ( ',' heritage+=FeatureTyping )*
+;
+
+fragment TypedBy:
+    DefinedByToken heritage+=FeatureTyping
+;
+
+fragment Subsettings:
+    Subsets ( ',' heritage+=OwnedSubsetting )*
+;
+
+fragment Subsets:
+    SubsetsToken heritage+=OwnedSubsetting
+;
+
+fragment References:
+    ReferencesToken heritage+=OwnedReferenceSubsetting
+;
+
+fragment Crosses:
+    CrossesToken heritage+=OwnedCrossSubsetting
+;
+
+fragment Redefinitions:
+    Redefines ( ',' heritage+=OwnedRedefinition )*
+;
+
+fragment Redefines:
+    RedefinesToken heritage+=OwnedRedefinition
+;
+
+/* Feature Typing, Subsetting and Redefinition */
+
+FeatureTyping returns FeatureTyping:
+    OwnedFeatureTyping | ConjugatedPortTyping
+;
+
+// OwnedFeatureTyping inherited from Expression syntax.
+
+OwnedSubsetting returns Subsetting:
+    targetRef=FeatureReference | targetChain=OwnedFeatureChain
+;
+
+OwnedReferenceSubsetting returns ReferenceSubsetting:
+    targetRef=FeatureReference | targetChain=OwnedFeatureChain
+;
+
+OwnedCrossSubsetting returns CrossSubsetting:
+    targetRef=FeatureReference | targetChain=OwnedFeatureChain
+;
+
+OwnedRedefinition returns Redefinition:
+    targetRef=FeatureReference | targetChain=OwnedFeatureChain
+;
+
+
+// Multiplicity
+// ---------------------------------------------------------------------------------------------------
+
+OwnedMultiplicity returns OwningMembership:
+    target=MultiplicityRange
+;
+
+MultiplicityRange returns MultiplicityRange:
+    '[' range=MultiplicityExpressionMember ']'
+;
+
+MultiplicityExpressionMember returns OwningMembership:
+    target=OwnedExpression
+;
+
+// Definition and Usage
+// ===================================================================================================
+
+// Definitions
+// ---------------------------------------------------------------------------------------------------
+
+fragment BasicDefinitionPrefix:
+    Abstract | Variation
+;
+
+fragment DefinitionExtensionKeyword:
+    prefixes+=PrefixMetadataMember
+;
+
+fragment DefinitionPrefix:
+    BasicDefinitionPrefix? DefinitionExtensionKeyword*
+;
+
+fragment DefinitionSuffix:
+    DefinitionDeclaration DefinitionBody
+;
+
+fragment DefinitionDeclaration:
+    Identification? SubclassificationPart?
+;
+
+fragment DefinitionBody:
+    ';' | '{' DefinitionBodyItems '}';
+
+fragment DefinitionBodyItems:
+    ( DefinitionBodyItem )*
+;
+
+fragment DefinitionBodyItem:
+    children+=Import
+    | children+=AliasMember
+    | children+=VisibleAnnotatingMember
+    | children+=RelationshipMember
+    | children+=DefinitionMember
+    | children+=VariantUsageMember
+    | children+=NonOccurrenceUsageMember
+    | ( children+=EmptySuccessionMember )?
+    children+=OccurrenceUsageMember
+;
+
+DefinitionMember returns OwningMembership:
+    Visibility? target=DefinitionElement
+;
+
+VisibleAnnotatingMember returns OwningMembership:
+    Visibility? target=AnnotatingElement
+;
+
+VariantUsageMember returns VariantMembership:
+    Visibility? 'variant' target=VariantUsageElement
+;
+
+NonOccurrenceUsageMember returns FeatureMembership:
+    Visibility? target=NonOccurrenceUsageElement
+;
+
+OccurrenceUsageMember returns FeatureMembership:
+    Visibility? target=OccurrenceUsageElement
+;
+
+StructureUsageMember returns FeatureMembership:
+    Visibility? target=StructureUsageElement
+;
+
+BehaviorUsageMember returns FeatureMembership:
+    Visibility? target=BehaviorUsageElement
+;
+
+// Usages
+// ---------------------------------------------------------------------------------------------------
+
+fragment RefPrefix:
+    ( direction=FeatureDirectionKind )?
+    BasicDefinitionPrefix? Readonly? Derived? ('constant')?
+;
+
+// Constant prefix — 'constant' keyword (added: missing from SysIDE 0.9.x)
+
+fragment Reference:
+    isReference?='ref'
+;
+
+fragment BasicUsagePrefix:
+    RefPrefix Reference?
+;
+
+fragment EndUsagePrefix:
+    End ( crossingFeature=OwnedCrossingFeatureMember )?
+;
+
+fragment UsageExtensionKeyword:
+    prefixes+=PrefixMetadataMember
+;
+
+fragment UnextendedUsagePrefix:
+    EndUsagePrefix | BasicUsagePrefix
+;
+
+OwnedCrossingFeatureMember returns OwningMembership:
+    target=OwnedCrossingFeature
+;
+
+OwnedCrossingFeature returns ReferenceUsage:
+    BasicUsagePrefix? UsageDeclaration
+;
+
+fragment UsagePrefix:
+    UnextendedUsagePrefix UsageExtensionKeyword*
+;
+
+fragment UsageSuffix:
+    UsageDeclaration? UsageCompletion
+;
+
+fragment UsageDeclaration:
+    FeatureDeclaration
+;
+
+fragment UsageCompletion:
+    ValuePart? UsageBody
+;
+
+fragment UsageBody:
+    DefinitionBody
+;
+
+fragment ValuePart:
+    value=FeatureValue
+;
+
+FeatureValue returns FeatureValue:
+    ( '='
+    | isInitial?=':='
+    | isDefault?='default' ( '=' | isInitial?=':=' )? 
+    )
+    target=OwnedExpression
+;
+
+// Reference Usages
+
+DefaultReferenceUsage returns ReferenceUsage:
+    End? RefPrefix UsageSuffix
+;
+
+ReferenceUsage returns ReferenceUsage:
+    (EndUsagePrefix | RefPrefix) 'ref' UsageSuffix
+;
+
+VariantReference returns ReferenceUsage:
+    heritage+=OwnedReferenceSubsetting FeatureSpecialization* UsageBody
+;
+
+// Body Elements
+
+NonOccurrenceUsageElement returns Usage:
+    DefaultReferenceUsage
+    | ReferenceUsage
+    | AttributeUsage
+    | EnumerationUsage
+    | BindingConnectorAsUsage
+    | SuccessionAsUsage
+    | ExtendedUsage
+;
+
+OccurrenceUsageElement returns Usage:
+    StructureUsageElement | BehaviorUsageElement
+;
+
+StructureUsageElement returns Usage:
+    OccurrenceUsage
+    | IndividualUsage
+    | PortionUsage
+    | EventOccurrenceUsage
+    | ItemUsage
+    | PartUsage
+    | ViewUsage
+    | RenderingUsage
+    | PortUsage
+    | ConnectionUsage
+    | InterfaceUsage
+    | AllocationUsage
+    | Message
+    | FlowConnectionUsage
+    | SuccessionFlowConnectionUsage
+;
+
+BehaviorUsageElement returns Usage:
+    ActionUsage
+    | CalculationUsage
+    | StateUsage
+    | ConstraintUsage
+    | RequirementUsage
+    | ConcernUsage
+    | CaseUsage
+    | AnalysisCaseUsage
+    | VerificationCaseUsage
+    | UseCaseUsage
+    | ViewpointUsage
+    | PerformActionUsage
+    | ExhibitStateUsage
+    | IncludeUseCaseUsage
+    | AssertConstraintUsage
+    | SatisfyRequirementUsage
+;
+
+VariantUsageElement returns Usage:
+    VariantReference
+    | ReferenceUsage
+    | AttributeUsage
+    | BindingConnectorAsUsage
+    | SuccessionAsUsage
+    | OccurrenceUsage
+    | IndividualUsage
+    | PortionUsage
+    | EventOccurrenceUsage
+    | ItemUsage
+    | PartUsage
+    | ViewUsage
+    | RenderingUsage
+    | PortUsage
+    | ConnectionUsage
+    | InterfaceUsage
+    | AllocationUsage
+    | Message
+    | FlowConnectionUsage
+    | SuccessionFlowConnectionUsage
+    | BehaviorUsageElement
+;
+
+// Extension
+// ===================================================================================================
+
+ExtendedDefinition returns Definition:
+    BasicDefinitionPrefix? DefinitionExtensionKeyword+ 'def' DefinitionSuffix
+;
+
+ExtendedUsage returns Usage:
+    UnextendedUsagePrefix UsageExtensionKeyword+ UsageSuffix
+;
+
+// Attributes
+// ===================================================================================================
+
+AttributeDefinition returns AttributeDefinition:
+    DefinitionPrefix 'attribute' 'def' DefinitionSuffix
+;
+
+AttributeUsage returns AttributeUsage:
+    UsagePrefix 'attribute' UsageSuffix
+;
+
+// Enumerations
+// ===================================================================================================
+
+EnumerationDefinition returns EnumerationDefinition:
+    PrefixMetadata?
+    'enum' 'def' DefinitionDeclaration EnumerationBody
+;
+
+fragment EnumerationBody:
+    ';' | '{' EnumerationItems '}'
+;
+
+fragment EnumerationItems:
+    ( children+=AnnotatingMember
+    | children+=EnumerationUsageMember
+    )*
+;
+
+EnumerationUsageMember returns VariantMembership:
+    Visibility? target=EnumeratedValue
+;
+
+EnumeratedValue returns EnumerationUsage:
+    PrefixMetadata? 'enum'? UsageSuffix
+;
+
+EnumerationUsage returns EnumerationUsage:
+    UsagePrefix 'enum' UsageSuffix
+;
+
+// Occurrences
+// ===================================================================================================
+
+// Occurrence Definitions
+
+fragment OccurrenceDefinitionPrefix:
+    BasicDefinitionPrefix?
+    ( Individual /* members+=LifeClassMembership */ )?
+    DefinitionExtensionKeyword*
+;
+
+OccurrenceDefinition returns OccurrenceDefinition:
+    OccurrenceDefinitionPrefix 'occurrence' 'def' DefinitionSuffix
+;
+
+IndividualDefinition returns OccurrenceDefinition:
+    BasicDefinitionPrefix? Individual
+    DefinitionExtensionKeyword* 'def' DefinitionSuffix
+    /* members+=LifeClassMembership */
+;
+
+// LifeClassMembership returns OwningMembership:
+//     target=LifeClass
+// ;
+
+// LifeClass returns LifeClass:
+//     {LifeClass}
+// ;
+
+
+// Occurrence Usages
+
+fragment BasicOccurrenceUsagePrefix:
+    BasicUsagePrefix Individual? Portion?
+;
+
+fragment OccurrenceUsagePrefix:
+    ( EndUsagePrefix | BasicOccurrenceUsagePrefix ) UsageExtensionKeyword*
+;
+
+OccurrenceUsage returns OccurrenceUsage:
+    OccurrenceUsagePrefix 'occurrence' UsageSuffix
+;
+
+IndividualUsage returns OccurrenceUsage:
+    BasicUsagePrefix Individual UsageExtensionKeyword* UsageSuffix
+;
+
+PortionUsage returns OccurrenceUsage:
+    BasicUsagePrefix Individual? Portion UsageExtensionKeyword* UsageSuffix
+;
+
+EventOccurrenceUsage returns EventOccurrenceUsage:
+    OccurrenceUsagePrefix 'event' (
+        heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+        | 'occurrence' UsageDeclaration?
+    ) UsageCompletion
+;
+
+// Occurrence Succession
+
+EmptySuccessionMember returns FeatureMembership:
+    target=EmptySuccession
+;
+
+EmptySuccession returns SuccessionAsUsage:
+    'then' (ends+=MultiplicitySourceEndMember)?
+    /* ends+=EmptyTargetEndMember */
+;
+
+MultiplicitySourceEndMember returns EndFeatureMembership:
+    target=MultiplicitySourceEnd
+;
+
+MultiplicitySourceEnd returns ReferenceUsage:
+    multiplicity=OwnedMultiplicity
+;
+
+// rules that can match empty strings don't always work in langium, commenting
+// out to show that they are handled in code instead
+
+// EmptyTargetEndMember returns EndFeatureMembership:
+//     target=EmptyTargetEnd
+// ;
+
+// EmptyTargetEnd returns ReferenceUsage:
+//     {ReferenceUsage}
+// ;
+
+// Items
+// ===================================================================================================
+
+ItemDefinition returns ItemDefinition:
+    OccurrenceDefinitionPrefix 'item' 'def' DefinitionSuffix
+;
+
+ItemUsage returns ItemUsage:
+    OccurrenceUsagePrefix 'item' UsageSuffix
+;
+
+// Parts
+// ===================================================================================================
+
+PartDefinition returns PartDefinition:
+    OccurrenceDefinitionPrefix 'part' 'def' DefinitionSuffix
+;
+
+PartUsage returns PartUsage:
+    OccurrenceUsagePrefix 'part' UsageSuffix
+;
+
+// Ports
+// ===================================================================================================
+
+PortDefinition returns PortDefinition:
+    DefinitionPrefix 'port' 'def' DefinitionSuffix
+    // constructed implicitly in the model
+    /* conjugated=ConjugatedPortDefinitionMember */
+;
+
+// constructed in the model, no need to parse 
+/*
+ConjugatedPortDefinitionMember returns OwningMembership:
+    target=ConjugatedPortDefinition
+;
+
+ConjugatedPortDefinition returns ConjugatedPortDefinition:
+    heritage+=PortConjugation
+;
+
+PortConjugation returns PortConjugation:
+    {PortConjugation}
+;
+*/
+
+ConjugatedPortTyping returns ConjugatedPortTyping:
+    '~' targetRef=ConjugatedPortReference
+;
+
+ConjugatedPortReference returns ConjugatedPortReference:
+    QualifiedReferenceChain
+;
+
+// Port Usages
+
+PortUsage returns PortUsage:
+    OccurrenceUsagePrefix 'port' UsageSuffix
+;
+
+// Connections
+// ===================================================================================================
+
+// Connectors
+
+ConnectorEndMember returns EndFeatureMembership:
+    target=ConnectorEnd
+;
+
+ConnectorEnd returns ReferenceUsage:
+    ( crossingFeature=OwnedCrossMultiplicityMember )?
+    ( RegularName ReferencesToken )? heritage+=OwnedReferenceSubsetting
+;
+
+// Binding Connectors
+
+BindingConnectorAsUsage returns BindingConnectorAsUsage:
+    UsagePrefix ( 'binding' UsageDeclaration? )?
+    'bind' ends+=ConnectorEndMember '=' ends+=ConnectorEndMember 
+    DefinitionBody
+;
+
+// Successions
+
+SuccessionAsUsage returns SuccessionAsUsage:
+    UsagePrefix ( 'succession' UsageDeclaration? )? 
+    'first' ends+=ConnectorEndMember 'then' ends+=ConnectorEndMember 
+    DefinitionBody
+;
+
+// Connection Definitions
+
+ConnectionDefinition returns ConnectionDefinition:
+    OccurrenceDefinitionPrefix 'connection' 'def' DefinitionSuffix
+;
+
+// Connection Usages
+
+ConnectionUsage returns ConnectionUsage:
+    OccurrenceUsagePrefix 
+    ( 'connection' UsageDeclaration? ValuePart? ( 'connect' ConnectorPart )? 
+    | 'connect' ConnectorPart
+    ) UsageBody
+;
+
+fragment ConnectorPart:
+    BinaryConnectorPart | NaryConnectorPart
+;
+
+fragment BinaryConnectorPart:
+    ends+=ConnectorEndMember 'to' ends+=ConnectorEndMember
+;
+
+fragment NaryConnectorPart:
+    '(' ends+=ConnectorEndMember ( ',' ends+=ConnectorEndMember )+ ')'
+;
+
+// EmptySourceEndMember returns EndFeatureMembership:
+//     target=EmptySourceEnd
+// ;
+
+// EmptySourceEnd returns ReferenceUsage:
+//     {ReferenceUsage}
+// ;
+
+
+// Flow Connections
+// ===================================================================================================
+
+// Flow Connection Definitions
+
+FlowConnectionDefinition returns FlowConnectionDefinition:
+    OccurrenceDefinitionPrefix 'flow' 'def' DefinitionSuffix
+;
+
+// Messages
+
+Message returns FlowConnectionUsage:
+    OccurrenceUsagePrefix 'message' MessageDeclaration DefinitionBody
+;
+
+fragment MessageDeclaration:
+    UsageDeclaration? ValuePart? ( 'of' item=ItemFeatureMember )?
+        ( 'from' messages+=MessageEventMember 'to' messages+=MessageEventMember )?
+    | messages+=MessageEventMember 'to' messages+=MessageEventMember
+;
+
+MessageEventMember returns ParameterMembership:
+    target=MessageEvent
+;
+
+MessageEvent returns EventOccurrenceUsage:
+    heritage+=OwnedReferenceSubsetting
+;
+
+// Flow Connection Usages
+
+FlowConnectionUsage returns FlowConnectionUsage:
+    OccurrenceUsagePrefix 'flow' FlowConnectionDeclaration DefinitionBody
+;
+
+SuccessionFlowConnectionUsage returns SuccessionFlowConnectionUsage:
+    OccurrenceUsagePrefix 'succession' 'flow' FlowConnectionDeclaration DefinitionBody
+;
+
+fragment FlowConnectionDeclaration:
+    UsageDeclaration? ValuePart? ( 'of'  item=ItemFeatureMember )?
+        ( 'from' ends+=FlowEndMember 'to' ends+=FlowEndMember )?
+    | ends+=FlowEndMember 'to' ends+=FlowEndMember
+;
+
+// Flow Members
+
+ItemFeatureMember returns FeatureMembership:
+    target=ItemFeature
+;
+
+ItemFeature returns ItemFeature:
+    PayloadFeature
+;
+
+fragment PayloadFeature:
+    Identification? PayloadFeatureSpecializationPart ValuePart?
+    | Identification? ValuePart
+    | heritage+=OwnedFeatureTyping (multiplicity=OwnedMultiplicity)?
+    | multiplicity=OwnedMultiplicity heritage+=OwnedFeatureTyping
+;
+
+fragment PayloadFeatureSpecializationPart:
+    FeatureSpecialization+ (MultiplicityPart FeatureSpecialization*)?
+    | MultiplicityPart FeatureSpecialization+
+;
+
+FlowEndMember returns EndFeatureMembership:
+    target=FlowEnd
+;
+
+FlowEnd returns ItemFlowEnd:
+    ( heritage+=FlowEndSubsetting )? children+=FlowFeatureMember
+;
+
+FlowEndSubsetting returns ReferenceSubsetting:
+    targetRef=FeatureReference '.' | targetChain=FeatureChainPrefix
+;
+
+FlowFeatureMember returns FeatureMembership:
+    target=FlowFeature
+;
+
+FlowFeature returns ReferenceUsage:
+    heritage+=FlowRedefinition
+;
+
+FlowRedefinition returns Redefinition:
+    targetRef=FeatureReference
+;
+
+
+// Interfaces
+// ===================================================================================================
+
+// Interface Definitions
+
+InterfaceDefinition returns InterfaceDefinition:
+    OccurrenceDefinitionPrefix 'interface' 'def' DefinitionDeclaration InterfaceBody
+;
+
+fragment InterfaceBody:
+    ';' | '{' InterfaceBodyItems '}'
+;
+
+fragment InterfaceBodyItems:
+    InterfaceBodyItem*
+;
+
+fragment InterfaceBodyItem:
+    children+=DefinitionMember
+    | children+=RelationshipMember
+    | children+=VisibleAnnotatingMember
+    | children+=VariantUsageMember
+    | children+=InterfaceNonOccurrenceUsageMember
+    | children+=EmptySuccessionMember // must precede InterfaceOccurrenceUsageMember
+    | children+=InterfaceOccurrenceUsageMember
+    | children+=AliasMember
+    | children+=Import
+;
+
+InterfaceNonOccurrenceUsageMember returns FeatureMembership:
+    Visibility? target=InterfaceNonOccurrenceUsageElement
+;
+
+InterfaceNonOccurrenceUsageElement returns Usage:
+    ReferenceUsage
+    | AttributeUsage
+    | EnumerationUsage
+    | BindingConnectorAsUsage
+    | SuccessionAsUsage
+;
+
+InterfaceOccurrenceUsageMember returns FeatureMembership:
+    Visibility? target=InterfaceOccurrenceUsageElement
+;
+
+InterfaceOccurrenceUsageElement returns Usage:
+    DefaultInterfaceEnd | StructureUsageElement | BehaviorUsageElement
+;
+
+DefaultInterfaceEnd returns PortUsage:
+    End UsageSuffix
+;
+
+// Interface Usages
+
+InterfaceUsage returns InterfaceUsage:
+    OccurrenceUsagePrefix 'interface' InterfaceUsageDeclaration InterfaceBody
+;
+
+fragment InterfaceUsageDeclaration:
+    UsageDeclaration? ( 'connect' InterfacePart )? | InterfacePart
+;
+
+fragment InterfacePart:
+    BinaryInterfacePart | NaryInterfacePart
+;
+
+fragment BinaryInterfacePart:
+    ends+=InterfaceEndMember 'to' ends+=InterfaceEndMember
+;
+
+fragment NaryInterfacePart:
+    '(' ends+=InterfaceEndMember ( ',' ends+=InterfaceEndMember )+ ')'
+;
+
+InterfaceEndMember returns EndFeatureMembership:
+    target=InterfaceEnd
+;
+
+InterfaceEnd returns PortUsage:
+    ( crossingFeature=OwnedCrossMultiplicityMember )?
+    ( RegularName ReferencesToken )? heritage+=OwnedReferenceSubsetting
+;
+
+OwnedCrossMultiplicityMember returns OwningMembership:
+    target=OwnedCrossMultiplicity
+;
+
+OwnedCrossMultiplicity returns Feature:
+    multiplicity=OwnedMultiplicity
+;
+
+
+// Allocations
+// ===================================================================================================
+
+AllocationDefinition returns AllocationDefinition:
+    OccurrenceDefinitionPrefix 'allocation' 'def' DefinitionSuffix
+;
+
+AllocationUsage returns AllocationUsage:
+    OccurrenceUsagePrefix AllocationUsageDeclaration UsageBody
+;
+
+fragment AllocationUsageDeclaration:
+    'allocation' UsageDeclaration? ('allocate' ConnectorPart)?
+    | 'allocate' ConnectorPart
+;
+
+// Action
+// ===================================================================================================
+
+ActionDefinition returns ActionDefinition:
+    OccurrenceDefinitionPrefix 'action' 'def' DefinitionDeclaration ActionBody
+;
+
+fragment ActionBody:
+    ';' | '{' ActionBodyItems '}'
+;
+
+fragment ActionBodyItems:
+    ActionBodyItem*
+;
+
+fragment ActionBodyItem:
+    children+=Import
+    | children+=AliasMember
+    | children+=DefinitionMember
+    | children+=RelationshipMember
+    | children+=VisibleAnnotatingMember
+    | children+=VariantUsageMember
+    | children+=NonOccurrenceUsageMember
+    | children+=InitialNodeMember
+    | children+=GuardedSuccessionMember
+    | children+=EmptySuccessionMember // TODO: must precede the 4 members below
+    | children+=StructureUsageMember
+    | children+=BehaviorUsageMember
+    | children+=ActionNodeMember
+    | children+=TargetSuccessionMember // TODO: must be after initial node, behavior usage or action node
+;
+
+InitialNodeMember returns Membership:
+    Visibility? 'first' targetRef=FeatureReference
+    RelationshipBody
+;
+
+ActionNodeMember returns FeatureMembership:
+    Visibility? target=ActionNode
+;
+
+TargetSuccessionMember returns FeatureMembership:
+    Visibility? target=ActionTargetSuccession
+;
+
+GuardedSuccessionMember returns FeatureMembership:
+    target=GuardedSuccession
+;
+
+// Action Usages
+
+ActionUsage returns ActionUsage:
+    OccurrenceUsagePrefix 'action' ActionUsageDeclaration ActionBody
+;
+
+PerformActionUsage returns PerformActionUsage:
+    OccurrenceUsagePrefix 'perform' PerformActionUsageDeclaration ActionBody
+;
+
+fragment PerformActionUsageDeclaration:
+    (heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+    | 'action' UsageDeclaration?
+    )
+    ValuePart?
+;
+
+fragment ActionUsageDeclaration:
+    UsageDeclaration? ValuePart?
+;
+
+// Action Nodes
+
+ActionNode returns ActionUsage:
+    SendNode
+    | AcceptNode
+    | AssignmentNode
+    | TerminateNode
+    | IfNode
+    | WhileLoopNode
+    | ForLoopNode
+    | ControlNode
+;
+
+fragment ActionNodeUsageDeclaration:
+    'action' UsageDeclaration?
+;
+
+fragment ActionNodePrefix:
+    OccurrenceUsagePrefix ActionNodeUsageDeclaration?
+;
+
+AcceptNode returns AcceptActionUsage:
+    OccurrenceUsagePrefix AcceptNodeDeclaration ActionBody
+;
+
+fragment AcceptNodeDeclaration:
+    ActionNodeUsageDeclaration? 'accept' AcceptParameterPart
+;
+
+fragment AcceptParameterPart:
+    payload=PayloadParameterMember
+    ( 'via' receiver=NodeParameterMember 
+    // TODO: empty rule
+    /* | members += EmptyParameterMember
+    ) */ )?
+;
+
+PayloadParameterMember returns ParameterMembership:
+    target=PayloadParameter
+;
+
+PayloadParameter returns ReferenceUsage:
+    PayloadFeature
+    | Identification? PayloadFeatureSpecializationPart? TriggerValuePart
+;
+
+fragment TriggerValuePart:
+    value=TriggerFeatureValue
+;
+
+TriggerFeatureValue returns FeatureValue:
+    target=TriggerExpression
+;
+
+TriggerExpression returns TriggerInvocationExpression:
+    kind=('at' | 'after') children+=ArgumentMember
+    | kind='when' children+=ArgumentExpressionMember
+;
+
+ArgumentExpressionMember returns ParameterMembership:
+    target=ArgumentExpression
+;
+
+ArgumentExpression returns Feature:
+    value=ArgumentExpressionValue
+;
+
+ArgumentExpressionValue returns FeatureValue:
+    target=OwnedExpressionReference
+;
+
+SendNode returns SendActionUsage:
+    OccurrenceUsagePrefix SendNodeDeclaration ActionBody
+;
+
+fragment SendNodeDeclaration:
+    ActionNodeUsageDeclaration? 'send' payload=NodeParameterMember 
+    ( 'via' sender=NodeParameterMember  )?
+    ( 'to' receiver=NodeParameterMember )?
+;
+
+NodeParameterMember returns ParameterMembership:
+    target=NodeParameter
+;
+
+NodeParameter returns ReferenceUsage:
+    value=FeatureBinding
+;
+
+FeatureBinding returns FeatureValue:
+    target=OwnedExpression
+;
+
+AssignmentNode returns AssignmentActionUsage:
+    OccurrenceUsagePrefix AssignmentNodeDeclaration ActionBody
+;
+
+fragment AssignmentNodeDeclaration:
+    ActionNodeUsageDeclaration? 'assign' 
+    // TODO: seems like https://github.com/langium/chevrotain-allstar/issues/1
+    // target=AssignmentTargetMember
+    targetMember=FeatureChainMember ':=' 
+    assignedValue=NodeParameterMember
+;
+
+// currently doesn't work in langium
+/*
+AssignmentTargetMember returns ParameterMembership:
+    target=TargetParameter
+;
+
+TargetParameter returns ReferenceUsage:
+    ( value=TargetBinding '.' )?
+    // TODO: empty rule
+    children+=TargetFeatureMember
+;
+
+TargetFeatureMember returns FeatureMembership:
+    target=TargetFeature
+;
+
+TargetFeature returns ReferenceUsage:
+    children+=TargetAccessedFeatureMember
+;
+
+TargetAccessedFeatureMember returns FeatureMembership:
+    target=EmptyUsage
+;
+
+TargetBinding returns FeatureValue:
+    target=TargetExpression
+;
+
+TargetExpression returns Expression:
+    BaseExpression
+    (  ( {FeatureChainExpression.operands+=current} '.' children+=FeatureChainMember)?
+       ( {OperatorExpression.operands+=current} operator='[' operands+=SequenceExpression ']' // indexing
+        | {OperatorExpression.operands+=current} '->' heritage+=ReferenceTyping 
+            ( children+=ExpressionBodyMember
+            | children+=FunctionReferenceMember
+            | ArgumentList
+            )
+        | {CollectExpression.operands+=current} '.' children+=ExpressionBodyMember // collect
+        | {SelectExpression.operands+=current} '.?' children+=ExpressionBodyMember // select
+        )
+    )*
+;
+*/
+
+TerminateNode returns TerminateActionUsage:
+    ActionNodePrefix 'terminate'
+    ( terminatedOccurrence=NodeParameterMember )?
+    ActionBody
+;
+
+ExpressionParameterMember returns ParameterMembership:
+    target=OwnedExpression
+;
+
+IfNode returns IfActionUsage:
+    ActionNodePrefix 
+    'if' condition=ExpressionParameterMember
+    then=ActionBodyParameterMember
+    ( 'else' else=( ActionBodyParameterMember | IfNodeParameterMember ) )?
+;
+
+ActionBodyParameterMember returns ParameterMembership:
+    target=ActionBodyParameter
+;
+
+ActionBodyParameter returns ActionUsage:
+    ( 'action' UsageDeclaration? )? '{' ActionBodyItems '}'
+;
+
+IfNodeParameterMember returns ParameterMembership:
+    target=IfNode
+;
+
+WhileLoopNode returns WhileLoopActionUsage:
+    ActionNodePrefix
+    ( 'while' condition=ExpressionParameterMember
+    | 'loop' /* members+=EmptyParameterMember */
+    )
+    body=ActionBodyParameterMember
+    ( 'until' until=ExpressionParameterMember ';' )?
+;
+
+ForLoopNode returns ForLoopActionUsage:
+    ActionNodePrefix
+    'for' variable=ForVariableDeclarationMember
+    'in' sequence=NodeParameterMember
+    body=ActionBodyParameterMember
+;
+
+ForVariableDeclarationMember returns FeatureMembership:
+    target=ForVariableDeclaration
+;
+
+ForVariableDeclaration returns ReferenceUsage:
+    UsageDeclaration
+;
+
+ControlNode returns ControlNode:
+    MergeNode
+    | DecisionNode
+    | JoinNode
+    | ForkNode
+;
+
+fragment ControlNodePrefix:
+    RefPrefix Individual? Portion? PrefixMetadata?
+;
+
+MergeNode returns MergeNode:
+    ControlNodePrefix 'merge' UsageDeclaration? ActionNodeBody
+;
+
+DecisionNode returns DecisionNode:
+    ControlNodePrefix 'decide' UsageDeclaration? ActionNodeBody
+;
+
+JoinNode returns JoinNode:
+    ControlNodePrefix 'join' UsageDeclaration? ActionNodeBody
+;
+
+ForkNode returns ForkNode:
+    ControlNodePrefix 'fork' UsageDeclaration? ActionNodeBody
+;
+
+fragment ActionNodeBody:
+    ';' | '{' ActionNodeItems '}'
+;
+
+fragment ActionNodeItems:
+    ( children+=AnnotatingMember )*
+;
+
+// EmptyParameterMember returns ParameterMembership:
+//     target=EmptyUsage
+// ;
+
+// EmptyUsage returns ReferenceUsage:
+//     {ReferenceUsage}
+// ;
+
+/* Action Succession */
+
+ActionTargetSuccession returns Usage:
+    ( TargetSuccession | GuardedTargetSuccession | DefaultTargetSuccession )
+    UsageBody
+;
+
+TargetSuccession returns SuccessionAsUsage:
+    ( ends+=MultiplicitySourceEndMember )?
+    'then'
+    ends+=ConnectorEndMember
+;
+
+GuardedTargetSuccession returns TransitionUsage:
+    /* transitionLinkSource+= EmptyParameterMember */
+    guard=GuardExpressionMember
+    'then' then=TransitionSuccessionMember
+;
+
+DefaultTargetSuccession returns TransitionUsage:
+    /* transitionLinkSource+= EmptyParameterMember */
+    'else' else=TransitionSuccessionMember
+;
+
+GuardedSuccession returns TransitionUsage:
+    ( 'succession' UsageDeclaration )? 'first'
+    source=TransitionSourceMember 
+    /* transitionLinkSource=EmptyParameterMember */
+    guard=GuardExpressionMember
+    'then' then=TransitionSuccessionMember
+    UsageBody
+;
+
+// States
+// ===================================================================================================
+
+StateDefinition returns StateDefinition:
+    OccurrenceDefinitionPrefix 'state' 'def' DefinitionDeclaration StateBody
+;
+
+fragment StateBody:
+    ';' | (isParallel?='parallel')? '{' StateBodyPart '}'
+;
+
+fragment StateBodyPart:
+    StateBodyItem*
+;
+
+fragment StateBodyItem:
+    children+=Import
+    | children+=AliasMember
+    | children+=DefinitionMember
+    | children+=RelationshipMember
+    | children+=VisibleAnnotatingMember
+    | children+=VariantUsageMember
+    | children+=NonOccurrenceUsageMember
+    // parser doesn't like optional groups...
+    | children+=EmptySuccessionMember // TODO: must be before Structure or Behavior usage member
+    | children+=StructureUsageMember
+    | children+=BehaviorUsageMember
+    | children+=TargetTransitionUsageMember // TODO: must be after behavior usage element or another targettransitionusage
+    | children+=TransitionUsageMember
+    | children+=EntryActionMember
+    // ambiguous with TargetTransitionUsageMember but parser bug prevents us
+    // from using correct grammar rules
+    | children+=EntryTransitionMember// TODO: must follow entry action or other entry transition
+    | children+=DoActionMember
+    | children+=ExitActionMember
+;
+
+EntryActionMember returns StateSubactionMembership:
+    Visibility? kind='entry' target=StateActionUsage
+;
+
+DoActionMember returns StateSubactionMembership:
+    Visibility? kind='do' target=StateActionUsage
+;
+
+ExitActionMember returns StateSubactionMembership:
+    Visibility? kind='exit' target=StateActionUsage
+;
+
+EntryTransitionMember returns FeatureMembership:
+    Visibility? 
+    ( target=GuardedTargetSuccession 
+    | 'then' target=TransitionSuccession 
+    ) ';'
+;
+
+StateActionUsage_1 returns ActionUsage:
+    {ActionUsage} ';'
+;
+StateActionUsage_2 returns PerformActionUsage:
+    PerformActionUsageDeclaration ActionBody
+;
+StateActionUsage_3 returns AcceptActionUsage:
+    AcceptNodeDeclaration ActionBody
+;
+StateActionUsage_4 returns SendActionUsage:
+    SendNodeDeclaration ActionBody
+;
+StateActionUsage_5 returns AssignmentActionUsage:
+    AssignmentNodeDeclaration ActionBody
+;
+
+// expanded subrules explicitly with proper parser rules since actions generate
+// bad parse trees, same for EffectBehaviorUsage below
+StateActionUsage returns ActionUsage:
+    StateActionUsage_1
+    | StateActionUsage_2
+    | StateActionUsage_3
+    | StateActionUsage_4
+    | StateActionUsage_5
+;
+
+TransitionUsageMember returns FeatureMembership:
+    Visibility? target=TransitionUsage
+;
+
+TargetTransitionUsageMember returns FeatureMembership:
+    Visibility? target=TargetTransitionUsage
+;
+
+// State Usages
+
+StateUsage returns StateUsage:
+    OccurrenceUsagePrefix 'state' ActionUsageDeclaration StateBody
+;
+
+ExhibitStateUsage returns ExhibitStateUsage:
+    OccurrenceUsagePrefix 'exhibit' (
+        heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+        | 'state' UsageDeclaration?
+    )
+    ValuePart? StateBody
+;
+
+// Transition Usages
+
+TransitionUsage returns TransitionUsage:
+    'transition' ( UsageDeclaration? 'first' )? 
+    source=TransitionSourceMember
+    /* transitionLinkSource=EmptyParameterMember */
+    ( /* payload=EmptyParameterMember */ accepter=TriggerActionMember )?
+    ( guard=GuardExpressionMember )?
+    ( effect=EffectBehaviorMember )?
+    'then' then=TransitionSuccessionMember
+    ActionBody
+;
+
+TargetTransitionUsage returns TransitionUsage:
+    /* transitionLinkSource=EmptyParameterMember */
+    ( 'transition'
+      ( /* payload=EmptyParameterMember  */
+        accepter=TriggerActionMember )?
+      ( guard=GuardExpressionMember )?
+      ( effect=EffectBehaviorMember )?
+    | /* payload=EmptyParameterMember */ 
+      accepter=TriggerActionMember
+      ( guard=GuardExpressionMember )?
+      ( effect=EffectBehaviorMember )?
+    | guard=GuardExpressionMember
+      ( effect=EffectBehaviorMember )?
+    )?
+    'then' then=TransitionSuccessionMember
+    ActionBody
+;
+
+TransitionSourceMember returns Membership:
+    targetRef=FeatureReference
+    | {OwningMembership} target=OwnedFeatureChain
+;
+
+TriggerActionMember returns TransitionFeatureMembership:
+    kind='accept' target=TriggerAction
+;
+
+TriggerAction returns AcceptActionUsage:
+    AcceptParameterPart
+;
+
+GuardExpressionMember returns TransitionFeatureMembership:
+    kind='if' target=OwnedExpression
+;
+
+EffectBehaviorMember returns TransitionFeatureMembership:
+    kind='do' target=EffectBehaviorUsage
+;
+
+fragment EffectBehaviorUsageBody:
+    ( '{' ActionBodyItems '}' )?
+;
+EffectBehaviorUsage_1 returns ActionUsage:
+    {ActionUsage}
+;
+EffectBehaviorUsage_2 returns PerformActionUsage:
+    PerformActionUsageDeclaration EffectBehaviorUsageBody
+;
+EffectBehaviorUsage_3 returns AcceptActionUsage:
+    AcceptNodeDeclaration EffectBehaviorUsageBody
+;
+EffectBehaviorUsage_4 returns SendActionUsage:
+    SendNodeDeclaration EffectBehaviorUsageBody
+;
+EffectBehaviorUsage_5 returns AssignmentActionUsage:
+    AssignmentNodeDeclaration EffectBehaviorUsageBody
+;
+
+EffectBehaviorUsage returns ActionUsage:
+    EffectBehaviorUsage_1
+    | EffectBehaviorUsage_2
+    | EffectBehaviorUsage_3
+    | EffectBehaviorUsage_4
+    | EffectBehaviorUsage_5
+;
+
+TransitionSuccessionMember returns OwningMembership:
+    target=TransitionSuccession
+;
+
+TransitionSuccession returns SuccessionAsUsage:
+    // ends+=EmptySourceEndMember
+    ends+=ConnectorEndMember
+;
+
+// Calculations
+// ===================================================================================================
+
+// Calculation Definitions
+
+CalculationDefinition returns CalculationDefinition:
+    OccurrenceDefinitionPrefix 'calc' 'def' DefinitionDeclaration CalculationBody
+;
+
+fragment CalculationBody:
+    ';' | '{' CalculationBodyPart '}'
+;
+
+fragment CalculationBodyPart:
+    CalculationBodyItem* ( result=ResultExpressionMember )?
+;
+
+fragment CalculationBodyItem:
+    ActionBodyItem | children+=ReturnParameterMember
+;
+
+ReturnParameterMember returns ReturnParameterMembership:
+    Visibility? 'return' target=UsageElement
+;
+
+ResultExpressionMember returns ResultExpressionMembership:
+    Visibility? target=OwnedExpression
+;
+
+// Calculation Usages
+
+CalculationUsage returns CalculationUsage:
+    OccurrenceUsagePrefix 'calc' ActionUsageDeclaration CalculationBody
+;
+
+// Constraints
+// ===================================================================================================
+
+ConstraintDefinition returns ConstraintDefinition:
+    OccurrenceDefinitionPrefix 'constraint' 'def' DefinitionDeclaration CalculationBody
+;
+
+ConstraintUsage returns ConstraintUsage:
+    OccurrenceUsagePrefix 'constraint' ConstraintUsageDeclaration CalculationBody
+;
+
+AssertConstraintUsage returns AssertConstraintUsage:
+    OccurrenceUsagePrefix 'assert' (isNegated?='not')? (
+        heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+        | 'constraint' ConstraintUsageDeclaration
+    ) CalculationBody;
+
+fragment ConstraintUsageDeclaration:
+    UsageDeclaration? ValuePart?
+;
+
+// Requirements
+// ===================================================================================================
+
+RequirementDefinition returns RequirementDefinition:
+    OccurrenceDefinitionPrefix 'requirement' 'def' DefinitionDeclaration RequirementBody
+;
+
+fragment RequirementBody:
+    ';' | '{' RequirementBodyItems '}'
+;
+
+fragment RequirementBodyItems:
+    RequirementBodyItem*
+;
+
+fragment RequirementBodyItem:
+    DefinitionBodyItem
+    | children+=SubjectMember
+    | children+=RequirementConstraintMember
+    | children+=FramedConcernMember
+    | children+=RequirementVerificationMember
+    | children+=ActorMember
+    | children+=StakeholderMember
+;
+
+SubjectMember returns SubjectMembership:
+    Visibility? 'subject' target=SubjectUsage
+;
+
+SubjectUsage returns ReferenceUsage:
+    UsageExtensionKeyword* UsageSuffix
+;
+
+RequirementConstraintMember returns RequirementConstraintMembership:
+    Visibility? kind=RequirementConstraintKind 
+    target=RequirementConstraintUsage
+;
+
+RequirementConstraintUsage returns ConstraintUsage:
+    heritage+=OwnedReferenceSubsetting FeatureSpecialization* CalculationBody
+    | ( UsageExtensionKeyword* 'constraint' | UsageExtensionKeyword+ ) ConstraintUsageDeclaration CalculationBody
+;
+
+FramedConcernMember returns FramedConcernMembership:
+    Visibility? 'frame' target=FramedConcernUsage
+;
+
+FramedConcernUsage returns ConcernUsage:
+    (heritage+=OwnedReferenceSubsetting FeatureSpecialization* RequirementBody
+    | ( UsageExtensionKeyword* 'concern' | UsageExtensionKeyword+ ) ConstraintUsageDeclaration CalculationBody
+    )
+;
+
+ActorMember returns ActorMembership:
+    Visibility? 'actor' target=ActorUsage
+;
+
+ActorUsage returns PartUsage:
+    UsageExtensionKeyword* UsageSuffix
+;
+
+StakeholderMember returns StakeholderMembership:
+    Visibility? 'stakeholder' target=StakeholderUsage
+;
+
+StakeholderUsage returns PartUsage:
+    UsageExtensionKeyword* UsageSuffix
+;
+
+// Requirement Usages
+
+RequirementUsage returns RequirementUsage:
+    OccurrenceUsagePrefix 'requirement' ConstraintUsageDeclaration RequirementBody
+;
+
+SatisfyRequirementUsage returns SatisfyRequirementUsage:
+    OccurrenceUsagePrefix 'assert'? (isNegated?='not')? 'satisfy'
+    ( heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+    | 'requirement' UsageDeclaration?
+    )
+    ValuePart? ('by' satisfactionSubject=SatisfactionSubjectMember)? RequirementBody
+;
+
+SatisfactionSubjectMember returns SubjectMembership:
+    target=SatisfactionParameter
+;
+
+SatisfactionParameter returns ReferenceUsage:
+    value=SatisfactionFeatureValue
+;
+
+SatisfactionFeatureValue returns FeatureValue:
+    target=SatisfactionReferenceExpression
+;
+
+SatisfactionReferenceExpression returns FeatureReferenceExpression:
+    expression=FeatureChainMember
+;
+
+// Concerns
+// ===================================================================================================
+
+ConcernDefinition returns ConcernDefinition:
+    OccurrenceDefinitionPrefix 'concern' 'def' DefinitionDeclaration RequirementBody
+;
+
+ConcernUsage returns ConcernUsage:
+    OccurrenceUsagePrefix 'concern' ConstraintUsageDeclaration RequirementBody
+;
+
+// Cases
+// ===================================================================================================
+
+// Case Definitions
+
+CaseDefinition returns CaseDefinition:
+    OccurrenceDefinitionPrefix 'case' 'def' DefinitionDeclaration CaseBody
+;
+
+fragment CaseBody:
+    ';' | '{' CaseBodyItems '}'
+;
+
+fragment CaseBodyItems:
+    CaseBodyItem* (result=ResultExpressionMember)?
+;
+
+fragment CaseBodyItem:
+    CalculationBodyItem
+    | children+=SubjectMember
+    | children+=ActorMember
+    | children+=ObjectiveMember
+;
+
+ObjectiveMember returns ObjectiveMembership:
+    Visibility? 'objective' target=ObjectiveRequirementUsage
+;
+
+ObjectiveRequirementUsage returns RequirementUsage:
+    UsageExtensionKeyword* ConstraintUsageDeclaration RequirementBody
+;
+
+// Case Usages
+
+CaseUsage returns CaseUsage:
+    OccurrenceUsagePrefix 'case' ActionUsageDeclaration CaseBody;
+
+// Analysis Cases
+// ===================================================================================================
+
+AnalysisCaseDefinition returns AnalysisCaseDefinition:
+    OccurrenceDefinitionPrefix 'analysis' 'def' DefinitionDeclaration CaseBody
+;
+
+AnalysisCaseUsage returns AnalysisCaseUsage:
+    OccurrenceUsagePrefix 'analysis' ActionUsageDeclaration CaseBody
+;
+
+// Verification Cases
+// ===================================================================================================
+
+VerificationCaseDefinition returns VerificationCaseDefinition:
+    OccurrenceDefinitionPrefix 'verification' 'def' DefinitionDeclaration CaseBody
+;
+
+VerificationCaseUsage returns VerificationCaseUsage:
+    OccurrenceUsagePrefix 'verification' ActionUsageDeclaration CaseBody
+;
+
+RequirementVerificationMember returns RequirementVerificationMembership:
+    Visibility? 'verify' target=RequirementVerificationUsage
+;
+
+RequirementVerificationUsage returns RequirementUsage:
+    heritage+=OwnedReferenceSubsetting FeatureSpecialization* RequirementBody
+    | ( UsageExtensionKeyword* 'requirement' | UsageExtensionKeyword+ ) ConstraintUsageDeclaration RequirementBody
+;
+
+// Use Cases
+// ===================================================================================================
+
+UseCaseDefinition returns UseCaseDefinition:
+    OccurrenceDefinitionPrefix 'use' 'case' 'def' DefinitionDeclaration CaseBody
+;
+
+UseCaseUsage returns UseCaseUsage:
+    OccurrenceUsagePrefix 'use' 'case' ActionUsageDeclaration CaseBody
+;
+
+IncludeUseCaseUsage returns IncludeUseCaseUsage:
+    OccurrenceUsagePrefix 'include' (
+        heritage+=OwnedReferenceSubsetting FeatureSpecializationPart?
+        | 'use' 'case' UsageDeclaration?
+    ) ValuePart? CaseBody
+;
+
+// Views
+// ===================================================================================================
+
+ViewDefinition returns ViewDefinition:
+    OccurrenceDefinitionPrefix 'view' 'def' DefinitionDeclaration ViewDefinitionBody
+;
+
+fragment ViewDefinitionBody:
+    ';' | '{' ViewDefinitionBodyItems '}'
+;
+
+fragment ViewDefinitionBodyItems:
+    ViewDefinitionBodyItem*
+;
+
+fragment ViewDefinitionBodyItem:
+    DefinitionBodyItem
+    | children+=ElementFilterMember
+    | children+=ViewRenderingMember
+;
+
+ViewRenderingMember returns ViewRenderingMembership:
+    Visibility? 'render' target=ViewRenderingUsage
+;
+
+ViewRenderingUsage returns RenderingUsage:
+    heritage+=OwnedReferenceSubsetting FeatureSpecialization* UsageBody
+    | (PrefixMetadata? 'rendering' | PrefixMetadata ) UsageSuffix
+;
+
+// View Usages
+
+ViewUsage returns ViewUsage:
+    OccurrenceUsagePrefix 'view' UsageDeclaration? ValuePart? ViewBody
+;
+
+fragment ViewBody:
+    ';' | '{' ViewBodyItems '}'
+;
+fragment ViewBodyItems:
+    ViewBodyItem*
+;
+
+fragment ViewBodyItem:
+    DefinitionBodyItem
+    | children+=ElementFilterMember
+    | children+=Expose
+    | children+=ViewRenderingMember
+;
+
+fragment ExposePrefix:
+    Visibility? 'expose';
+
+Expose returns Expose:
+    ExposePrefix ImportedReference (target=FilterPackage)?
+    RelationshipBody
+;
+
+// Viewpoints
+// ===================================================================================================
+
+ViewpointDefinition returns ViewpointDefinition:
+    OccurrenceDefinitionPrefix 'viewpoint' 'def' DefinitionDeclaration RequirementBody
+;
+
+ViewpointUsage returns ViewpointUsage:
+    OccurrenceUsagePrefix 'viewpoint' ConstraintUsageDeclaration RequirementBody
+;
+
+// Renderings
+// ===================================================================================================
+
+RenderingDefinition returns RenderingDefinition:
+    OccurrenceDefinitionPrefix 'rendering' 'def' DefinitionSuffix
+;
+
+RenderingUsage returns RenderingUsage:
+    OccurrenceUsagePrefix 'rendering' UsageSuffix
+;
+
+// EXPRESSIONS
+// ===================================================================================================
+
+// The only different expression element to KerML
+ExpressionBody returns Expression:
+    CalculationBody
+;
+
+// Operator Expressions
+
+OwnedExpressionMember returns FeatureMembership:
+    target=OwnedExpression
+;
+
+OwnedExpression returns Expression:
+    ConditionalExpression
+;
+
+OwnedExpressionReference returns FeatureReferenceExpression:
+    expression=OwnedExpressionMember
+;
+
+// Conditional Expressions
+
+ConcreteConditionalExpression returns OperatorExpression:
+    operator='if' operands+=NullCoalescingExpression '?' operands+=OwnedExpressionReference 'else' operands+=OwnedExpressionReference
+;
+
+ConditionalExpression returns Expression:
+    NullCoalescingExpression | ConcreteConditionalExpression
+;
+
+NullCoalescingExpression returns Expression:
+    ImpliesExpression ( {OperatorExpression.operands+=current} operator='??' operands+=ImpliesExpressionReference )*
+;
+
+// Logical Expressions
+
+ImpliesExpressionReference returns FeatureReferenceExpression:
+    expression=ImpliesExpressionMember
+;
+
+ImpliesExpressionMember returns FeatureMembership:
+    target=ImpliesExpression
+;
+
+ImpliesExpression returns Expression:
+    OrExpression ( {OperatorExpression.operands+=current} operator='implies' operands+=OrExpressionReference )*
+;
+
+OrExpressionReference returns FeatureReferenceExpression:
+    expression=OrExpressionMember
+;
+
+OrExpressionMember returns FeatureMembership:
+    target=OrExpression
+;
+
+OrExpression returns Expression:
+    XorExpression ( {OperatorExpression.operands+=current}(
+        operator='|' operands+=XorExpression
+        | operator='or' operands+=XorExpressionReference
+        )
+    )*
+;
+
+XorExpressionReference returns FeatureReferenceExpression:
+    expression=XorExpressionMember
+;
+
+XorExpressionMember returns FeatureMembership:
+    target=XorExpression
+;
+
+XorExpression returns Expression:
+    AndExpression ( {OperatorExpression.operands+=current} operator='xor' operands+=AndExpression )*
+;
+
+AndExpression returns Expression:
+    EqualityExpression ( {OperatorExpression.operands+=current} (
+        operator='&'operands+=EqualityExpression
+        | operator='and' operands+=EqualityExpressionReference
+        )
+    )*
+;
+
+// Equality Expressions
+
+EqualityExpressionReference returns FeatureReferenceExpression:
+    expression=EqualityExpressionMember
+;
+
+EqualityExpressionMember returns FeatureMembership:
+    target=EqualityExpression
+;
+
+EqualityExpression returns Expression:
+    ClassificationExpression ( {OperatorExpression.operands+=current} operator=EqualityOperator operands+=ClassificationExpression )*
+;
+
+// Classification Expressions
+
+ClassificationExpression returns Expression:
+    RelationalExpression ( 
+        {OperatorExpression.operands+=current} (
+            operator=ClassificationTestOperator children+=TypeReferenceMember
+            | operator='as' children+=TypeResultMember
+        )
+    )?
+    // Note: empty rule breaks parsing here 
+    | {OperatorExpression} /* operands+=SelfReferenceExpression */ operator=ClassificationTestOperator children+=TypeReferenceMember
+    | {OperatorExpression} operands+=MetadataReference operator='@@' children+=TypeReferenceMember
+    | {OperatorExpression} /* operands+=SelfReferenceExpression */ operator='as' children+=TypeResultMember
+    | {OperatorExpression} operands+=MetadataReference operator='meta' children+=TypeResultMember
+;
+
+// Relational Expressions
+
+RelationalExpression returns Expression:
+    RangeExpression ( {OperatorExpression.operands+=current} operator=RelationalOperator operands+=RangeExpression )*
+;
+
+// Range Expressions
+
+RangeExpression returns Expression:
+    AdditiveExpression ( {OperatorExpression.operands+=current} operator='..' operands+=AdditiveExpression )?
+;
+
+// Arithmetic Expressions
+
+AdditiveExpression returns Expression:
+    MultiplicativeExpression ({OperatorExpression.operands+=current} operator=('+' | '-') operands+=MultiplicativeExpression)*
+;
+
+MultiplicativeExpression returns Expression:
+    ExponentiationExpression ({OperatorExpression.operands+=current} operator=('*' | '/' | '%') operands+=ExponentiationExpression)*
+;
+
+ExponentiationExpression returns Expression:
+    UnaryExpression ({OperatorExpression.operands+=current} operator=('**' | '^') operands+=ExponentiationExpression)?
+;
+
+// Unary Expressions
+
+UnaryExpression returns Expression:
+    {OperatorExpression} operator=UnaryOperator operands+=ExtentExpression
+    | ExtentExpression
+;
+
+// Extent Expressions
+
+ExtentExpression returns Expression:
+    {OperatorExpression} operator='all' children+=TypeResultMember
+    | PrimaryExpression
+;
+
+// Primary Expressions
+
+PrimaryExpression returns Expression:
+    BaseExpression
+    ( {FeatureChainExpression.operands+=current} '.' children+=FeatureChainMember)?
+    (   ( {IndexExpression.operands+=current} '#' '(' operands+=SequenceExpression ')' // indexing
+        | {OperatorExpression.operands+=current} operator='[' operands+=SequenceExpression ']' // indexing
+        | {InvocationExpression.operands+=current} '->' heritage+=ReferenceTyping 
+            ( children+=ExpressionBodyMember
+            | children+=FunctionReferenceMember
+            | ArgumentList
+            )
+        | {CollectExpression.operands+=current} '.' children+=ExpressionBodyMember // collect
+        | {SelectExpression.operands+=current} '.?' children+=ExpressionBodyMember // select
+        )
+        ( {FeatureChainExpression.operands+=current} '.' children+=FeatureChainMember)?
+    )*
+;
+
+// Base Expressions
+
+BaseExpression returns Expression:
+    NullExpression
+    | LiteralExpression 
+    | FeatureReferenceExpression 
+    | MetadataAccessExpression
+    | InvocationExpression
+    // 'new Type()' constructor — draft SysML v2 notation used in some corpus files.
+    // Treated as an InvocationExpression with the 'new' keyword discarded.
+    | NewExpression
+    | BodyExpression
+    | '(' SequenceExpression ')'
+;
+
+// NewExpression: 'new TypeName(args)' — draft/extended notation.
+// The 'new' keyword is consumed and the rest is an InvocationExpression.
+NewExpression returns InvocationExpression:
+    'new' heritage+=OwnedFeatureTyping ArgumentList
+;
+
+// Expression Bodies
+
+BodyExpression returns FeatureReferenceExpression:
+    expression=ExpressionBodyMember
+;
+
+ExpressionBodyMember returns FeatureMembership:
+    target=ExpressionBody
+;
+
+// Sequence Expressions
+
+SequenceExpression returns Expression:
+    OwnedExpression (
+        ','
+        | {OperatorExpression.operands+=current} operator=',' operands+=SequenceExpression
+    )?
+;
+
+// Invocation Expressions
+
+InvocationExpression returns InvocationExpression:
+    heritage+=OwnedFeatureTyping ArgumentList
+;
+
+fragment ArgumentList:
+    '(' ( PositionalArgumentList | NamedArgumentList )? ')'
+;
+
+fragment PositionalArgumentList:
+    children+=ArgumentMember ( ',' children+=ArgumentMember )*
+;
+
+ArgumentMember returns ParameterMembership:
+    target=Argument
+;
+
+Argument returns Feature:
+    value=ArgumentValue
+;
+
+fragment NamedArgumentList:
+    children+=NamedArgumentMember ( ',' children+=NamedArgumentMember )*
+;
+
+NamedArgumentMember returns ParameterMembership:
+    target=NamedArgument
+;
+
+NamedArgument returns Feature:
+    heritage+=ParameterRedefinition '=' value=ArgumentValue
+;
+
+ParameterRedefinition returns Redefinition:
+    targetRef=FeatureReference
+;
+
+ArgumentValue returns FeatureValue:
+    target=OwnedExpression
+;
+
+
+
+
+
+

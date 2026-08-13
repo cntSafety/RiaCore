@@ -1,0 +1,24 @@
+{
+  "name": "@riacore/importer-sysml-v2-textual",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SysML v2 textual (.sysml) file importer for RiaCore — reads .sysml files directly via Langium",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext ts"
+  },
+  "dependencies": {
+    "@riacore/app-contracts": "workspace:*",
+    "@riacore/importer-sdk": "workspace:*",
+    "@riacore/sysml-language": "workspace:*",
+    "langium": "1.2.1",
+    "yaml": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

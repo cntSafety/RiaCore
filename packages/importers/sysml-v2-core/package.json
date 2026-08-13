@@ -1,0 +1,22 @@
+{
+  "name": "@riacore/importer-sysml-v2",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run --passWithNoTests"
+  },
+  "dependencies": {
+    "@riacore/importer-sdk": "workspace:*",
+    "@riacore/app-contracts": "workspace:*",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^20.0.0",
+    "@ladybugdb/core": "*"
+  }
+}

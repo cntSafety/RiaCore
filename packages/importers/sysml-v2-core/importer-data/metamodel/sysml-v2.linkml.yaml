@@ -1,0 +1,853 @@
+name: SysMLv2
+title: SysML v2 Imported Baseline
+display_identifier_attrs:
+  - declared_name
+  - name
+description: >-
+  SysML v2 importer metamodel for serialized JSON exports.
+  Type hierarchy follows the OMG SysML v2 and KerML specifications.
+  Abstract classes (abstract: true) serve as hierarchy nodes only;
+  concrete classes correspond to JSON @type values found in exports.
+version: 0.3.1
+
+classes:
+  sysml_element:
+    abstract: true
+    description: Abstract root for all imported SysML v2 / KerML elements.
+    attributes:
+      sysml_id:
+        identifier: true
+        required: true
+        range: string
+      element_id:
+        range: string
+      sysml_type:
+        range: string
+        description: Original PascalCase @type from JSON
+      name:
+        range: string
+      declared_name:
+        range: string
+      qualified_name:
+        range: string
+      owner_id:
+        range: string
+      owning_namespace_id:
+        range: string
+      owning_relationship_id:
+        range: string
+      owning_membership_id:
+        range: string
+      owning_related_element_id:
+        range: string
+      owning_type_id:
+        range: string
+      member_element_id:
+        range: string
+      is_library_element:
+        range: boolean
+      is_implied:
+        range: boolean
+      is_implied_included:
+        range: boolean
+      is_composite:
+        range: boolean
+      is_ordered:
+        range: boolean
+      is_unique:
+        range: boolean
+      is_end:
+        range: boolean
+      is_abstract:
+        range: boolean
+      is_sufficient:
+        range: boolean
+      is_individual:
+        range: boolean
+      is_variation:
+        range: boolean
+      is_reference:
+        range: boolean
+      is_derived:
+        range: boolean
+      is_readonly:
+        range: boolean
+      is_portion:
+        range: boolean
+      is_conjugated:
+        range: boolean
+      may_time_vary:
+        range: boolean
+      direction:
+        range: string
+      visibility:
+        range: string
+      operator:
+        range: string
+      body:
+        range: string
+      member_name:
+        range: string
+      literal_value:
+        range: string
+
+  # ── KerML: Namespace layer ─────────────────────────────────────────────────
+
+  namespace_base:
+    abstract: true
+    is_a: sysml_element
+    description: Abstract base for all KerML Namespaces (Package, Namespace, Type…)
+
+  namespace:
+    is_a: namespace_base
+    description: Generic KerML Namespace element (JSON @type Namespace)
+
+  package:
+    is_a: namespace_base
+    description: Namespace container for model elements
+    rendering:
+      icon: FolderOutlined
+      color: '#8c8c8c'
+
+  library_package:
+    is_a: package
+    description: Standard/reusable library package
+    rendering:
+      hidden: true
+
+  # ── KerML: Type layer ─────────────────────────────────────────────────────
+
+  type_base:
+    abstract: true
+    is_a: namespace_base
+    description: Abstract base for all KerML Types
+
+  # ── KerML: Classifier layer ───────────────────────────────────────────────
+
+  classifier_base:
+    abstract: true
+    is_a: type_base
+    description: Abstract base for all KerML Classifiers
+
+  data_type:
+    is_a: classifier_base
+    description: Value type (KerML DataType)
+    rendering:
+      hidden: true
+
+  association_structure:
+    is_a: classifier_base
+    description: Structural association between parts (KerML AssociationStructure)
+
+  # ── SysML: Definition layer ───────────────────────────────────────────────
+
+  definition:
+    abstract: true
+    is_a: classifier_base
+    description: Abstract base for all SysML v2 Definitions
+
+  attribute_definition:
+    is_a: definition
+    description: Defines a value-typed attribute (also a DataType)
+    rendering:
+      icon: DatabaseOutlined
+      color: '#36cfc9'
+
+  enumeration_definition:
+    is_a: definition
+    description: Enumeration type definition
+
+  item_definition:
+    is_a: definition
+    description: Defines a non-composite item
+    rendering:
+      icon: ContainerOutlined
+      color: '#d4b106'
+
+  part_definition:
+    is_a: definition
+    description: Defines the structure of a part
+    rendering:
+      icon: BlockOutlined
+      color: '#4096ff'
+
+  port_definition:
+    is_a: definition
+    description: Defines the interaction profile of a port
+    rendering:
+      icon: ApiOutlined
+      color: '#73d13d'
+
+  connection_definition:
+    is_a: definition
+    description: Defines a connection between parts
+    rendering:
+      icon: ShareAltOutlined
+      color: '#bfbfbf'
+
+  interface_definition:
+    is_a: connection_definition
+    description: Defines an interface connection
+    rendering:
+      icon: SwapOutlined
+      color: '#b37feb'
+
+  allocation_definition:
+    is_a: connection_definition
+    description: Defines an allocation mapping between elements
+
+  metadata_definition:
+    is_a: definition
+    description: Defines a metadata annotation type (KerML Metaclass)
+
+  # ── SysML: OccurrenceDefinition sub-hierarchy ─────────────────────────────
+
+  occurrence_definition:
+    is_a: definition
+    description: >-
+      Defines occurrences or individuals in the model
+      (SysML v2 OccurrenceDefinition, also KerML Class)
+
+  individual_definition:
+    is_a: occurrence_definition
+    description: Defines a single individual occurrence
+
+  action_definition:
+    is_a: occurrence_definition
+    description: Defines a behavior (SysML ActionDefinition, KerML Behavior)
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#597ef7'
+
+  state_definition:
+    is_a: occurrence_definition
+    description: Defines a state machine or state (SysML StateDefinition)
+    rendering:
+      icon: BranchesOutlined
+      color: '#36cfc9'
+
+  constraint_definition:
+    is_a: occurrence_definition
+    description: Defines a boolean constraint (SysML ConstraintDefinition, KerML Predicate)
+    rendering:
+      icon: AuditOutlined
+      color: '#ffa940'
+
+  requirement_definition:
+    is_a: constraint_definition
+    description: Defines a requirement (SysML RequirementDefinition)
+    rendering:
+      icon: FileTextOutlined
+      color: '#9254de'
+
+  calculation_definition:
+    is_a: occurrence_definition
+    description: Defines a calculation or function (SysML CalculationDefinition, KerML Function)
+
+  case_definition:
+    is_a: calculation_definition
+    description: Defines a case analysis or use scenario (SysML CaseDefinition)
+
+  verification_case_definition:
+    is_a: case_definition
+    description: Defines a verification case (SysML VerificationCaseDefinition)
+
+  analysis_case_definition:
+    is_a: case_definition
+    description: Defines an analysis case (SysML AnalysisCaseDefinition)
+
+  use_case_definition:
+    is_a: case_definition
+    description: Defines a use case (SysML UseCaseDefinition)
+
+  view_definition:
+    is_a: occurrence_definition
+    description: Defines a model view (SysML ViewDefinition)
+
+  rendering_definition:
+    is_a: occurrence_definition
+    description: Defines a rendering specification (SysML RenderingDefinition)
+
+  # ── KerML: Feature layer ──────────────────────────────────────────────────
+
+  feature_base:
+    abstract: true
+    is_a: type_base
+    description: Abstract base for all KerML Features
+
+  feature:
+    is_a: feature_base
+    description: Generic KerML Feature element (JSON @type Feature)
+    rendering:
+      hidden: true
+
+  payload_feature:
+    is_a: feature_base
+    description: Payload feature carried by an AcceptActionUsage
+
+  multiplicity:
+    is_a: feature_base
+    description: Cardinality constraint feature
+    rendering:
+      hidden: true
+
+  multiplicity_range:
+    is_a: multiplicity
+    description: Multiplicity with lower and upper bounds
+    rendering:
+      hidden: true
+
+  # ── KerML: Expression sub-hierarchy ──────────────────────────────────────
+
+  expression_base:
+    abstract: true
+    is_a: feature_base
+    description: Abstract base for all KerML/SysML Expressions
+
+  feature_reference_expression:
+    is_a: expression_base
+    description: Expression directly referencing a feature
+
+  feature_chain_expression:
+    is_a: expression_base
+    description: Expression navigating a feature chain
+
+  operator_expression:
+    is_a: expression_base
+    description: Operator-based expression (e.g. arithmetic, comparison)
+
+  invocation_expression:
+    is_a: operator_expression
+    description: Function or calculation invocation expression
+
+  literal_expression_base:
+    abstract: true
+    is_a: expression_base
+    description: Abstract base for all literal value expressions
+
+  literal_boolean:
+    is_a: literal_expression_base
+    description: Boolean literal value
+
+  literal_integer:
+    is_a: literal_expression_base
+    description: Integer literal value
+
+  literal_rational:
+    is_a: literal_expression_base
+    description: Rational/decimal literal value
+
+  literal_string:
+    is_a: literal_expression_base
+    description: String literal value
+
+  literal_infinity:
+    is_a: literal_expression_base
+    description: Infinity literal value (used in unbounded multiplicities)
+
+  # ── SysML: Usage sub-hierarchy ────────────────────────────────────────────
+
+  usage:
+    abstract: true
+    is_a: feature_base
+    description: Abstract base for all SysML v2 Usages
+
+  attribute_usage:
+    is_a: usage
+    description: Usage of an attribute definition
+    rendering:
+      icon: DatabaseOutlined
+      color: '#13c2c2'
+
+  enumeration_usage:
+    is_a: usage
+    description: Enumeration literal or typed enumeration usage
+
+  reference_usage:
+    is_a: usage
+    description: Non-owning reference to another element
+
+  metadata_usage:
+    is_a: usage
+    description: Instance of a metadata annotation
+
+  binding_connector_as_usage:
+    is_a: usage
+    description: Binds two features to the same value (as a usage)
+
+  succession_as_usage:
+    is_a: usage
+    description: Temporal ordering between actions (as a usage)
+
+  # ── SysML: OccurrenceUsage sub-hierarchy ──────────────────────────────────
+
+  occurrence_usage:
+    is_a: usage
+    description: Usage of an occurrence definition (SysML v2 OccurrenceUsage)
+
+  item_usage:
+    is_a: occurrence_usage
+    description: Usage of an item definition
+
+  part_usage:
+    is_a: occurrence_usage
+    description: Usage of a part definition (composite or reference)
+    rendering:
+      icon: BlockOutlined
+      color: '#1677ff'
+
+  port_usage:
+    is_a: occurrence_usage
+    description: Interaction point on a part
+    rendering:
+      icon: ApiOutlined
+      color: '#52c41a'
+
+  individual_usage:
+    is_a: occurrence_usage
+    description: Usage of an individual occurrence
+
+  event_occurrence_usage:
+    is_a: occurrence_usage
+    description: Usage of an event or occurrence snapshot
+
+  flow_end:
+    is_a: occurrence_usage
+    description: End point (source or target) of a flow connection
+    rendering:
+      hidden: true
+
+  # ── SysML: ConnectionUsage sub-hierarchy ──────────────────────────────────
+
+  connection_usage:
+    is_a: occurrence_usage
+    description: Connection between ports or parts
+    rendering:
+      icon: ShareAltOutlined
+      color: '#8c8c8c'
+
+  interface_usage:
+    is_a: connection_usage
+    description: Interface connection between ports
+    rendering:
+      icon: SwapOutlined
+      color: '#9254de'
+
+  allocation_usage:
+    is_a: connection_usage
+    description: Allocation mapping between elements
+
+  flow_usage:
+    is_a: connection_usage
+    description: Flow of items between parts (also a Succession in KerML)
+    rendering:
+      icon: SwapOutlined
+      color: '#08979c'
+
+  # ── SysML: ActionUsage sub-hierarchy ──────────────────────────────────────
+
+  action_usage:
+    is_a: occurrence_usage
+    description: Usage of an action definition (SysML ActionUsage, KerML Step)
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#2f54eb'
+
+  accept_action_usage:
+    is_a: action_usage
+    description: Waits for a trigger or signal/event
+
+  perform_action_usage:
+    is_a: action_usage
+    description: Performs an action within an owning context
+
+  exhibit_state_usage:
+    is_a: perform_action_usage
+    description: Exhibits a state machine on a part (specialized PerformActionUsage)
+
+  state_usage:
+    is_a: action_usage
+    description: State in a state machine
+    rendering:
+      icon: BranchesOutlined
+      color: '#13c2c2'
+
+  transition_usage:
+    is_a: action_usage
+    description: Transition between states
+
+  fork_node:
+    is_a: action_usage
+    description: Concurrent fork in action flow
+
+  join_node:
+    is_a: action_usage
+    description: Synchronization join in action flow
+
+  merge_node:
+    is_a: action_usage
+    description: Merge of alternative flows in action flow
+
+  decision_node:
+    is_a: action_usage
+    description: Decision point selecting one of several alternative flows
+
+  loop_action_usage:
+    abstract: true
+    is_a: action_usage
+    description: Abstract base for loop action usages
+
+  while_loop_action_usage:
+    is_a: loop_action_usage
+    description: Loop action controlled by a while-condition
+
+  for_loop_action_usage:
+    is_a: loop_action_usage
+    description: Loop action iterating over a sequence
+
+  # ── SysML: ConstraintUsage sub-hierarchy ──────────────────────────────────
+
+  constraint_usage:
+    is_a: occurrence_usage
+    description: Usage of a constraint predicate (SysML ConstraintUsage)
+    rendering:
+      icon: AuditOutlined
+      color: '#fa8c16'
+
+  requirement_usage:
+    is_a: constraint_usage
+    description: Requirement statement usage
+    rendering:
+      icon: FileTextOutlined
+      color: '#722ed1'
+
+  # ── SysML: CalculationUsage sub-hierarchy ─────────────────────────────────
+
+  calculation_usage:
+    is_a: occurrence_usage
+    description: Usage of a calculation function (SysML CalculationUsage)
+
+  case_usage:
+    is_a: calculation_usage
+    description: Usage of a case (analysis, verification, or use case)
+
+  verification_case_usage:
+    is_a: case_usage
+    description: Verification case for a set of requirements
+
+  analysis_case_usage:
+    is_a: case_usage
+    description: Analysis case usage
+
+  use_case_usage:
+    is_a: case_usage
+    description: Use case usage
+
+  # ── SysML: View/Rendering usages ──────────────────────────────────────────
+
+  view_usage:
+    is_a: occurrence_usage
+    description: Model view usage
+
+  rendering_usage:
+    is_a: occurrence_usage
+    description: Rendering specification usage
+
+  # ── SysML: Annotation elements ────────────────────────────────────────────
+
+  comment:
+    is_a: sysml_element
+    description: Textual comment annotation
+    rendering:
+      icon: FileTextOutlined
+      color: '#8c8c8c'
+
+  documentation:
+    is_a: sysml_element
+    description: Documentation annotation on a model element
+    rendering:
+      icon: FileTextOutlined
+      color: '#8c8c8c'
+
+  # ── KerML: Relationship layer ─────────────────────────────────────────────
+
+  relationship_base:
+    abstract: true
+    is_a: sysml_element
+    description: Abstract base for all KerML Relationships
+
+  # ── KerML: Specialization sub-hierarchy ───────────────────────────────────
+
+  specialization_base:
+    abstract: true
+    is_a: relationship_base
+    description: Abstract base for all specialization/generalization relationships
+    rendering:
+      hidden: true
+
+  subclassification:
+    is_a: specialization_base
+    description: Generalization between classifiers (KerML Subclassification)
+    rendering:
+      hidden: true
+
+  subsetting:
+    is_a: specialization_base
+    description: Feature subsetting — specific feature subsets general feature
+    rendering:
+      hidden: true
+
+  redefinition:
+    is_a: subsetting
+    description: Feature redefinition — redefines an inherited feature
+    rendering:
+      hidden: true
+
+  reference_subsetting:
+    is_a: specialization_base
+    description: Subsetting via reference (non-owning)
+    rendering:
+      hidden: true
+
+  feature_typing:
+    is_a: specialization_base
+    description: Types a feature with a classifier type
+    rendering:
+      hidden: true
+
+  feature_inverting:
+    is_a: specialization_base
+    description: Inverts the direction of a feature (KerML FeatureInverting)
+    rendering:
+      hidden: true
+
+  conjugation:
+    is_a: specialization_base
+    description: Conjugation of a port type (KerML Conjugation)
+    rendering:
+      hidden: true
+
+  feature_chaining:
+    is_a: relationship_base
+    description: Chains features for navigation (KerML FeatureChaining)
+    rendering:
+      hidden: true
+
+  # ── KerML: Membership sub-hierarchy ──────────────────────────────────────
+
+  membership_base:
+    abstract: true
+    is_a: relationship_base
+    description: Abstract base for all KerML Memberships
+
+  membership:
+    is_a: membership_base
+    description: Generic KerML Membership element (JSON @type Membership)
+    rendering:
+      hidden: true
+
+  membership_expose:
+    is_a: membership_base
+    description: Exposes a membership for visibility in another namespace
+    rendering:
+      hidden: true
+
+  membership_import:
+    is_a: membership_base
+    description: Imports a specific membership from another namespace
+    rendering:
+      hidden: true
+
+  owning_membership:
+    is_a: membership_base
+    description: Ownership-mediating membership (element is owned via this membership)
+    rendering:
+      hidden: true
+
+  feature_membership:
+    is_a: owning_membership
+    description: Feature-specific owned membership
+    rendering:
+      hidden: true
+
+  feature_value:
+    is_a: feature_membership
+    description: Value binding membership for a feature (KerML FeatureValue)
+    rendering:
+      hidden: true
+
+  parameter_membership:
+    is_a: feature_membership
+    description: Parameter binding membership for a behavior or function
+    rendering:
+      hidden: true
+
+  return_parameter_membership:
+    is_a: parameter_membership
+    description: Return parameter binding for a function/calculation
+    rendering:
+      hidden: true
+
+  subject_membership:
+    is_a: parameter_membership
+    description: Subject binding of a use case or requirement
+    rendering:
+      hidden: true
+
+  end_feature_membership:
+    is_a: feature_membership
+    description: Connector end feature binding
+    rendering:
+      hidden: true
+
+  objective_membership:
+    is_a: feature_membership
+    description: Objective binding of a verification case
+    rendering:
+      hidden: true
+
+  result_expression_membership:
+    is_a: feature_membership
+    description: Result expression binding for an expression feature
+    rendering:
+      hidden: true
+
+  element_filter_membership:
+    is_a: feature_membership
+    description: Element filter membership controlling view membership
+    rendering:
+      hidden: true
+
+  requirement_constraint_membership:
+    is_a: feature_membership
+    description: Constraint owned by a requirement
+    rendering:
+      hidden: true
+
+  requirement_verification_membership:
+    is_a: feature_membership
+    description: Verification owned by a requirement
+    rendering:
+      hidden: true
+
+  transition_feature_membership:
+    is_a: feature_membership
+    description: Trigger, guard, or effect membership on a transition
+    rendering:
+      hidden: true
+
+  state_subaction_membership:
+    is_a: feature_membership
+    description: Entry, do, or exit action membership on a state
+    rendering:
+      hidden: true
+
+  view_rendering_membership:
+    is_a: feature_membership
+    description: Rendering membership on a view element
+    rendering:
+      hidden: true
+
+  # ── KerML: Import sub-hierarchy ───────────────────────────────────────────
+
+  import_base:
+    abstract: true
+    is_a: relationship_base
+    description: Abstract base for all KerML Import relationships
+
+  namespace_import:
+    is_a: import_base
+    description: Imports all public members from a namespace
+    rendering:
+      hidden: true
+
+slots:
+  owns_element:
+    domain: sysml_element
+    range: sysml_element
+    is_containment: true
+    description: Primary ownership — single canonical containment relationship
+  in_namespace:
+    domain: sysml_element
+    range: sysml_element
+    description: Namespace membership
+  owned_by_membership:
+    domain: sysml_element
+    range: sysml_element
+    description: Membership that mediates ownership
+  owned_by_type:
+    domain: sysml_element
+    range: sysml_element
+    description: Type that owns a feature
+  has_member:
+    domain: sysml_element
+    range: sysml_element
+    description: Namespace or type member
+  has_membership:
+    domain: sysml_element
+    range: sysml_element
+    description: Membership link
+  has_owned_membership:
+    domain: sysml_element
+    range: sysml_element
+    description: Owned membership link
+  has_owned_element:
+    domain: sysml_element
+    range: sysml_element
+    description: Derived owned element list (not containment)
+  has_type:
+    domain: sysml_element
+    range: sysml_element
+    description: Typing relationship
+  has_definition:
+    domain: sysml_element
+    range: sysml_element
+    description: Definition specialization
+  specializes:
+    domain: sysml_element
+    range: sysml_element
+    description: Generalization (Subsetting, Redefinition, ReferenceSubsetting)
+  typed_by:
+    domain: sysml_element
+    range: sysml_element
+    description: FeatureTyping — feature typed by a type
+  chains_feature:
+    domain: sysml_element
+    range: sysml_element
+    description: FeatureChaining navigation
+  membership_owner:
+    domain: sysml_element
+    range: sysml_element
+    description: Membership to owning element
+  membership_member:
+    domain: sysml_element
+    range: sysml_element
+    description: Membership to member element
+  feature_value_for:
+    domain: feature_value
+    range: sysml_element
+    description: Feature that has this value
+  feature_value_target:
+    domain: feature_value
+    range: sysml_element
+    description: Value expression
+  references_source:
+    domain: sysml_element
+    range: sysml_element
+    description: Relationship source end
+  references_target:
+    domain: sysml_element
+    range: sysml_element
+    description: Relationship target end
+  imports_namespace:
+    domain: sysml_element
+    range: sysml_element
+    description: Namespace imported by a NamespaceImport
+  imports_element:
+    domain: sysml_element
+    range: sysml_element
+    description: Element imported by a MembershipImport or NamespaceImport
+  connects:
+    domain: sysml_element
+    range: sysml_element
+    description: Connection/flow/binding endpoint

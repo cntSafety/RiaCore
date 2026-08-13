@@ -1,0 +1,33 @@
+{
+  "name": "riacoredev",
+  "version": "0.3.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others --names \"renderer,electron\" --prefix-colors \"cyan,yellow\" \"pnpm --filter @riacore/renderer dev\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @riacore/desktop-host exec electron dist/main.js\"",
+    "dev:web": "pnpm build:core && node apps/desktop-host/scripts/start-web-dev.cjs",
+    "build": "pnpm -r run build",
+    "build:core": "pnpm --filter @riacore/git-service build && pnpm --filter @riacore/app-contracts build && pnpm --filter @riacore/importer-sdk build && pnpm --filter @riacore/sysml-language build && pnpm --filter @riacore/importer-arxml --filter @riacore/importer-sn --filter @riacore/importer-sysml-v2 --filter @riacore/importer-sysml-v2-textual build && pnpm --filter @riacore/app-core build && pnpm --filter @riacore/desktop-host --filter @riacore/cli build",
+    "build:appcore": "pnpm --filter @riacore/app-core build",
+    "package:desktop:win": "pnpm build:core && pnpm --filter @riacore/renderer build && pnpm --filter @riacore/desktop-host package:win",
+    "package:desktop:mac": "pnpm build:core && pnpm --filter @riacore/renderer build && pnpm --filter @riacore/desktop-host package:mac",
+    "package:desktop:linux": "pnpm build:core && pnpm --filter @riacore/renderer build && pnpm --filter @riacore/desktop-host package:linux",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint"
+  },
+  "devDependencies": {
+    "@vitest/ui": "3.2.4",
+    "concurrently": "^9.2.4",
+    "cross-env": "^10.1.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^9.1.0",
+    "@playwright/test": "^1.62.1"
+  },
+  "dependencies": {
+    "pnpm": "^10.34.5"
+  }
+}

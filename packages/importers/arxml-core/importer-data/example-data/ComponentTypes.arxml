@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AUTOSAR xsi:schemaLocation="http://autosar.org/schema/r4.0 AUTOSAR_00046.xsd" xmlns="http://autosar.org/schema/r4.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <AR-PACKAGES>
+    <AR-PACKAGE UUID="AF3D82A5-1B89-5B3A-9B0F-E36170DBB49B">
+      <SHORT-NAME>TigerDetectionSW</SHORT-NAME>
+      <ELEMENTS>
+        <APPLICATION-SW-COMPONENT-TYPE UUID="1A0D89EE-23E7-5030-BB43-2D408134306A">
+          <SHORT-NAME>CameraDriverLayer</SHORT-NAME>
+          <PORTS>
+            <P-PORT-PROTOTYPE UUID="7F47EC3A-E033-56FC-A1F2-A413226B66ED">
+              <SHORT-NAME>rgbDataOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_RGBFrameReady</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <P-PORT-PROTOTYPE UUID="2BED8C87-64A9-5DAA-8EA2-8298D899EE59">
+              <SHORT-NAME>irDataOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_IRFrameReady</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+          </PORTS>
+        </APPLICATION-SW-COMPONENT-TYPE>
+        <APPLICATION-SW-COMPONENT-TYPE UUID="82A38E47-DAF9-58F6-962B-3DE6FF39D3D8">
+          <SHORT-NAME>SensorDriverLayer</SHORT-NAME>
+          <PORTS>
+            <P-PORT-PROTOTYPE UUID="362BE536-29E6-5C27-81EA-9A36C7140E5B">
+              <SHORT-NAME>lightDataOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_LightLevel</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <P-PORT-PROTOTYPE UUID="4F561E96-C226-5A61-A757-A8ED5D5119E7">
+              <SHORT-NAME>tempDataOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_AmbientTemp</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="19D738BD-9848-5AE0-BB83-81A9D125B73F">
+              <SHORT-NAME>lightHWIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_LightLevel</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="8C8B2BCF-B436-53EB-9ACB-183D0B297D4C">
+              <SHORT-NAME>tempHWIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_AmbientTemp</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+          </PORTS>
+        </APPLICATION-SW-COMPONENT-TYPE>
+        <APPLICATION-SW-COMPONENT-TYPE UUID="50911696-EEF8-5307-97CF-290377FA0582">
+          <SHORT-NAME>SensorFusionMiddleware</SHORT-NAME>
+          <PORTS>
+            <P-PORT-PROTOTYPE UUID="A8B8D5B3-239B-5107-AE07-06B35072C908">
+              <SHORT-NAME>fusedOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_FusedDataReady</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="BA1A2716-3665-55A3-B8AC-F2B9BB04C347">
+              <SHORT-NAME>rgbIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_RGBFrameReady</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="94B7074C-29A5-549A-8414-3004B0789CD3">
+              <SHORT-NAME>irIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_IRFrameReady</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="FED1F8F0-602E-540F-85BB-7CA41BF5F77D">
+              <SHORT-NAME>lightIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_LightLevel</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="39DC9ADA-F454-59C6-B5FB-05658A4FA614">
+              <SHORT-NAME>tempIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_AmbientTemp</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+          </PORTS>
+        </APPLICATION-SW-COMPONENT-TYPE>
+        <APPLICATION-SW-COMPONENT-TYPE UUID="3D20498A-0CE2-5955-B93E-EFCBB5AF697B">
+          <SHORT-NAME>TigerDetectionApp</SHORT-NAME>
+          <PORTS>
+            <P-PORT-PROTOTYPE UUID="CD77A2AF-6996-5729-B5E9-4881575B40D0">
+              <SHORT-NAME>detectionOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_DetectionResult</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="49EBA75A-397E-542B-A0A6-01069599AE60">
+              <SHORT-NAME>fusedDataIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_FusedDataReady</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+          </PORTS>
+        </APPLICATION-SW-COMPONENT-TYPE>
+        <APPLICATION-SW-COMPONENT-TYPE UUID="4A0FDA65-DC28-59BB-B415-CFDDF0412CA6">
+          <SHORT-NAME>WarningManager</SHORT-NAME>
+          <PORTS>
+            <P-PORT-PROTOTYPE UUID="B7ED7BAD-EB42-5E71-A007-098E2EB9C872">
+              <SHORT-NAME>acousticOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_WarningCommand</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <P-PORT-PROTOTYPE UUID="BBDF3880-FB53-59D6-8C79-AC2F772F5066">
+              <SHORT-NAME>visualOut</SHORT-NAME>
+              <PROVIDED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_WarningCommand</PROVIDED-INTERFACE-TREF>
+            </P-PORT-PROTOTYPE>
+            <R-PORT-PROTOTYPE UUID="9E379C83-6DA9-5F92-898E-82D5A6F8A80D">
+              <SHORT-NAME>detectionIn</SHORT-NAME>
+              <REQUIRED-INTERFACE-TREF DEST="SENDER-RECEIVER-INTERFACE">/PortInterfaces/SRI_DetectionResult</REQUIRED-INTERFACE-TREF>
+            </R-PORT-PROTOTYPE>
+          </PORTS>
+        </APPLICATION-SW-COMPONENT-TYPE>
+        <COMPOSITION-SW-COMPONENT-TYPE UUID="72672970-3155-5F60-87C8-03E3E282E1E4">
+          <SHORT-NAME>TigerDetectionComposition</SHORT-NAME>
+          <COMPONENTS>
+            <SW-COMPONENT-PROTOTYPE UUID="6C6B7790-16D4-531C-946C-6A4C9DD41311">
+              <SHORT-NAME>CameraDriverLayer_Instance</SHORT-NAME>
+              <TYPE-TREF DEST="APPLICATION-SW-COMPONENT-TYPE">/TigerDetectionSW/CameraDriverLayer</TYPE-TREF>
+            </SW-COMPONENT-PROTOTYPE>
+            <SW-COMPONENT-PROTOTYPE UUID="C18F8BDD-E576-59F9-9B46-9D1C73543D05">
+              <SHORT-NAME>SensorDriverLayer_Instance</SHORT-NAME>
+              <TYPE-TREF DEST="APPLICATION-SW-COMPONENT-TYPE">/TigerDetectionSW/SensorDriverLayer</TYPE-TREF>
+            </SW-COMPONENT-PROTOTYPE>
+            <SW-COMPONENT-PROTOTYPE UUID="4B8FCCFC-4174-57FE-94E8-5624C352A0D6">
+              <SHORT-NAME>SensorFusionMiddleware_Instance</SHORT-NAME>
+              <TYPE-TREF DEST="APPLICATION-SW-COMPONENT-TYPE">/TigerDetectionSW/SensorFusionMiddleware</TYPE-TREF>
+            </SW-COMPONENT-PROTOTYPE>
+            <SW-COMPONENT-PROTOTYPE UUID="A8D3F9D4-0B95-505E-8A4B-1908ABD89B89">
+              <SHORT-NAME>TigerDetectionApp_Instance</SHORT-NAME>
+              <TYPE-TREF DEST="APPLICATION-SW-COMPONENT-TYPE">/TigerDetectionSW/TigerDetectionApp</TYPE-TREF>
+            </SW-COMPONENT-PROTOTYPE>
+            <SW-COMPONENT-PROTOTYPE UUID="063C7E0D-AA27-55BA-95BD-D05B74B35A42">
+              <SHORT-NAME>WarningManager_Instance</SHORT-NAME>
+              <TYPE-TREF DEST="APPLICATION-SW-COMPONENT-TYPE">/TigerDetectionSW/WarningManager</TYPE-TREF>
+            </SW-COMPONENT-PROTOTYPE>
+          </COMPONENTS>
+          <CONNECTORS>
+            <ASSEMBLY-SW-CONNECTOR UUID="4557B5E9-34E7-5F5C-8BFA-A5B916DBCE44">
+              <SHORT-NAME>CameraDriverLayer_rgbDataOut_SensorFusionMiddleware_rgbIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/CameraDriverLayer_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/CameraDriverLayer/rgbDataOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorFusionMiddleware_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/SensorFusionMiddleware/rgbIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+            <ASSEMBLY-SW-CONNECTOR UUID="CE09C791-E5D7-5BF9-9A40-3F1EE5558970">
+              <SHORT-NAME>CameraDriverLayer_irDataOut_SensorFusionMiddleware_irIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/CameraDriverLayer_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/CameraDriverLayer/irDataOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorFusionMiddleware_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/SensorFusionMiddleware/irIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+            <ASSEMBLY-SW-CONNECTOR UUID="FC0136AA-B3D4-5002-8811-01583E4F3100">
+              <SHORT-NAME>SensorDriverLayer_lightDataOut_SensorFusionMiddleware_lightIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorDriverLayer_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/SensorDriverLayer/lightDataOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorFusionMiddleware_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/SensorFusionMiddleware/lightIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+            <ASSEMBLY-SW-CONNECTOR UUID="B305EC54-9540-5522-BADA-AA6E26DAEB61">
+              <SHORT-NAME>SensorDriverLayer_tempDataOut_SensorFusionMiddleware_tempIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorDriverLayer_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/SensorDriverLayer/tempDataOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorFusionMiddleware_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/SensorFusionMiddleware/tempIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+            <ASSEMBLY-SW-CONNECTOR UUID="1E1D5129-9194-5918-9859-CF9584B5C7C0">
+              <SHORT-NAME>SensorFusionMiddleware_fusedOut_TigerDetectionApp_fusedDataIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/SensorFusionMiddleware_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/SensorFusionMiddleware/fusedOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/TigerDetectionApp_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/TigerDetectionApp/fusedDataIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+            <ASSEMBLY-SW-CONNECTOR UUID="DBA6A011-CE6F-579D-834A-9A25D3A968E4">
+              <SHORT-NAME>TigerDetectionApp_detectionOut_WarningManager_detectionIn</SHORT-NAME>
+              <PROVIDER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/TigerDetectionApp_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-P-PORT-REF DEST="P-PORT-PROTOTYPE">/TigerDetectionSW/TigerDetectionApp/detectionOut</TARGET-P-PORT-REF>
+              </PROVIDER-IREF>
+              <REQUESTER-IREF>
+                <CONTEXT-COMPONENT-REF DEST="SW-COMPONENT-PROTOTYPE">/TigerDetectionSW/TigerDetectionComposition/WarningManager_Instance</CONTEXT-COMPONENT-REF>
+                <TARGET-R-PORT-REF DEST="R-PORT-PROTOTYPE">/TigerDetectionSW/WarningManager/detectionIn</TARGET-R-PORT-REF>
+              </REQUESTER-IREF>
+            </ASSEMBLY-SW-CONNECTOR>
+          </CONNECTORS>
+        </COMPOSITION-SW-COMPONENT-TYPE>
+      </ELEMENTS>
+    </AR-PACKAGE>
+  </AR-PACKAGES>
+</AUTOSAR>
