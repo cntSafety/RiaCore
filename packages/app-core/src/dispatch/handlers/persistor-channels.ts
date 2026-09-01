@@ -22,6 +22,17 @@ import { createPersistorService, createImportLogger, createPersistorLoadLogger }
 import { runStoreCommitHook } from '../../git/store-commit-hook.js';
 import type { createRegistry } from '../channel-registry.js';
 
+function errorContext(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { error: String(error) };
+
+  return {
+    error: error.message,
+    errorType: error.name,
+    stack: error.stack,
+    ...(error.cause !== undefined ? { cause: String(error.cause) } : {}),
+  };
+}
+
 /**
  * Register persistor channels: store, load, repairManifest.
  *
@@ -30,15 +41,17 @@ import type { createRegistry } from '../channel-registry.js';
  * and a fresh `PersistorService` instance, matching the existing
  * worker-dispatch.ts behaviour.
  *
- * Every logger is closed in a `finally` block so the underlying WriteStream
- * file handle is released as soon as the operation completes. Without this,
- * the handle stays open until the process exits, which causes EPERM errors
- * when test teardown tries to delete the workspace directory on Windows.
+ * Persistor service failures emit a terminal error record before rethrowing,
+ * and every created logger is closed in a `finally` block. Workspace-open
+ * failures are handled by the worker request boundary before a logger is made,
+ * preserving the rule that an invalid path must not be created as a side effect.
  */
 export function registerPersistorChannels(
   registry: ReturnType<typeof createRegistry>,
 ): void {
   registry.register('persistor.store', async (payload, deps, _ctx) => {
+    const startedAt = Date.now();
+    const scopedNamespace = (payload as { namespace?: string }).namespace ?? '(full store)';
     const wsResult = await deps.workspaceService.open({ workingDir: payload.workingDir });
     if (!wsResult.ok) throw new Error(wsResult.error);
 
@@ -47,40 +60,30 @@ export function registerPersistorChannels(
       : createImportLogger(path.join(payload.workingDir, 'logs'));
 
     try {
-      // DIAGNOSTIC (temporary): correlate "last disk write" against canvas
-      // mutations and window-close timestamps to investigate the intermittent
-      // missing-tile/missing-connection bug on reopen. Remove once root-caused.
-      const diagStart = Date.now();
-      logger.info('[DIAG] persistor.store: requested', {
-        workingDir: payload.workingDir,
-        scopedNamespace: (payload as { namespace?: string }).namespace ?? '(full store)',
-      });
-
       const svc = createPersistorService(deps.dbModule, logger);
       const storeResult = await svc.store(payload);
-
-      logger.info('[DIAG] persistor.store: completed', {
-        workingDir: payload.workingDir,
-        durationMs: Date.now() - diagStart,
-        namespacesWritten: storeResult.namespaces_written,
-        namespacesSkipped: storeResult.namespaces_skipped,
-        totalRecords: storeResult.total_records,
-        filesWritten: storeResult.files_written,
-      });
 
       // Update workspace lifecycle badge: "New workspace" / "Loaded from ria-data"
       // → "Exported to ria-data" so the UI reflects the current state without
       // requiring the user to close and reopen the workspace.
       deps.workspaceService.notifyStoreCompleted();
 
-      // Phase 5: optional auto-commit hook (never throws)
+      // Phase 5: optional auto-commit hook (normally never throws).
       if (deps.gitService) {
-        await runStoreCommitHook(payload.workingDir, storeResult, deps.gitService).catch((err) =>
-          console.warn('[persistor.store] Auto-commit hook failed:', err instanceof Error ? err.message : String(err)),
+        await runStoreCommitHook(payload.workingDir, storeResult, deps.gitService, logger).catch((error) =>
+          logger.warn('[git] Auto-commit hook threw unexpectedly', errorContext(error)),
         );
       }
 
       return storeResult;
+    } catch (error) {
+      logger.error('Persistor store failed', {
+        workingDir: payload.workingDir,
+        scopedNamespace,
+        durationMs: Date.now() - startedAt,
+        ...errorContext(error),
+      });
+      throw error;
     } finally {
       logger.close();
     }
@@ -90,6 +93,7 @@ export function registerPersistorChannels(
   });
 
   registry.register('persistor.load', async (payload, deps, _ctx) => {
+    const startedAt = Date.now();
     const wsResult = await deps.workspaceService.open({ workingDir: payload.workingDir });
     if (!wsResult.ok) throw new Error(wsResult.error);
 
@@ -98,19 +102,15 @@ export function registerPersistorChannels(
       : createPersistorLoadLogger(path.join(payload.workingDir, 'logs'));
 
     try {
-      // DIAGNOSTIC (temporary): see persistor.store above.
-      logger.info('[DIAG] persistor.load: requested', { workingDir: payload.workingDir });
-      const diagStart = Date.now();
-
       const svc = createPersistorService(deps.dbModule, logger);
-      const loadResult = await svc.load(payload);
-
-      logger.info('[DIAG] persistor.load: completed', {
+      return await svc.load(payload);
+    } catch (error) {
+      logger.error('Persistor load failed', {
         workingDir: payload.workingDir,
-        durationMs: Date.now() - diagStart,
+        durationMs: Date.now() - startedAt,
+        ...errorContext(error),
       });
-
-      return loadResult;
+      throw error;
     } finally {
       logger.close();
     }
@@ -127,9 +127,18 @@ export function registerPersistorChannels(
     const logger = deps.createLogger
       ? deps.createLogger(payload.workingDir)
       : createImportLogger(path.join(payload.workingDir, 'logs'));
+    const startedAt = Date.now();
+
     try {
       const svc = createPersistorService(deps.dbModule, logger);
       return await svc.repairManifest(payload);
+    } catch (error) {
+      logger.error('Persistor manifest repair failed', {
+        workingDir: payload.workingDir,
+        durationMs: Date.now() - startedAt,
+        ...errorContext(error),
+      });
+      throw error;
     } finally {
       logger.close();
     }

@@ -19,10 +19,13 @@
  */
 import { useMemo } from 'react';
 import type {
+  ActionPriorityLevel,
+  ActionPriorityMetadata,
   MetamodelProfileMetadata,
   ProfileReviewMetadata,
   ProfileReviewOption,
 } from '@riacore/app-contracts';
+import { resolveActionPriority } from '@riacore/app-contracts';
 import { useMetamodelProfileMetadata } from '../../../../../hooks/useMetamodelProfileMetadata';
 import { useSafetyMetamodel, DEFAULT_SAFETY_METAMODEL } from './safetyMetamodelContext';
 
@@ -53,6 +56,16 @@ interface SafetyProfileView {
   review?: ProfileReviewMetadata;
   verdicts: ProfileReviewOption[];
   authorStatuses: ProfileReviewOption[];
+  /** Profile-configured Action Priority table. Absent for profiles that have not migrated from RPN. */
+  actionPriority?: ActionPriorityMetadata;
+  /**
+   * Resolve the Action Priority level for a (severity, occurrence, detection)
+   * triple against this profile's table. Computed on demand — never
+   * persisted alongside the risk rating. Returns `undefined` when the
+   * profile has no `actionPriority` table or the triple doesn't resolve
+   * (e.g. an incomplete risk rating).
+   */
+  getActionPriority: (severity: string, occurrence: string, detection: string) => ActionPriorityLevel | undefined;
 }
 
 function enumOptions(
@@ -107,6 +120,9 @@ function buildView(metadata: MetamodelProfileMetadata | undefined): SafetyProfil
     review,
     verdicts: review?.workflow.verdicts ?? [],
     authorStatuses: review?.workflow.authorStatuses ?? [],
+    actionPriority: metadata?.actionPriority,
+    getActionPriority: (severity: string, occurrence: string, detection: string) =>
+      resolveActionPriority(metadata?.actionPriority, severity, occurrence, detection),
   };
 }
 

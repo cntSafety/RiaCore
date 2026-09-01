@@ -48,6 +48,23 @@ import {
 import { computeNamespaceHashFromFiles, computeMetaHash } from './persistor.js';
 import { computeUniverseFileHash } from './persistor-store.js';
 
+/**
+ * Compare two dotted schema versions numerically: negative when `a` is older
+ * than `b`, positive when newer, zero when equal. A segment that is not a number
+ * counts as 0, so a malformed version reads as the oldest possible one and is
+ * therefore never mistaken for a newer format.
+ */
+function compareSchemaVersions(a: string, b: string): number {
+  const parse = (v: string): number[] => String(v ?? '').split('.').map((part) => Number(part) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 export async function load(
   params: PersistorLoadParams,
   dbModule: IDbModule,
@@ -62,8 +79,28 @@ export async function load(
   }
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Manifest;
   if (manifest.schema_version !== SCHEMA_VERSION) {
-    throw new Error(
-      `Schema version mismatch: manifest schema_version (${manifest.schema_version}) differs from current (${SCHEMA_VERSION})`,
+    // A manifest from a NEWER version stays a hard error: this code cannot know
+    // what the newer format added, and loading it would silently drop it.
+    //
+    // An OLDER one loads. That is what makes the documented upgrade path work at
+    // all — a workspace whose DB is stale opens read-only with
+    // migrationNeeded=true and is "rebuilt from ria-data/", which is impossible
+    // if the rebuild refuses every ria-data written before the bump. Every
+    // version step so far has been additive to the on-disk layout, and each
+    // layer's reader already treats a file it does not find as absent (the view
+    // tables added in 1.4.0 are read exactly that way), so an older export loads
+    // as itself with the newer parts empty. persistor.store already forces a
+    // full re-export on the same mismatch, so the next save rewrites the
+    // manifest at the current version.
+    if (compareSchemaVersions(manifest.schema_version, SCHEMA_VERSION) > 0) {
+      throw new Error(
+        `Schema version mismatch: manifest schema_version (${manifest.schema_version}) is newer than this version of RiaCore supports (${SCHEMA_VERSION})`,
+      );
+    }
+    logger.warn(
+      `manifest schema_version (${manifest.schema_version}) predates the current schema (${SCHEMA_VERSION}) — ` +
+      `loading it as-is; the next store rewrites ria-data at ${SCHEMA_VERSION}`,
+      { manifest_schema_version: manifest.schema_version, current_schema_version: SCHEMA_VERSION },
     );
   }
 
@@ -176,6 +213,18 @@ export async function load(
   // table automatically includes it here — no manual update needed.
   logger.debug(`clearing meta/sourcemaster/cross_namespace layers...`);
   emitProgress(params.onProgress, { phase: 'shared', message: 'Clearing shared layers...' }, logger);
+
+  // Views are cleared here, ahead of the shared-layer clear, not in the restore
+  // block further down. A view's VIEW_DEFINEDBY / VIEW_CATEGORIZEDBY edges point
+  // at RIA_META_Metamodel nodes that the shared-layer clear deletes, so those
+  // edges go with them; leaving the view *nodes* behind would produce views with
+  // no immediate metamodel, which is invalid (docs/coreSpecs/RiaViews.md — a view
+  // has exactly one VIEW_DEFINEDBY). The clear is unconditional for the same
+  // reason the namespace-connection clear is: the loaded set of views equals the
+  // persisted set exactly, so a workspace with no RIA_UNIV_View.json loads as a
+  // workspace with no views.
+  await dbModule.runQuery(`MATCH (v:RIA_UNIV_View) DETACH DELETE v`);
+
   for (const stmt of buildSharedLayerClearStatements()) {
     await dbModule.runQuery(stmt);
   }
@@ -841,6 +890,118 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     }
   }
 
+  // ── Restore view definitions (RIA_UNIV_View) ──
+  // Global universe-layer node table + its three relationship tables, restored
+  // here after the namespace loop (VIEW_SOURCE targets RIA_UNIV_Namespace) and
+  // after the meta layer (VIEW_DEFINEDBY/VIEW_CATEGORIZEDBY target
+  // RIA_META_Metamodel, already restored in the shared-layer step above).
+  // The matching clear ran before the shared-layer clear, not here — see the
+  // comment on that statement.
+  // Clear-then-restore semantics, like RIA_UNIV_NamespaceConnection: the loaded
+  // set of views equals the persisted set exactly for every view whose sources
+  // and metamodels are all present. A view whose VIEW_DEFINEDBY metamodel is
+  // missing, or that is left with zero VIEW_SOURCE edges after dropping dangling
+  // ones, is not restored at all — a view with zero sources is invalid
+  // (docs/coreSpecs/RiaViews.md) and must not be silently resurrected as one.
+  const viewsSkipped: { view: string; reason: string }[] = [];
+  const viewFilePath = path.join(exportDir, 'universe', 'RIA_UNIV_View.json');
+  if (fs.existsSync(viewFilePath)) {
+    const readViewTable = (file: string): Record<string, unknown>[] => {
+      const p = path.join(exportDir, 'universe', file);
+      return fs.existsSync(p) ? parseTable(fs.readFileSync(p, 'utf-8')) : [];
+    };
+    const viewRows = readViewTable('RIA_UNIV_View.json');
+    const viewSourceRows = readViewTable('RIA_UNIV_VIEW_SOURCE.json');
+    const viewDefinedByRows = readViewTable('RIA_UNIV_VIEW_DEFINEDBY.json');
+    const viewCategorizedByRows = readViewTable('RIA_UNIV_VIEW_CATEGORIZEDBY.json');
+
+    const presentNsRowsForViews = await dbModule.runQuery(`MATCH (ns:RIA_UNIV_Namespace) RETURN ns.name AS name`);
+    const presentNamespacesForViews = new Set(presentNsRowsForViews.map(r => String(r.name ?? '')));
+    const presentMmRows = await dbModule.runQuery(`MATCH (mm:RIA_META_Metamodel) RETURN mm.name AS name`);
+    const presentMetamodels = new Set(presentMmRows.map(r => String(r.name ?? '')));
+
+    let viewsRestored = 0;
+    for (const row of viewRows) {
+      const name = String(row.name ?? '');
+      if (!name) continue;
+
+      const definedByRow = viewDefinedByRows.find(r => String(r.src_name ?? '') === name);
+      const definedByMetamodel = definedByRow ? String(definedByRow.dst_name ?? '') : '';
+      if (!definedByMetamodel || !presentMetamodels.has(definedByMetamodel)) {
+        viewsSkipped.push({ view: name, reason: `immediate metamodel '${definedByMetamodel || '(missing)'}' is absent` });
+        logger.error(
+          `view '${name}' skipped — immediate metamodel '${definedByMetamodel || '(missing)'}' is absent from the loaded workspace`,
+          { view: name },
+        );
+        continue;
+      }
+
+      const sourceRows = viewSourceRows.filter(r => String(r.src_name ?? '') === name);
+      const presentSources = sourceRows
+        .map(r => String(r.dst_name ?? ''))
+        .filter(ns => ns && presentNamespacesForViews.has(ns));
+      const droppedSources = sourceRows.length - presentSources.length;
+      if (droppedSources > 0) {
+        logger.error(
+          `view '${name}': ${droppedSources} source namespace(s) absent from the loaded workspace — dropped`,
+          { view: name },
+        );
+      }
+      if (presentSources.length === 0) {
+        viewsSkipped.push({ view: name, reason: 'no source namespace is present in the loaded workspace' });
+        logger.error(
+          `view '${name}' skipped — left with zero source namespaces after dropping dangling references`,
+          { view: name },
+        );
+        continue;
+      }
+
+      const categorizedByRows = viewCategorizedByRows.filter(r => String(r.src_name ?? '') === name);
+      const presentCategorizedBy = categorizedByRows
+        .map(r => String(r.dst_name ?? ''))
+        .filter(mm => mm && presentMetamodels.has(mm));
+
+      await dbModule.runQuery(
+        `CREATE (:RIA_UNIV_View {
+          name: $name, description: $description, metamodel: $metamodel,
+          mapping: $mapping, parameters: $parameters
+        })`,
+        {
+          name,
+          description: String(row.description ?? ''),
+          metamodel: String(row.metamodel ?? ''),
+          mapping: String(row.mapping ?? ''),
+          parameters: JSON.stringify(row.parameters ?? {}),
+        },
+      );
+      await dbModule.runQuery(
+        `MATCH (v:RIA_UNIV_View), (mm:RIA_META_Metamodel)
+         WHERE v.name = $name AND mm.name = $mm
+         CREATE (v)-[:RIA_UNIV_VIEW_DEFINEDBY]->(mm)`,
+        { name, mm: definedByMetamodel },
+      );
+      for (const ns of presentSources) {
+        await dbModule.runQuery(
+          `MATCH (v:RIA_UNIV_View), (ns:RIA_UNIV_Namespace)
+           WHERE v.name = $name AND ns.name = $ns
+           CREATE (v)-[:RIA_UNIV_VIEW_SOURCE]->(ns)`,
+          { name, ns },
+        );
+      }
+      for (const mm of presentCategorizedBy) {
+        await dbModule.runQuery(
+          `MATCH (v:RIA_UNIV_View), (mm:RIA_META_Metamodel)
+           WHERE v.name = $name AND mm.name = $mm
+           CREATE (v)-[:RIA_UNIV_VIEW_CATEGORIZEDBY]->(mm)`,
+          { name, mm },
+        );
+      }
+      viewsRestored++;
+    }
+    totalRecordsImported += viewsRestored;
+    logger.debug(`universe: restored ${viewsRestored} view definition(s), skipped ${viewsSkipped.length}`);
+  }
+
   // Cross-namespace layer
   emitProgress(params.onProgress, { phase: 'cross_namespace', message: 'Importing cross-namespace instances...' }, logger);
   const nsRelPath = path.join(exportDir, 'cross_namespace', 'RIA_UNIV_NamespaceRelation.json');
@@ -983,5 +1144,6 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     log_file: logFile,
     ...(totalRelationshipsFailed > 0 ? { relationships_failed: totalRelationshipsFailed } : {}),
     ...(connectionsSkipped.length > 0 ? { connections_skipped: connectionsSkipped } : {}),
+    ...(viewsSkipped.length > 0 ? { views_skipped: viewsSkipped } : {}),
   };
 }

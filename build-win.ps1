@@ -64,10 +64,23 @@ try {
     $pnpmVer = pnpm --version
     Write-Host "  pnpm $pnpmVer" -ForegroundColor DarkGray
 
+    Step "Checking Node and pnpm versions"
+    $expectedNode = node -p "require('./package.json').engines.node"
+    $expectedPnpm = node -p "require('./package.json').engines.pnpm"
+    $actualNode = node -p "process.version.slice(1)"
+    $actualPnpm = $pnpmVer
+    if ($actualNode -ne $expectedNode) {
+        throw "Node $expectedNode is required; found $actualNode"
+    }
+    if ($actualPnpm -ne $expectedPnpm) {
+        throw "pnpm $expectedPnpm is required; found $actualPnpm"
+    }
+    Write-Host "  Node $actualNode, pnpm $actualPnpm" -ForegroundColor DarkGray
+
     if (-not $SkipInstall) {
-        Step "Installing / updating dependencies"
-        pnpm install
-        if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+        Step "Installing dependencies from the lockfile"
+        pnpm install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw "pnpm install --frozen-lockfile failed" }
     }
 
     Step "Building core packages + desktop host + renderer"

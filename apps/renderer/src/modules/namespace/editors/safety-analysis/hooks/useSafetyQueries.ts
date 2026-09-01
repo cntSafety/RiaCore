@@ -66,6 +66,60 @@ export function useSafetyTasks(fmNodeId: number | undefined) {
   });
 }
 
+// SOTIF: functional insufficiencies linked to a malfunction.
+export function useFunctionalInsufficiencies(fmNodeId: number | undefined) {
+  return useQuery({
+    queryKey: ['safety.functionalInsufficiencies', fmNodeId],
+    queryFn: () => api.safety.getFunctionalInsufficiencies(fmNodeId!),
+    enabled: fmNodeId !== undefined,
+  });
+}
+
+// SOTIF: triggering conditions linked to a malfunction.
+export function useTriggeringConditions(fmNodeId: number | undefined) {
+  return useQuery({
+    queryKey: ['safety.triggeringConditions', fmNodeId],
+    queryFn: () => api.safety.getTriggeringConditions(fmNodeId!),
+    enabled: fmNodeId !== undefined,
+  });
+}
+
+// SOTIF: all functional insufficiencies in a namespace (for the "link existing" picker).
+export function useAllFunctionalInsufficiencies(namespace: string, enabled = true) {
+  return useQuery({
+    queryKey: ['safety.allFunctionalInsufficiencies', namespace],
+    queryFn: () => api.safety.getAllFunctionalInsufficiencies(namespace),
+    enabled,
+  });
+}
+
+// SOTIF: all triggering conditions in a namespace (for the "link existing" picker).
+export function useAllTriggeringConditions(namespace: string, enabled = true) {
+  return useQuery({
+    queryKey: ['safety.allTriggeringConditions', namespace],
+    queryFn: () => api.safety.getAllTriggeringConditions(namespace),
+    enabled,
+  });
+}
+
+// SOTIF: reverse 1-to-n — malfunctions that reference a functional insufficiency.
+export function useMalfunctionsForFunctionalInsufficiency(fiNodeId: number | undefined) {
+  return useQuery({
+    queryKey: ['safety.malfunctionsForFunctionalInsufficiency', fiNodeId],
+    queryFn: () => api.safety.getMalfunctionsForFunctionalInsufficiency(fiNodeId!),
+    enabled: fiNodeId !== undefined,
+  });
+}
+
+// SOTIF: reverse 1-to-n — malfunctions that reference a triggering condition.
+export function useMalfunctionsForTriggeringCondition(tcNodeId: number | undefined) {
+  return useQuery({
+    queryKey: ['safety.malfunctionsForTriggeringCondition', tcNodeId],
+    queryFn: () => api.safety.getMalfunctionsForTriggeringCondition(tcNodeId!),
+    enabled: tcNodeId !== undefined,
+  });
+}
+
 export function useMalfunctionForRiskRating(riskRatingNodeId: number | undefined) {
   return useQuery({
     queryKey: ['safety.malfunctionForRiskRating', riskRatingNodeId],
@@ -119,10 +173,10 @@ export function usePropagations(fmNodeId: number | undefined) {
   });
 }
 
-export function usePropagationsForComponent(structuralNodeId: number | undefined) {
+export function usePropagationsForComponent(structuralNodeId: number | undefined, safetyNamespace?: string) {
   return useQuery({
-    queryKey: ['safety.propagationsForComponent', structuralNodeId],
-    queryFn: () => api.safety.getPropagationsForComponent(structuralNodeId!),
+    queryKey: ['safety.propagationsForComponent', structuralNodeId, safetyNamespace],
+    queryFn: () => api.safety.getPropagationsForComponent(structuralNodeId!, safetyNamespace),
     enabled: structuralNodeId !== undefined,
   });
 }
@@ -132,14 +186,6 @@ export function useRequirementsForFm(fmNodeId: number | undefined) {
     queryKey: ['safety.requirementsForFm', fmNodeId],
     queryFn: () => api.safety.getRequirementsForFm(fmNodeId!),
     enabled: fmNodeId !== undefined,
-  });
-}
-
-export function useMalfunctionsForRequirement(requirementNodeId: number | undefined) {
-  return useQuery({
-    queryKey: ['safety.malfunctionsForRequirement', requirementNodeId],
-    queryFn: () => api.safety.getMalfunctionsForRequirement(requirementNodeId!),
-    enabled: requirementNodeId !== undefined,
   });
 }
 

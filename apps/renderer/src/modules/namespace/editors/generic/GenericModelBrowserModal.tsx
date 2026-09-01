@@ -19,8 +19,9 @@
  */
 import { Modal, Empty, Typography, Button, theme } from 'antd';
 import { TableOutlined } from '@ant-design/icons';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useLayoutEffect } from 'react';
 import type { NamespaceContext } from '../../../../store/workspaceStore';
+import { useWorkspaceState } from '../../../../hooks/useWorkspaceState';
 import { NamespaceTreePanel } from '../safety-analysis/components/NamespaceTreePanel';
 import type { NamespaceTreePanelHandle } from '../safety-analysis/components/NamespaceTreePanel';
 import { CenterPanel } from '../safety-analysis/components/CenterPanel';
@@ -42,6 +43,28 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
   const { token } = useToken();
   const [selected, setSelected] = useState<SelectedTreeElement | null>(null);
   const treePanelRef = useRef<NamespaceTreePanelHandle>(null);
+
+  // The modal itself stays mounted permanently (only `open` toggles), so
+  // `selected` would otherwise survive a close/reopen and show stale content
+  // before the user clicks anything. Reset it — but only when the namespace
+  // being browsed has actually changed; reopening on the same namespace keeps
+  // whatever the user had selected. Runs synchronously before paint so there's
+  // no flicker of the old selection.
+  const lastShownNamespaceRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    if (lastShownNamespaceRef.current !== namespace) {
+      setSelected(null);
+      treePanelRef.current?.clearSelection();
+    }
+    lastShownNamespaceRef.current = namespace;
+  }, [open, namespace]);
+
+  // Derived the same way NamespaceTreePanel derives it. CenterPanel needs it to
+  // key its queries — without it every query that takes a workspaceKey stays
+  // disabled, which silently removes the diagram lens from this modal.
+  const wsState = useWorkspaceState();
+  const workspaceKey = wsState.phase !== 'no_workspace' ? wsState.workingDir : null;
 
   const handleSelect = useCallback((element: SelectedTreeElement | null) => {
     setSelected(element);
@@ -95,6 +118,7 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
             namespace={namespace}
             selectedTreeElement={selected}
             onNavigateToNode={handleNavigateToNode}
+            workspaceKey={workspaceKey}
             allowCreateTag={false}
             allowAddTag={false}
           />

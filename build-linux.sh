@@ -29,9 +29,21 @@ if ! command -v pnpm &>/dev/null; then
 fi
 echo "  pnpm $(pnpm --version)"
 
+EXPECTED_NODE_VERSION=$(node -p "require('./package.json').engines.node")
+EXPECTED_PNPM_VERSION=$(node -p "require('./package.json').engines.pnpm")
+ACTUAL_NODE_VERSION=$(node -p "process.version.slice(1)")
+ACTUAL_PNPM_VERSION=$(pnpm --version)
+
+if [ "$ACTUAL_NODE_VERSION" != "$EXPECTED_NODE_VERSION" ]; then
+    err "Node $EXPECTED_NODE_VERSION is required; found $ACTUAL_NODE_VERSION"
+fi
+if [ "$ACTUAL_PNPM_VERSION" != "$EXPECTED_PNPM_VERSION" ]; then
+    err "pnpm $EXPECTED_PNPM_VERSION is required; found $ACTUAL_PNPM_VERSION"
+fi
+
 if [ "$SKIP_INSTALL" = false ]; then
-    step "Installing / updating dependencies"
-    pnpm install
+    step "Installing dependencies from the lockfile"
+    pnpm install --frozen-lockfile
 fi
 
 step "Building core packages + desktop host + renderer"

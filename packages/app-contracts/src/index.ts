@@ -18,6 +18,7 @@
  *
  */
 export * from './result.js';
+export * from './action-priority-types.js';
 export * from './db.js';
 export * from './workspace.js';
 export * from './ipc.js';
@@ -37,6 +38,8 @@ export * from './cache-invalidation.js';
 export * from './show-in-tree.js';
 export * from './namespace-connection-types.js';
 export * from './canvas-layout-types.js';
+export * from './view-types.js';
+export * from './presentation-types.js';
 export * from './llm-types.js';
 // Explicit named re-exports of runtime values from llm-types so Rollup's
 // CJS static-analysis can resolve them through the compiled `dist/index.js`
@@ -45,6 +48,7 @@ export * from './llm-types.js';
 // which Rollup cannot trace statically).
 export { SWC_COMPONENT_CONCEPTS, SYSML_ELEMENT_CONCEPTS } from './llm-types.js';
 export { DEFAULT_AUTO_COMMIT_TEMPLATE } from './git-types.js';
+export { resolveActionPriority } from './action-priority-types.js';
 export type {
   GitSemanticDiffParams,
   GitSemanticDiffResult,

@@ -32,7 +32,7 @@
  * column named `violation`; `$namespace` is injected automatically by the
  * check engine. `metamodel` is the allowlist of analysis metamodels the check
  * applies to (SAFETY_ANALYSIS = SW safety, SYSTEM_SAFETY_ANALYSIS = system
- * safety, MONITORING_ANALYSIS = monitoring).
+ * safety, MONITORING_ANALYSIS = monitoring, SOTIF_ANALYSIS = SOTIF).
  */
 import type { UserCheckDefinition } from '@riacore/app-contracts';
 
@@ -318,6 +318,77 @@ export const DEFAULT_CHECKS: UserCheckDefinition[] = [
     "metamodel": [
       "SYSTEM_SAFETY_ANALYSIS",
       "MONITORING_ANALYSIS"
+    ],
+    "active": true
+  },
+  {
+    "id": "sotif-malfunctions-missing-functional-insufficiency",
+    "name": "Malfunctions without functional insufficiencies",
+    "description": "SOTIF malfunctions that have no linked functional insufficiency in the same namespace (at least one is required).",
+    "severity": "Warning",
+    "query": "MATCH (fm:RIA_UNIV_ConceptInstance) WHERE fm.namespace = $namespace AND fm.concept = 'malfunction' AND NOT EXISTS { MATCH (rel:RIA_UNIV_RelationshipInstance), (linked:RIA_UNIV_ConceptInstance) WHERE rel.source_node_id = fm.node_id AND rel.relationship = 'has_functional_insufficiencies' AND linked.node_id = rel.target_node_id AND linked.namespace = $namespace AND linked.concept = 'functional_insufficiency' } RETURN fm.node_id AS violation",
+    "attributes": [
+      {
+        "has_name": "name"
+      }
+    ],
+    "category": "Malfunction completeness",
+    "metamodel": [
+      "SOTIF_ANALYSIS"
+    ],
+    "active": true
+  },
+  {
+    "id": "sotif-malfunctions-missing-triggering-condition",
+    "name": "Malfunctions without triggering conditions",
+    "description": "SOTIF malfunctions that have no linked triggering condition in the same namespace (at least one is required).",
+    "severity": "Warning",
+    "query": "MATCH (fm:RIA_UNIV_ConceptInstance) WHERE fm.namespace = $namespace AND fm.concept = 'malfunction' AND NOT EXISTS { MATCH (rel:RIA_UNIV_RelationshipInstance), (linked:RIA_UNIV_ConceptInstance) WHERE rel.source_node_id = fm.node_id AND rel.relationship = 'has_triggering_conditions' AND linked.node_id = rel.target_node_id AND linked.namespace = $namespace AND linked.concept = 'triggering_condition' } RETURN fm.node_id AS violation",
+    "attributes": [
+      {
+        "has_name": "name"
+      }
+    ],
+    "category": "Malfunction completeness",
+    "metamodel": [
+      "SOTIF_ANALYSIS"
+    ],
+    "active": true
+  },
+  // Attributes are JSON strings; the regex handles quoted text and escaped whitespace
+  // without requiring the optional JSON extension. Keep the backslash escaping intact
+  // across TypeScript, Cypher and the database regex parser (covered by native DB tests).
+  {
+    "id": "sotif-malfunctions-missing-risk-rating-note",
+    "name": "Malfunctions without a risk rating note",
+    "description": "SOTIF malfunctions that have no linked risk rating with a non-blank Risk Rating Note. Missing, empty and whitespace-only notes are incomplete.",
+    "severity": "Warning",
+    "query": "MATCH (fm:RIA_UNIV_ConceptInstance) WHERE fm.namespace = $namespace AND fm.concept = 'malfunction' AND NOT EXISTS { MATCH (rel:RIA_UNIV_RelationshipInstance), (linked:RIA_UNIV_ConceptInstance) WHERE rel.source_node_id = fm.node_id AND rel.relationship = 'has_risk_rating' AND linked.node_id = rel.target_node_id AND linked.namespace = $namespace AND linked.concept = 'risk_rating' AND NOT regexp_matches(regexp_extract(coalesce(linked.attributes, '{}'), '\"risk_rating_note\"[[:space:]]*:[[:space:]]*\"(([^\"\\\\\\\\\\\\\\\\]|\\\\\\\\\\\\\\\\.)*)\"', 1), '^([[:space:]]|\\\\\\\\\\\\\\\\[tnrfb])*$') } RETURN fm.node_id AS violation",
+    "attributes": [
+      {
+        "has_name": "name"
+      }
+    ],
+    "category": "Malfunction completeness",
+    "metamodel": [
+      "SOTIF_ANALYSIS"
+    ],
+    "active": true
+  },
+  {
+    "id": "sotif-malfunctions-not-reviewed",
+    "name": "Malfunctions without a review verdict",
+    "description": "SOTIF malfunctions that have no linked review item with a recorded verdict (OK, NOK or OK_with_comment). This checks review coverage only, not acceptance, comment resolution or review freshness.",
+    "severity": "Warning",
+    "query": "MATCH (fm:RIA_UNIV_ConceptInstance) WHERE fm.namespace = $namespace AND fm.concept = 'malfunction' AND NOT EXISTS { MATCH (rel:RIA_UNIV_RelationshipInstance), (linked:RIA_UNIV_ConceptInstance) WHERE rel.source_node_id = fm.node_id AND rel.relationship = 'has_review' AND linked.node_id = rel.target_node_id AND linked.namespace = $namespace AND linked.concept = 'review_item' AND regexp_matches(coalesce(linked.attributes, '{}'), '\"reviewer_verdict\"[[:space:]]*:[[:space:]]*\"(OK|NOK|OK_with_comment)\"') } RETURN fm.node_id AS violation",
+    "attributes": [
+      {
+        "has_name": "name"
+      }
+    ],
+    "category": "Review coverage",
+    "metamodel": [
+      "SOTIF_ANALYSIS"
     ],
     "active": true
   }

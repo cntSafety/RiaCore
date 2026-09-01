@@ -28,7 +28,6 @@ import {
   useMalfunctionForReviewItem,
   useMalfunctionForRiskRating,
   useMalfunctions,
-  useMalfunctionsForRequirement,
   useInstance,
   useNoteParent,
   useNotesForElement,
@@ -40,6 +39,8 @@ import {
   useReviewItems,
   useRiskRating,
   useSafetyTasks,
+  useFunctionalInsufficiencies,
+  useTriggeringConditions,
 } from '../hooks/useSafetyQueries';
 import {
   useCreateNoteForElement,
@@ -53,6 +54,10 @@ import {
   useDeleteRiskRating,
   useDeleteSafetyNote,
   useDeleteTag,
+  useUpdateFunctionalInsufficiency,
+  useUpdateTriggeringCondition,
+  useDeleteFunctionalInsufficiency,
+  useDeleteTriggeringCondition,
   useLinkSafetyTaskToFm,
   useLinkRequirementToFm,
   usePropagationMutation,
@@ -91,11 +96,19 @@ import {
   RequirementsSection,
   ReviewSection as ReviewSectionExtracted,
 } from './MalfunctionSections';
-import { PORT_CONCEPTS, SWC_CONCEPTS } from './diagramModel';
+import { FunctionalInsufficiencySection, TriggeringConditionSection } from './SotifSections';
+import { useSafetyMetamodel } from '../hooks/safetyMetamodelContext';
+import { useIsDiagramConcept } from '../../../../../hooks/useModelView';
 import { ElementHeader } from './ElementHeader';
-import { ElementTabs } from './ElementTabs';
-import type { TabDefinition } from './ElementTabs';
+import {
+  ELEMENT_TABS,
+  MALFUNCTION_TABS,
+  DEFAULT_ELEMENT_LENS,
+  isElementLensKey,
+  type TabDefinition,
+} from '../config/elementTabs';
 import { PropertyRow } from './PropertyRow';
+import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 
 function CopyableValue({ value, mono }: { value: string; mono?: boolean }) {
@@ -175,17 +188,18 @@ interface CenterPanelProps {
   allowAddTag?: boolean;
 }
 
-const MALFUNCTION_TABS: TabDefinition[] = [
-  { key: 'overview',     label: 'Overview' },
-  { key: 'risk-rating',  label: 'Risk Rating' },
-  { key: 'propagation',  label: 'Propagation' },
-  { key: 'safety-tasks', label: 'Safety Tasks' },
-  { key: 'requirements', label: 'Requirements' },
-  { key: 'review',       label: 'Review' },
-];
-
-const ELEMENT_TABS: TabDefinition[] = [
-  { key: 'overview', label: 'Overview' },
+// SOTIF profile tab list: adds Functional Insufficiencies + Triggering
+// Conditions after Overview, and relabels Risk Rating as the note-only
+// "Risk Rating Note". Selected when the active metamodel is SOTIF_ANALYSIS.
+const SOTIF_MALFUNCTION_TABS: TabDefinition[] = [
+  { key: 'overview',                  label: 'Overview' },
+  { key: 'functional-insufficiencies', label: 'Functional Insufficiencies' },
+  { key: 'triggering-conditions',     label: 'Triggering Conditions' },
+  { key: 'risk-rating',               label: 'Risk Rating Note' },
+  { key: 'propagation',               label: 'Propagation' },
+  { key: 'safety-tasks',              label: 'Safety Tasks' },
+  { key: 'requirements',              label: 'Requirements' },
+  { key: 'review',                    label: 'Review' },
 ];
 
 const DETAIL_PRIORITY_KEYS = [
@@ -253,7 +267,12 @@ function collectDetailItems(attributes: Record<string, unknown>): DetailItem[] {
   }
 
   for (const [key, raw] of Object.entries(attributes)) {
-    if (seen.has(key) || key === 'content' || key === 'ar_path' || key === 'stable_path' || key === 'uuid' || key === 'short_name') continue;
+    // 'content' gets its own dedicated block above the attribute list, so skip
+    // it here to avoid showing it twice. Everything else — including identity
+    // fields like stable_path/uuid/short_name that are also surfaced in the
+    // header's identity popover — belongs here: this tab's whole purpose is to
+    // show the node's stored attributes, so it must never omit real data.
+    if (seen.has(key) || key === 'content') continue;
     const formatted = formatDetailValue(raw);
     if (!formatted) continue;
     result.push({ key, label: toDetailLabel(key), value: formatted.text, isMultiline: formatted.isMultiline });
@@ -644,24 +663,42 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
   // ── Tab state ─────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<string>('overview');
 
-  const isDiagramConcept = selectedTreeElement
-    ? PORT_CONCEPTS.has(selectedTreeElement.concept) || SWC_CONCEPTS.has(selectedTreeElement.concept)
-    : false;
+  // Resolved through the view rather than from a hardcoded ARXML concept list,
+  // so any metamodel with a CommonModel mapping offers the diagram lens
+  // (spec-view.md Phase 4.4). Reads false until the element resolves.
+  const isDiagramConcept = useIsDiagramConcept(
+    selectedTreeElement?.namespace,
+    selectedTreeElement?.nodeId,
+    workspaceKey,
+  );
 
   const isRiskRating = selectedTreeElement?.concept === 'risk_rating';
   const isReviewItem = selectedTreeElement?.concept === 'review_item';
   const isMalfunction = selectedTreeElement?.concept === 'malfunction';
+  // SOTIF namespaces reuse this editor but add Functional Insufficiency and
+  // Triggering Condition tabs and reduce Risk Rating to a note. Keyed off the
+  // active metamodel resolved from the surrounding namespace.
+  const isSotif = useSafetyMetamodel() === 'SOTIF_ANALYSIS';
+  const malfunctionTabList = isSotif ? SOTIF_MALFUNCTION_TABS : MALFUNCTION_TABS;
 
-  // Reset active tab whenever the selected element changes
+  // Reset the malfunction tab bar's active tab whenever the selected element
+  // changes. Non-malfunction elements drive their tab selection from
+  // `lensValue` (the persisted session-level preference) instead, so they are
+  // not part of this reset.
   const prevNodeIdRef = useRef<number | undefined>(undefined);
   if (selectedTreeElement?.nodeId !== prevNodeIdRef.current) {
     prevNodeIdRef.current = selectedTreeElement?.nodeId;
-    // Keep the current tab if the new element supports it; otherwise fall back to 'overview'
     const newIsMalfunction = selectedTreeElement?.concept === 'malfunction';
-    const availableTabs = newIsMalfunction ? MALFUNCTION_TABS : ELEMENT_TABS;
-    const tabStillValid = availableTabs.some((t) => t.key === activeTab);
+    const tabStillValid = newIsMalfunction && malfunctionTabList.some((t) => t.key === activeTab);
     if (!tabStillValid && activeTab !== 'overview') setActiveTab('overview');
   }
+
+  // An "add note" request (e.g. Ctrl+N) needs the Notes tab to actually be
+  // visible for the add-note form to appear, so switch to it for non-malfunction
+  // elements. (Malfunctions keep their own note affordance on the Overview tab.)
+  useEffect(() => {
+    if (addNoteRequested && !isMalfunction) setLensValue('notes');
+  }, [addNoteRequested, isMalfunction, setLensValue]);
 
   const handleShowDetails = useCallback(() => {
     setLensValue('details');
@@ -675,6 +712,27 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
   // State for tag delete impact preview (triggered from ElementHeader kebab menu)
   const [pendingDeleteTagNodeId, setPendingDeleteTagNodeId] = useState<number | null>(null);
   const deleteTagFromHeader = useDeleteTag(namespace, workspaceKey ?? null, triggerAutoSave);
+
+  // ── SOTIF shared-node (FI/TC) management from the tree selection ──
+  // When a functional_insufficiency / triggering_condition node is selected in
+  // the tree, the ElementHeader offers inline rename + a "Delete everywhere"
+  // kebab action driven by these mutations.
+  const isFunctionalInsufficiency = selectedTreeElement?.concept === 'functional_insufficiency';
+  const isTriggeringCondition = selectedTreeElement?.concept === 'triggering_condition';
+  const isFiTc = isFunctionalInsufficiency || isTriggeringCondition;
+  const updateFiFromTree = useUpdateFunctionalInsufficiency(namespace, workspaceKey ?? null, triggerAutoSave);
+  const updateTcFromTree = useUpdateTriggeringCondition(namespace, workspaceKey ?? null, triggerAutoSave);
+  const deleteFiFromTree = useDeleteFunctionalInsufficiency(namespace, workspaceKey ?? null, triggerAutoSave);
+  const deleteTcFromTree = useDeleteTriggeringCondition(namespace, workspaceKey ?? null, triggerAutoSave);
+  const [pendingDeleteFiTcNodeId, setPendingDeleteFiTcNodeId] = useState<number | null>(null);
+
+  const handleRenameFiTc = useCallback(async (newName: string) => {
+    if (!selectedTreeElement) return;
+    const mutation = isFunctionalInsufficiency ? updateFiFromTree : updateTcFromTree;
+    await mutation.mutateAsync({ nodeId: selectedTreeElement.nodeId, updates: { has_name: newName } });
+    // Refresh the detail panel's own instance read (name is shown from it).
+    qc.invalidateQueries({ queryKey: ['safety.instance', selectedTreeElement.nodeId] });
+  }, [selectedTreeElement, isFunctionalInsufficiency, updateFiFromTree, updateTcFromTree, qc]);
 
   // Tag mutation callbacks for ElementHeader
   const handleAddTag = useCallback(async (tagNodeId: number) => {
@@ -723,6 +781,9 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
   const notesForFmQuery = useNotesForFm(isMalfunction ? selectedTreeElement?.nodeId : undefined);
   const propagationsQuery = usePropagations(isMalfunction ? selectedTreeElement?.nodeId : undefined);
   const reviewItemsQuery = useReviewItems(isMalfunction ? selectedTreeElement?.nodeId : undefined);
+  // SOTIF-only: functional insufficiencies + triggering conditions (for tab counts)
+  const fiQuery = useFunctionalInsufficiencies(isMalfunction && isSotif ? selectedTreeElement?.nodeId : undefined);
+  const tcQuery = useTriggeringConditions(isMalfunction && isSotif ? selectedTreeElement?.nodeId : undefined);
   const updateMalfunction = useUpdateMalfunction(namespace, workspaceKey ?? null, triggerAutoSave);
   const pasteMalfunctionMutation = usePasteMalfunction(workspaceKey ?? null, triggerAutoSave);
 
@@ -778,10 +839,29 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
     return null;
   }, [isMalfunction, selectedTreeElement, referenceMalfunctionQuery.data]);
 
-  // ── Compute element tab count badges ──────────────────────────────
+  // ── Compute which element tabs are inapplicable for the selected element ──
+  // Model/Propagation/Malfunctions need a diagram-capable concept; Notes needs
+  // a concept that can host cross-namespace safety elements. Details applies to
+  // every element.
+  const elementTabDisabledKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!isDiagramConcept) { keys.add('diagram'); keys.add('propagation'); keys.add('table'); }
+    if (!canHostCrossNSSafetyElements(selectedTreeElement?.concept ?? '')) keys.add('notes');
+    return keys;
+  }, [isDiagramConcept, selectedTreeElement?.concept]);
+
   const elementTabsWithCounts = useMemo((): TabDefinition[] => {
-    return ELEMENT_TABS.map((tab) => tab); // Overview only — no count badges needed
-  }, []);
+    return ELEMENT_TABS.map((tab) => ({ ...tab, disabled: elementTabDisabledKeys.has(tab.key) }));
+  }, [elementTabDisabledKeys]);
+
+  // Clamped view of `lensValue` for display/content purposes: falls back to
+  // 'details' (always applicable) when the stored preference points at a tab
+  // that's disabled for the currently selected element — or at a key that no
+  // longer exists — without mutating the stored preference itself.
+  const elementActiveTab =
+    !isElementLensKey(lensValue) || elementTabDisabledKeys.has(lensValue)
+      ? DEFAULT_ELEMENT_LENS
+      : lensValue;
 
   // ── Malfunction section shortcuts (Ctrl+T, Ctrl+N) ───────────────
   const taskGhostRef = useRef<InputRef>(null);
@@ -879,9 +959,13 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
 
   // ── Compute malfunction tab count badges ──────────────────────────
   const malfunctionTabsWithCounts = useMemo((): TabDefinition[] => {
-    if (!isMalfunction) return MALFUNCTION_TABS;
-    return MALFUNCTION_TABS.map((tab) => {
+    if (!isMalfunction) return malfunctionTabList;
+    return malfunctionTabList.map((tab) => {
       switch (tab.key) {
+        case 'functional-insufficiencies':
+          return { ...tab, count: fiQuery.data?.length ?? 0 };
+        case 'triggering-conditions':
+          return { ...tab, count: tcQuery.data?.length ?? 0 };
         case 'risk-rating':
           return { ...tab, count: riskRatingQuery.data ? 1 : 0 };
         case 'safety-tasks':
@@ -896,7 +980,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
           return tab; // Overview and Risk Rating have no count badges
       }
     });
-  }, [isMalfunction, riskRatingQuery.data, tasksQuery.data, requirementsQuery.data, directRequirementsQuery.data, propagationsQuery.data, reviewItemsQuery.data]);
+  }, [isMalfunction, malfunctionTabList, fiQuery.data, tcQuery.data, riskRatingQuery.data, tasksQuery.data, requirementsQuery.data, directRequirementsQuery.data, propagationsQuery.data, reviewItemsQuery.data]);
 
   // Derive display name from fresh query data (never from selectedTreeElement.name)
   const displayName = useMemo(() => {
@@ -995,9 +1079,9 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             })()}
             tags={tagsQuery.data ?? []}
             allTags={allTagsQuery.data ?? []}
-            isDiagramConcept={isDiagramConcept}
-            lensValue={lensValue}
-            onLensChange={(v) => setLensValue(v)}
+            lensOptions={isMalfunction ? malfunctionTabsWithCounts : elementTabsWithCounts}
+            lensValue={isMalfunction ? activeTab : elementActiveTab}
+            onLensChange={isMalfunction ? setActiveTab : (v) => setLensValue(v as typeof lensValue)}
             onAddTag={handleAddTag}
             onRemoveTag={handleRemoveTag}
             onCreateAndAddTag={allowCreateTag ? handleCreateAndAddTag : undefined}
@@ -1008,7 +1092,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
               ? () => onShowReferenceInTree(selectedTreeElement)
               : undefined}
             referenceInTreeTarget={referenceInTreeTarget}
-            onRename={isMalfunction ? (newName) => saveFmField({ has_name: newName }) : undefined}
+            onRename={isMalfunction ? (newName) => saveFmField({ has_name: newName }) : isFiTc ? (newName) => { void handleRenameFiTc(newName); } : undefined}
             safetyNamespace={isMalfunction ? namespace : undefined}
             onStartPropagation={isMalfunction ? onStartPropagation : undefined}
             onEndPropagation={isMalfunction ? onEndPropagation : undefined}
@@ -1016,6 +1100,10 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             onPasteMalfunction={isHostElement && copiedMalfunction ? handlePasteMalfunction : undefined}
             onDeleteTag={selectedTreeElement?.concept === 'tag' ? () => setPendingDeleteTagNodeId(selectedTreeElement.nodeId) : undefined}
             onDeleteNote={isSafetyNote ? () => setPendingDeleteNoteNodeId(selectedTreeElement!.nodeId) : undefined}
+            onDeleteConcept={isFiTc ? {
+              label: isFunctionalInsufficiency ? 'Delete Functional Insufficiency' : 'Delete Triggering Condition',
+              onDelete: () => setPendingDeleteFiTcNodeId(selectedTreeElement!.nodeId),
+            } : undefined}
             onShowNoteReferenceInTree={isSafetyNote && noteParentQuery.data && onNavigateToReference && selectedTreeElement
               ? () => onNavigateToReference(
                   selectedTreeElement.nodeId,
@@ -1030,27 +1118,8 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
         </div>
       )}
 
-      {/* ── ElementTabs — fixed, non-scrolling (malfunction) ──────── */}
-      {selectedTreeElement && isMalfunction && !(isDiagramConcept && (lensValue === 'diagram' || lensValue === 'propagation' || lensValue === 'table')) && (
-        <div style={{ flexShrink: 0, background: token.colorBgContainer }}>
-          <ElementTabs
-            tabs={malfunctionTabsWithCounts}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-          />
-        </div>
-      )}
-
-      {/* ── ElementTabs — fixed, non-scrolling (non-malfunction / diagram details) ── */}
-      {selectedTreeElement && !isMalfunction && !(isDiagramConcept && (lensValue === 'diagram' || lensValue === 'propagation' || lensValue === 'table')) && (
-        <div style={{ flexShrink: 0, background: token.colorBgContainer }}>
-          <ElementTabs
-            tabs={elementTabsWithCounts}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-          />
-        </div>
-      )}
+      {/* Malfunction tabs are rendered by the same header selector as the
+          element lenses — there is no separate tab bar. */}
 
       {/* ── Content area — scrollable ────────────────────────────────── */}
       <div style={
@@ -1136,7 +1205,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
           </>
         ) : (
           <ElementTabContent
-            activeTab={activeTab}
+            activeTab={elementActiveTab}
             namespace={namespace}
             selectedTreeElement={selectedTreeElement}
             instanceQuery={instanceQuery}
@@ -1147,7 +1216,6 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             onAddNote={handleElementAddNote}
             onUpdateNote={handleElementUpdateNote}
             onDeleteNote={handleElementDeleteNote}
-            onNavigateToNode={onNavigateToNode}
             triggerAutoSave={triggerAutoSave}
           />
         )}
@@ -1161,6 +1229,21 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
           onConfirm={async () => {
             await deleteTagFromHeader.mutateAsync({ nodeId: pendingDeleteTagNodeId });
             setPendingDeleteTagNodeId(null);
+          }}
+        >
+          {(openPreview) => <_AutoOpenTagPreview onMount={openPreview} />}
+        </DeleteWithPreview>
+      )}
+
+      {/* SOTIF FI/TC "Delete everywhere" impact preview — triggered from ElementHeader kebab menu */}
+      {pendingDeleteFiTcNodeId !== null && (
+        <DeleteWithPreview
+          nodeId={pendingDeleteFiTcNodeId}
+          onCancel={() => setPendingDeleteFiTcNodeId(null)}
+          onConfirm={async () => {
+            const mutation = isFunctionalInsufficiency ? deleteFiFromTree : deleteTcFromTree;
+            await mutation.mutateAsync({ nodeId: pendingDeleteFiTcNodeId });
+            setPendingDeleteFiTcNodeId(null);
           }}
         >
           {(openPreview) => <_AutoOpenTagPreview onMount={openPreview} />}
@@ -1321,6 +1404,26 @@ function MalfunctionTabContent({
         </div>
       );
 
+    case 'functional-insufficiencies':
+      return (
+        <FunctionalInsufficiencySection
+          fmNodeId={selectedTreeElement.nodeId}
+          namespace={namespace}
+          workspaceKey={workspaceKey ?? null}
+          triggerAutoSave={triggerAutoSave}
+        />
+      );
+
+    case 'triggering-conditions':
+      return (
+        <TriggeringConditionSection
+          fmNodeId={selectedTreeElement.nodeId}
+          namespace={namespace}
+          workspaceKey={workspaceKey ?? null}
+          triggerAutoSave={triggerAutoSave}
+        />
+      );
+
     case 'risk-rating':
       return (
         <RiskRatingSectionExtracted
@@ -1391,7 +1494,6 @@ function ElementTabContent({
   onAddNote,
   onUpdateNote,
   onDeleteNote,
-  onNavigateToNode,
   triggerAutoSave,
 }: {
   activeTab: string;
@@ -1405,11 +1507,9 @@ function ElementTabContent({
   onAddNote: (text: string) => Promise<void>;
   onUpdateNote: (nodeId: number, text: string) => Promise<void>;
   onDeleteNote: (nodeId: number) => Promise<void>;
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
   triggerAutoSave?: () => void;
 }) {
   const { token } = theme.useToken();
-  const linkedMalfunctionsQuery = useMalfunctionsForRequirement(selectedTreeElement.nodeId);
 
   if (instanceQuery.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
@@ -1424,15 +1524,10 @@ function ElementTabContent({
   const shortName = typeof attributes.short_name === 'string' ? attributes.short_name : undefined;
 
   switch (activeTab) {
-    case 'overview':
+    case 'details':
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {selectedTreeElement.concept === 'safety_note' && (
-            <LinkedElementBanner noteNodeId={selectedTreeElement.nodeId} />
-          )}
-
-          {/* Element Details section */}
-          {(contentText || detailItems.length > 0) && (
+          {(contentText || detailItems.length > 0) ? (
             <div style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16 }}>
               <SectionHeader title="Element Details" count={(contentText ? 1 : 0) + detailItems.length} />
               {contentText ? (
@@ -1489,58 +1584,20 @@ function ElementTabContent({
                 </div>
               )}
             </div>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No details stored for this element" style={{ marginTop: 48 }} />
+          )}
+        </div>
+      );
+
+    case 'notes':
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {selectedTreeElement.concept === 'safety_note' && (
+            <LinkedElementBanner noteNodeId={selectedTreeElement.nodeId} />
           )}
 
-          {/* Linked Malfunctions — back-references from malfunctions that link to this element */}
-          {linkedMalfunctionsQuery.isLoading && (
-            <div style={{ borderLeft: `3px solid ${token.colorWarning}`, paddingLeft: 16 }}>
-              <SectionHeader title="Linked Malfunctions" count={0} />
-              <Spin size="small" />
-            </div>
-          )}
-          {(linkedMalfunctionsQuery.data?.length ?? 0) > 0 && (
-            <div style={{ borderLeft: `3px solid ${token.colorWarning}`, paddingLeft: 16 }}>
-              <SectionHeader title="Linked Malfunctions" count={linkedMalfunctionsQuery.data!.length} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {linkedMalfunctionsQuery.data!.map((fm) => {
-                  const fmAttrs = fm.attributes as Record<string, unknown>;
-                  const fmName = String(fmAttrs.has_name ?? fmAttrs.short_name ?? fmAttrs.title ?? `Malfunction ${fm.node_id}`);
-                  const fmAsil = fmAttrs.malfunction_asil ?? fmAttrs.asil;
-                  return (
-                    <ShowInTreeTrigger
-                      key={fm.node_id}
-                      homeTarget={{ nodeId: fm.node_id, namespace: fm.namespace, concept: fm.concept }}
-                      onNavigate={onNavigateToNode}
-                      wrapperStyle={{ width: '100%' }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '8px 10px',
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          borderRadius: token.borderRadiusSM,
-                          background: token.colorFillQuaternary,
-                          cursor: 'context-menu',
-                        }}
-                      >
-                        <WarningOutlined style={{ color: token.colorWarning, fontSize: 14, flexShrink: 0 }} />
-                        <span style={{ fontSize: 12, fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {fmName}
-                        </span>
-                        {fmAsil ? <Tag color={getAsilColor(String(fmAsil))} style={{ fontSize: 10, margin: 0 }}>ASIL {String(fmAsil)}</Tag> : null}
-                        <Tag style={{ fontSize: 10, margin: 0, flexShrink: 0 }} color="default">{fm.namespace}</Tag>
-                      </div>
-                    </ShowInTreeTrigger>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Notes — only for imported elements (not for safety-authored concepts) */}
-          {canHostCrossNSSafetyElements(selectedTreeElement.concept) && (
+          {canHostCrossNSSafetyElements(selectedTreeElement.concept) ? (
             <InlineNotesSection
               notes={notesQuery.data ?? []}
               loading={notesQuery.isLoading}
@@ -1550,6 +1607,8 @@ function ElementTabContent({
               openAddForm={addNoteRequested}
               onAddFormOpened={onAddNoteHandled}
             />
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Notes are not supported for this element" style={{ marginTop: 48 }} />
           )}
         </div>
       );
@@ -2312,6 +2371,12 @@ function RiskRatingSection({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 }}>
         <Space size={8}>
           <Tag color="purple" style={{ fontSize: 12 }}>RPN {String(riskRating.attributes?.risk_priority_number ?? 'N/A')}</Tag>
+          <ActionPriorityTag
+            actionPriority={profile.actionPriority}
+            severity={severity}
+            occurrence={occurrence}
+            detection={detection}
+          />
           <SavedBadge visible={isSaved} />
         </Space>
         <Space size={8}>
@@ -2513,7 +2578,7 @@ function RequirementSection({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* Link existing row */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
-        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directRequirementIds} />
+        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directRequirementIds} malfunctionNamespace={namespace} />
         {linkingExisting ? (
           <Space wrap>
             <Select

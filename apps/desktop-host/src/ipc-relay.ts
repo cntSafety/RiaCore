@@ -19,9 +19,10 @@
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '@riacore/app-contracts';
-import type { LlmSaveSettingsInput, LlmTestConnectionResult, LlmStartReviewInput } from '@riacore/app-contracts';
+import type { LlmSaveSettingsInput, LlmTestConnectionResult, LlmStartReviewInput, CrossNsLinkSettings } from '@riacore/app-contracts';
 import type { LlmSettingsStore } from '@riacore/app-core/dist/llm/llm-settings-store.js';
 import { testProviderConnection } from '@riacore/app-core/dist/llm/test-connection.js';
+import type { CrossNsLinkSettingsStore } from '@riacore/app-core/dist/settings/cross-ns-link-settings-store.js';
 import type { UtilityProcessManager } from './utility-process-manager.js';
 import { getAppLogger } from './app-logger.js';
 
@@ -34,6 +35,10 @@ import { getAppLogger } from './app-logger.js';
  * `Electron.safeStorage` for credential encryption/decryption — the
  * worker child process has no access to it.
  *
+ * `crossNsLinkSettings.getSettings` / `crossNsLinkSettings.saveSettings` are
+ * also handled here — not because of `safeStorage`, but because they need
+ * `app.getPath('userData')`, which is equally main-process-only.
+ *
  * This replaces the old `ipc-handlers.ts` which called app-core
  * services directly in the main process.
  *
@@ -42,20 +47,43 @@ import { getAppLogger } from './app-logger.js';
 export function registerIpcRelay(
   manager: UtilityProcessManager,
   settingsStore?: LlmSettingsStore,
+  crossNsLinkSettingsStore?: CrossNsLinkSettingsStore,
 ): void {
   const logger = getAppLogger();
 
-  /** Channels handled in the main process (require safeStorage). */
+  /** Channels handled in the main process (require safeStorage or app.getPath). */
   const MAIN_PROCESS_CHANNELS = new Set([
     'llm.getSettings',
     'llm.saveSettings',
     'llm.testConnection',
     'llm.startReview',
     'llm.dryRun',
+    'crossNsLinkSettings.getSettings',
+    'crossNsLinkSettings.saveSettings',
   ]);
 
   for (const channel of IPC_CHANNELS) {
-    if (MAIN_PROCESS_CHANNELS.has(channel) && settingsStore) {
+    if (
+      (channel === 'crossNsLinkSettings.getSettings' || channel === 'crossNsLinkSettings.saveSettings')
+      && crossNsLinkSettingsStore
+    ) {
+      const store = crossNsLinkSettingsStore;
+      ipcMain.handle(channel, async (_event, payload) => {
+        try {
+          if (channel === 'crossNsLinkSettings.getSettings') {
+            return await store.load();
+          }
+          await store.save(payload as CrossNsLinkSettings);
+          return;
+        } catch (error) {
+          logger.error('IPC handler failed (main process)', {
+            channel,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      });
+    } else if (MAIN_PROCESS_CHANNELS.has(channel) && settingsStore) {
       ipcMain.handle(channel, async (_event, payload) => {
         try {
           if (channel === 'llm.getSettings') {

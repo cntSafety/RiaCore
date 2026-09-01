@@ -27,6 +27,7 @@
 
 import type { IImportWriteService } from '@riacore/importer-sdk';
 import type {
+  ActionPriorityMetadata,
   ImportSession,
   BeginSessionParams,
   ConceptBatch,
@@ -192,6 +193,8 @@ export interface LinkMLSchema {
   slots: Record<string, LinkMLSlot>;
   enums?: Record<string, LinkMLEnum>;
   review?: ProfileReviewMetadata;
+  /** Action Priority lookup table, parsed from `annotations.action_priority`. See docs/particular/SafetyImprove.md §2. */
+  actionPriority?: ActionPriorityMetadata;
   profile_metadata?: MetamodelProfileMetadata;
   /** Ordered list of attribute names to try when producing a human-readable label for a node from this metamodel. */
   display_identifier_attrs?: string[];
@@ -201,6 +204,24 @@ export interface LinkMLSchema {
 // ---------------------------------------------------------------------------
 // Metamodel Registration
 // ---------------------------------------------------------------------------
+
+/** Rows per UNWIND statement — bounded so one batch never builds an oversized plan. */
+const META_BATCH_SIZE = 500;
+
+/**
+ * Run `query` once per {@link META_BATCH_SIZE} slice of `rows`, binding the
+ * slice as `$rows` alongside any `extraParams`. A zero-row input runs nothing.
+ */
+async function batchWrite(
+  db: IDbModule,
+  query: string,
+  rows: Record<string, unknown>[],
+  extraParams: Record<string, unknown> = {},
+): Promise<void> {
+  for (let i = 0; i < rows.length; i += META_BATCH_SIZE) {
+    await db.runQuery(query, { ...extraParams, rows: rows.slice(i, i + META_BATCH_SIZE) });
+  }
+}
 
 async function registerMetamodel(
   db: IDbModule,
@@ -232,44 +253,40 @@ async function registerMetamodel(
   const concreteClasses = allClasses.filter((c) => !c.is_abstract);
   const sortedClasses = [...abstractClasses, ...concreteClasses];
 
-  // Register concepts
+  // Everything below is assembled in memory first and written with batched
+  // UNWIND statements. A statement-per-row loop is O(rows) round trips, and
+  // rows here is dominated by class attributes: the SysML v2 schema declares
+  // 3852 of them across 107 concrete classes, which cost ~8000 sequential
+  // queries (~28s) against ARXML's 71 attributes (~2.3s). Registration runs on
+  // every import into a fresh workspace and on every workspace open that
+  // re-seeds a built-in metamodel, so that difference was reaching users as a
+  // half-minute stall and reaching CI as a test timeout.
+  const conceptRows: Record<string, unknown>[] = [];
+  const definesConceptRows: Record<string, unknown>[] = [];
+  const subtypeOfRows: Record<string, unknown>[] = [];
+  const attrRows: Record<string, unknown>[] = [];
+  const conceptAttrRows: Record<string, unknown>[] = [];
+
   for (const cls of sortedClasses) {
     const id = conceptId(metamodelName, cls.name);
     const isAbstract = cls.is_abstract ?? false;
-    const desc = cls.description ?? '';
-    const rIcon = cls.rendering?.icon ?? '';
-    const rColor = cls.rendering?.color ?? '';
-    const rHidden = cls.rendering?.hidden ?? false;
 
-    await db.runQuery(
-      `CREATE (:RIA_META_Concept {
-        id: '${e(id)}',
-        name: '${e(cls.name)}',
-        metamodel: '${e(metamodelName)}',
-        is_abstract: ${isAbstract},
-        description: '${e(desc)}',
-        long_name: '${e(cls.name)}',
-        render_icon: '${e(rIcon)}',
-        render_color: '${e(rColor)}',
-        render_hidden: ${rHidden}
-      })`,
-    );
-
-    // Link metamodel → concept
-    await db.runQuery(
-      `MATCH (mm:RIA_META_Metamodel), (c:RIA_META_Concept)
-       WHERE mm.name = '${e(metamodelName)}' AND c.id = '${e(id)}'
-       CREATE (mm)-[:RIA_META_DEFINES_CONCEPT]->(c)`,
-    );
+    conceptRows.push({
+      id,
+      name: cls.name,
+      metamodel: metamodelName,
+      is_abstract: isAbstract,
+      description: cls.description ?? '',
+      long_name: cls.name,
+      render_icon: cls.rendering?.icon ?? '',
+      render_color: cls.rendering?.color ?? '',
+      render_hidden: cls.rendering?.hidden ?? false,
+    });
+    definesConceptRows.push({ id });
 
     // Create is_a (SUBTYPEOF) edge if parent exists
     if (cls.is_a) {
-      const parentId = conceptId(metamodelName, cls.is_a);
-      await db.runQuery(
-        `MATCH (child:RIA_META_Concept), (parent:RIA_META_Concept)
-         WHERE child.id = '${e(id)}' AND parent.id = '${e(parentId)}'
-         CREATE (child)-[:RIA_META_CONCEPT_SUBTYPEOF]->(parent)`,
-      );
+      subtypeOfRows.push({ child: id, parent: conceptId(metamodelName, cls.is_a) });
     }
 
     // Register all class attributes as RIA_META_NodeAttribute entries.
@@ -277,102 +294,120 @@ async function registerMetamodel(
     if (!isAbstract && cls.attributes && Object.keys(cls.attributes).length > 0) {
       for (const [attrName, attr] of Object.entries(cls.attributes)) {
         const attrId = `${metamodelName}__${cls.name}__${attrName}`;
-        const isIdentity = cls.identity_attribute === attrName;
-        const attrType = attr.range ?? 'string';
-        const required = attr.required ?? false;
-        const multivalued = attr.multivalued ?? false;
-
-        await db.runQuery(
-          `CREATE (:RIA_META_NodeAttribute {
-            id: '${e(attrId)}',
-            name: '${e(attrName)}',
-            concept: '${e(cls.name)}',
-            metamodel: '${e(metamodelName)}',
-            required: ${required},
-            attribute_type: '${e(attrType)}',
-            multiplicity: '${multivalued ? '*' : ''}',
-            is_key: false,
-            is_identity: ${isIdentity}
-          })`,
-        );
-        await db.runQuery(
-          `MATCH (c:RIA_META_Concept), (a:RIA_META_NodeAttribute)
-           WHERE c.id = '${e(id)}' AND a.id = '${e(attrId)}'
-           CREATE (c)-[:RIA_META_CONCEPT_ATTRIBUTE]->(a)`,
-        );
+        attrRows.push({
+          id: attrId,
+          name: attrName,
+          concept: cls.name,
+          metamodel: metamodelName,
+          required: attr.required ?? false,
+          attribute_type: attr.range ?? 'string',
+          multiplicity: attr.multivalued ? '*' : '',
+          is_key: false,
+          is_identity: cls.identity_attribute === attrName,
+        });
+        conceptAttrRows.push({ concept_id: id, attr_id: attrId });
       }
     } else if (!isAbstract && cls.identity_attribute) {
       // Fallback: register only the identity attribute if no attributes map
       const attrId = `${metamodelName}__${cls.name}__${cls.identity_attribute}`;
-      await db.runQuery(
-        `CREATE (:RIA_META_NodeAttribute {
-          id: '${e(attrId)}',
-          name: '${e(cls.identity_attribute)}',
-          concept: '${e(cls.name)}',
-          metamodel: '${e(metamodelName)}',
-          required: true,
-          attribute_type: 'string',
-          multiplicity: '',
-          is_key: false,
-          is_identity: true
-        })`,
-      );
-      await db.runQuery(
-        `MATCH (c:RIA_META_Concept), (a:RIA_META_NodeAttribute)
-         WHERE c.id = '${e(id)}' AND a.id = '${e(attrId)}'
-         CREATE (c)-[:RIA_META_CONCEPT_ATTRIBUTE]->(a)`,
-      );
+      attrRows.push({
+        id: attrId,
+        name: cls.identity_attribute,
+        concept: cls.name,
+        metamodel: metamodelName,
+        required: true,
+        attribute_type: 'string',
+        multiplicity: '',
+        is_key: false,
+        is_identity: true,
+      });
+      conceptAttrRows.push({ concept_id: id, attr_id: attrId });
     }
   }
 
-  // Register relationships (slots)
+  // Relationships (slots)
+  const relationshipRows: Record<string, unknown>[] = [];
+  const definesRelationshipRows: Record<string, unknown>[] = [];
+  const relSourceRows: Record<string, unknown>[] = [];
+  const relTargetRows: Record<string, unknown>[] = [];
+
   for (const slot of Object.values(schema.slots)) {
     const id = relId(metamodelName, slot.name);
     const sourceConcept = slot.domain ?? '';
     const targetConcept = slot.range ?? '';
-    const desc = slot.description ?? '';
 
-    await db.runQuery(
-      `CREATE (:RIA_META_Relationship {
-        id: '${e(id)}',
-        name: '${e(slot.name)}',
-        metamodel: '${e(metamodelName)}',
-        source_concept: '${e(sourceConcept)}',
-        target_concept: '${e(targetConcept)}',
-        is_abstract: false,
-        is_containment: ${slot.is_containment ?? false},
-        description: '${e(desc)}',
-        long_name: '${e(slot.name)}'
-      })`,
-    );
-
-    // Link metamodel → relationship
-    await db.runQuery(
-      `MATCH (mm:RIA_META_Metamodel), (r:RIA_META_Relationship)
-       WHERE mm.name = '${e(metamodelName)}' AND r.id = '${e(id)}'
-       CREATE (mm)-[:RIA_META_DEFINES_RELATIONSHIP]->(r)`,
-    );
-
-    // Create REL_SOURCE edge if source concept exists
-    if (sourceConcept) {
-      const srcId = conceptId(metamodelName, sourceConcept);
-      await db.runQuery(
-        `MATCH (r:RIA_META_Relationship), (c:RIA_META_Concept)
-         WHERE r.id = '${e(id)}' AND c.id = '${e(srcId)}'
-         CREATE (r)-[:RIA_META_REL_SOURCE]->(c)`,
-      );
-    }
-
-    // Create REL_TARGET edge if target concept exists
-    if (targetConcept) {
-      const tgtId = conceptId(metamodelName, targetConcept);
-      await db.runQuery(
-        `MATCH (r:RIA_META_Relationship), (c:RIA_META_Concept)
-         WHERE r.id = '${e(id)}' AND c.id = '${e(tgtId)}'
-         CREATE (r)-[:RIA_META_REL_TARGET]->(c)`,
-      );
-    }
+    relationshipRows.push({
+      id,
+      name: slot.name,
+      metamodel: metamodelName,
+      source_concept: sourceConcept,
+      target_concept: targetConcept,
+      is_abstract: false,
+      is_containment: slot.is_containment ?? false,
+      description: slot.description ?? '',
+      long_name: slot.name,
+    });
+    definesRelationshipRows.push({ id });
+    if (sourceConcept) relSourceRows.push({ rel_id: id, concept_id: conceptId(metamodelName, sourceConcept) });
+    if (targetConcept) relTargetRows.push({ rel_id: id, concept_id: conceptId(metamodelName, targetConcept) });
   }
+
+  // Node tables first, then the edges between them: an UNWIND ... MATCH ...
+  // CREATE only links rows that already exist. Within the concept batch the
+  // abstract-first ordering above is preserved, which SUBTYPEOF relies on only
+  // in the sense that both endpoints exist by the time the edge batch runs.
+  await batchWrite(db, `UNWIND $rows AS row CREATE (:RIA_META_Concept {
+      id: row.id, name: row.name, metamodel: row.metamodel, is_abstract: row.is_abstract,
+      description: row.description, long_name: row.long_name,
+      render_icon: row.render_icon, render_color: row.render_color, render_hidden: row.render_hidden
+    })`, conceptRows);
+
+  await batchWrite(db, `UNWIND $rows AS row CREATE (:RIA_META_NodeAttribute {
+      id: row.id, name: row.name, concept: row.concept, metamodel: row.metamodel,
+      required: row.required, attribute_type: row.attribute_type, multiplicity: row.multiplicity,
+      is_key: row.is_key, is_identity: row.is_identity
+    })`, attrRows);
+
+  await batchWrite(db, `UNWIND $rows AS row CREATE (:RIA_META_Relationship {
+      id: row.id, name: row.name, metamodel: row.metamodel,
+      source_concept: row.source_concept, target_concept: row.target_concept,
+      is_abstract: row.is_abstract, is_containment: row.is_containment,
+      description: row.description, long_name: row.long_name
+    })`, relationshipRows);
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (mm:RIA_META_Metamodel), (c:RIA_META_Concept)
+     WHERE mm.name = $mm AND c.id = row.id CREATE (mm)-[:RIA_META_DEFINES_CONCEPT]->(c)`,
+    definesConceptRows, { mm: metamodelName });
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (child:RIA_META_Concept), (parent:RIA_META_Concept)
+     WHERE child.id = row.child AND parent.id = row.parent
+     CREATE (child)-[:RIA_META_CONCEPT_SUBTYPEOF]->(parent)`,
+    subtypeOfRows);
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (c:RIA_META_Concept), (a:RIA_META_NodeAttribute)
+     WHERE c.id = row.concept_id AND a.id = row.attr_id
+     CREATE (c)-[:RIA_META_CONCEPT_ATTRIBUTE]->(a)`,
+    conceptAttrRows);
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (mm:RIA_META_Metamodel), (r:RIA_META_Relationship)
+     WHERE mm.name = $mm AND r.id = row.id CREATE (mm)-[:RIA_META_DEFINES_RELATIONSHIP]->(r)`,
+    definesRelationshipRows, { mm: metamodelName });
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (r:RIA_META_Relationship), (c:RIA_META_Concept)
+     WHERE r.id = row.rel_id AND c.id = row.concept_id
+     CREATE (r)-[:RIA_META_REL_SOURCE]->(c)`,
+    relSourceRows);
+
+  await batchWrite(db,
+    `UNWIND $rows AS row MATCH (r:RIA_META_Relationship), (c:RIA_META_Concept)
+     WHERE r.id = row.rel_id AND c.id = row.concept_id
+     CREATE (r)-[:RIA_META_REL_TARGET]->(c)`,
+    relTargetRows);
 }
 
 
@@ -860,8 +895,11 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
           );
 
           // Step 2: create INSTANCE_REL graph edges
-          // Match source and target nodes by node_id using UNWIND + MATCH pattern
-          // that KuzuDB supports — one MATCH per direction, joined by edge list.
+          // Match source and target nodes by node_id in a single combined MATCH
+          // (comma-joined patterns, one WHERE). Two separate MATCH...WHERE clauses
+          // after an UNWIND is a known @ladybugdb/core bug: the second clause's
+          // filter is evaluated once against the first UNWIND row and reused for
+          // every row, so every edge ends up wired to the first item's src/tgt.
           for (let i = 0; i < createRows.length; i += EDGE_BATCH_SIZE) {
             const edgeBatch = createRows.slice(i, i + EDGE_BATCH_SIZE);
             const edgeItems = edgeBatch.map(r =>
@@ -869,10 +907,8 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
             );
             await dbModule.runQuery(
               `UNWIND [${edgeItems.join(', ')}] AS item
-               MATCH (s:RIA_UNIV_ConceptInstance)
-               WHERE s.node_id = item.src
-               MATCH (t:RIA_UNIV_ConceptInstance)
-               WHERE t.node_id = item.tgt
+               MATCH (s:RIA_UNIV_ConceptInstance), (t:RIA_UNIV_ConceptInstance)
+               WHERE s.node_id = item.src AND t.node_id = item.tgt
                CREATE (s)-[:RIA_UNIV_INSTANCE_REL {
                  edge_instance_id: item.edge_id,
                  relationship: '${e(batch.relationship)}',

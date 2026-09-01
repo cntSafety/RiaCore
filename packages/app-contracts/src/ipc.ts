@@ -38,8 +38,10 @@ import type { GitSemanticDiffParams, GitSemanticDiffResult, GitEnsureGitignoreRe
 import type { SafetyExportData } from './safety-export-types.js';
 import type { LlmSettings, LlmSaveSettingsInput, LlmStartReviewInput, LlmStartReviewResult, LlmCancelReviewInput, LlmTestConnectionResult, LlmDryRunInput, LlmDryRunResult } from './llm-types.js';
 import type { MetamodelProfileMetadata, MetamodelRenderingConfig } from './metamodel-types.js';
-import type { NamespaceConnectionGraph, ConnectionEntry, DisconnectResult } from './namespace-connection-types.js';
-import type { LayoutRecord, DiagramLayout } from './canvas-layout-types.js';
+import type { NamespaceConnectionGraph, ConnectionEntry, DisconnectResult, CrossNsLinkSettings } from './namespace-connection-types.js';
+import type { LayoutRecord, DiagramLayout, ViewLayoutSourceRef } from './canvas-layout-types.js';
+import type { ViewDefinition, CreateViewParams, UpdateViewParams, EvaluateViewParams, EvaluationResult, MaterializeViewParams, MaterializeResult } from './view-types.js';
+import type { ConceptPresentation, GetPresentationInput } from './presentation-types.js';
 
 export interface AppInfo {
   name: string;
@@ -197,7 +199,7 @@ export interface IpcChannelMap {
   'safety.addPropagation': { input: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }; output: { edge_id: number } };
   'safety.removePropagation': { input: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }; output: void };
   'safety.getPropagations': { input: { failureModeNodeId: number }; output: { propagatesTo: PropagationMalfunctionData[]; propagatesFrom: PropagationMalfunctionData[] } };
-  'safety.getPropagationsForComponent': { input: { structuralNodeId: number }; output: ScopedPropagationResult };
+  'safety.getPropagationsForComponent': { input: { structuralNodeId: number; safetyNamespace?: string }; output: ScopedPropagationResult };
   'safety.createRiskRating': { input: CreateRiskRatingParams; output: { node_id: number } };
   'safety.getRiskRating': { input: { failureModeNodeId: number }; output: ConceptInstanceData | null };
   'safety.updateRiskRating': { input: { nodeId: number; updates: Record<string, unknown> }; output: void };
@@ -212,6 +214,24 @@ export interface IpcChannelMap {
   'safety.getAllSafetyTasks': { input: { namespace: string }; output: ConceptInstanceData[] };
   'safety.updateSafetyTask': { input: { nodeId: number; updates: Record<string, unknown> }; output: void };
   'safety.deleteSafetyTask': { input: { nodeId: number }; output: void };
+  // SOTIF: functional insufficiencies (shared node, linked 1-to-n to malfunctions)
+  'safety.createFunctionalInsufficiency': { input: { namespace: string; name: string; description?: string; source?: string }; output: { node_id: number } };
+  'safety.linkFunctionalInsufficiencyToFm': { input: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }; output: { edge_id: number } };
+  'safety.unlinkFunctionalInsufficiencyFromFm': { input: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }; output: void };
+  'safety.getFunctionalInsufficiencies': { input: { failureModeNodeId: number }; output: ConceptInstanceData[] };
+  'safety.getAllFunctionalInsufficiencies': { input: { namespace: string }; output: ConceptInstanceData[] };
+  'safety.getMalfunctionsForFunctionalInsufficiency': { input: { functionalInsufficiencyNodeId: number }; output: ConceptInstanceData[] };
+  'safety.updateFunctionalInsufficiency': { input: { nodeId: number; updates: Record<string, unknown> }; output: void };
+  'safety.deleteFunctionalInsufficiency': { input: { nodeId: number }; output: void };
+  // SOTIF: triggering conditions (shared node, linked 1-to-n to malfunctions)
+  'safety.createTriggeringCondition': { input: { namespace: string; name: string; description?: string; source?: string }; output: { node_id: number } };
+  'safety.linkTriggeringConditionToFm': { input: { failureModeNodeId: number; triggeringConditionNodeId: number }; output: { edge_id: number } };
+  'safety.unlinkTriggeringConditionFromFm': { input: { failureModeNodeId: number; triggeringConditionNodeId: number }; output: void };
+  'safety.getTriggeringConditions': { input: { failureModeNodeId: number }; output: ConceptInstanceData[] };
+  'safety.getAllTriggeringConditions': { input: { namespace: string }; output: ConceptInstanceData[] };
+  'safety.getMalfunctionsForTriggeringCondition': { input: { triggeringConditionNodeId: number }; output: ConceptInstanceData[] };
+  'safety.updateTriggeringCondition': { input: { nodeId: number; updates: Record<string, unknown> }; output: void };
+  'safety.deleteTriggeringCondition': { input: { nodeId: number }; output: void };
   'safety.createRequirement': { input: { namespace: string; name: string; reqId: string; reqText: string; asil?: string; linkedToUrl?: string }; output: { node_id: number } };
   'safety.getRequirement': { input: { nodeId: number }; output: ConceptInstanceData };
   'safety.getRequirements': { input: { namespace: string }; output: ConceptInstanceData[] };
@@ -231,6 +251,12 @@ export interface IpcChannelMap {
   'safety.updateReviewItem': { input: { nodeId: number; updates: Record<string, unknown> }; output: void };
   'safety.deleteReviewItem': { input: { nodeId: number }; output: void };
   'safety.getMalfunctionsForElement': { input: { targetNodeId: number }; output: ConceptInstanceData[] };
+  /**
+   * Batch peer of `safety.getMalfunctionsForElement`. Every requested node id
+   * appears as a key, mapping to an empty array when it has none, so a caller
+   * never has to distinguish "no malfunctions" from "not requested".
+   */
+  'safety.getMalfunctionsForElements': { input: { targetNodeIds: number[]; safetyNamespace?: string }; output: Record<number, ConceptInstanceData[]> };
   'safety.getMalfunctionsForRequirement': { input: { requirementNodeId: number }; output: ConceptInstanceData[] };
   'safety.getRequirementsForFm': { input: { failureModeNodeId: number }; output: ConceptInstanceData[] };
   'safety.linkRequirementToFm': { input: { failureModeNodeId: number; requirementNodeId: number }; output: { edge_id: number } };
@@ -359,6 +385,14 @@ export interface IpcChannelMap {
     output: number;
   };
 
+  /**
+   * Global (per-user, workspace-independent) preference governing what the
+   * Imported Requirement picker does when a matching element's namespace
+   * isn't yet connected to the current analysis. See `CrossNsLinkSettings`.
+   */
+  'crossNsLinkSettings.getSettings':  { input: void;                 output: CrossNsLinkSettings };
+  'crossNsLinkSettings.saveSettings': { input: CrossNsLinkSettings;  output: void };
+
   // --- Canvas layout channels ---
   /**
    * Return the current Diagram_Layout: one LayoutRecord per positioned
@@ -378,6 +412,74 @@ export interface IpcChannelMap {
     input: { records: LayoutRecord[] };
     output: DiagramLayout;
   };
+  /**
+   * Positions stored for a view's content, keyed by the `node_id` of each
+   * representative's source element — which is what an evaluation result
+   * carries, so the caller does not have to redo the `stable_path` resolution
+   * the service just did (spec-view.md Phase 4.2).
+   *
+   * `sources` names the representatives whose positions are wanted; a source
+   * with no stored position, or one whose element no longer exists, is simply
+   * absent from the result and is auto-laid-out by the consumer.
+   *
+   * The wire shape is an array of pairs rather than a Map, because a Map does
+   * not survive structured cloning through every bridge this crosses.
+   */
+  'canvasLayout:getViewLayout': {
+    input: { viewName: string; sources: ViewLayoutSourceRef[] };
+    output: Array<{ nodeId: number; x: number; y: number }>;
+  };
+  /**
+   * Persist positions for a view's representatives, keyed by the `stable_path`
+   * of each one's source element so they survive a reimport and the node-id
+   * reassignment it brings. A source that cannot be resolved to a `stable_path`
+   * is skipped rather than keyed on something unstable.
+   */
+  'canvasLayout:setViewLayout': {
+    input: { viewName: string; records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }> };
+    output: DiagramLayout;
+  };
+
+  // --- View channels (docs/coreSpecs/RiaViews.md) ---
+  /** Enumerate view definitions. */
+  'views.list': { input: void; output: ViewDefinition[] };
+  /** Retrieve one view definition with its sources and metamodels. */
+  'views.get': { input: { name: string }; output: ViewDefinition };
+  /**
+   * Create a view definition. Validates name uniqueness across views and
+   * namespaces, at least one source namespace, existence of every referenced
+   * namespace/metamodel, resolvability of the mapping, and that `CommonModel` is
+   * not attached as a categorizational metamodel.
+   */
+  'views.create': { input: CreateViewParams; output: ViewDefinition };
+  /**
+   * Update a view definition. Changing `newName` or `metamodel` is
+   * identity-bearing and is handled as delete-and-create.
+   */
+  'views.update': { input: UpdateViewParams; output: ViewDefinition };
+  /** Delete a view definition and its relationships. No content cascade (no stored content). */
+  'views.delete': { input: { name: string }; output: void };
+  /**
+   * Compute a view's content in one of the four evaluation modes. Read-only:
+   * acquires no write lock and produces no writes to the graph.
+   */
+  'views.evaluate': { input: EvaluateViewParams; output: EvaluationResult };
+  /**
+   * Materialize a view's content into a new authored namespace. A write
+   * operation, unlike evaluation.
+   */
+  'views.materialize': { input: MaterializeViewParams; output: MaterializeResult };
+
+  // --- Presentation channels (spec-view.md Phase 4.1) ---
+  /**
+   * Concept presentation entries for one metamodel, ordered by `order` then
+   * `concept`. Read-only, and read from a JSON catalog rather than the graph:
+   * presentation is deliberately stored outside the view and outside
+   * `CommonModel` (docs/coreSpecs/RiaViews.md — P6). A consumer uses this
+   * instead of hardcoding per-metamodel concept lists; a concept with no entry
+   * is one the consumer does not render.
+   */
+  'presentation.get': { input: GetPresentationInput; output: ConceptPresentation[] };
 
   // --- Window channels (main-process only, not relayed to worker) ---
   'window.openGraphCore': { input: void; output: void };
@@ -584,6 +686,22 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'safety.getAllSafetyTasks',
   'safety.updateSafetyTask',
   'safety.deleteSafetyTask',
+  'safety.createFunctionalInsufficiency',
+  'safety.linkFunctionalInsufficiencyToFm',
+  'safety.unlinkFunctionalInsufficiencyFromFm',
+  'safety.getFunctionalInsufficiencies',
+  'safety.getAllFunctionalInsufficiencies',
+  'safety.getMalfunctionsForFunctionalInsufficiency',
+  'safety.updateFunctionalInsufficiency',
+  'safety.deleteFunctionalInsufficiency',
+  'safety.createTriggeringCondition',
+  'safety.linkTriggeringConditionToFm',
+  'safety.unlinkTriggeringConditionFromFm',
+  'safety.getTriggeringConditions',
+  'safety.getAllTriggeringConditions',
+  'safety.getMalfunctionsForTriggeringCondition',
+  'safety.updateTriggeringCondition',
+  'safety.deleteTriggeringCondition',
   'safety.createRequirement',
   'safety.getRequirement',
   'safety.getRequirements',
@@ -603,6 +721,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'safety.updateReviewItem',
   'safety.deleteReviewItem',
   'safety.getMalfunctionsForElement',
+  'safety.getMalfunctionsForElements',
   'safety.getMalfunctionsForRequirement',
   'safety.getRequirementsForFm',
   'safety.linkRequirementToFm',
@@ -651,9 +770,23 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'namespaceConnections:connect',
   'namespaceConnections:disconnect',
   'namespaceConnections:countDependents',
+  'crossNsLinkSettings.getSettings',
+  'crossNsLinkSettings.saveSettings',
   // canvas layout channels
   'canvasLayout:getLayout',
   'canvasLayout:setRecords',
+  'canvasLayout:getViewLayout',
+  'canvasLayout:setViewLayout',
+  // view channels
+  'views.list',
+  'views.get',
+  'views.create',
+  'views.update',
+  'views.delete',
+  'views.evaluate',
+  'views.materialize',
+  // presentation channels
+  'presentation.get',
   'namespaces.previewDeleteImpact',
   'namespaces.delete',
   'namespace.getSyncStatus',

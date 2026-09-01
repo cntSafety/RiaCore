@@ -42,10 +42,11 @@ export interface CanonicalRelTableDef {
   columns?: CanonicalColumnDef[];
 }
 
-// 1.3.0: profile_metadata was added to RIA_META_Metamodel. The version bump
-// ensures existing workspaces are rebuilt from ria-data so every registered
-// metamodel gets an ordered enum/slot/review metadata snapshot.
-export const SCHEMA_VERSION = '1.3.0';
+// 1.4.0: added RIA_UNIV_View and its three relationship tables (VIEW_DEFINEDBY,
+// VIEW_CATEGORIZEDBY, VIEW_SOURCE) for the View concept (docs/coreSpecs/RiaViews.md).
+// The version bump ensures existing workspaces are rebuilt from ria-data so the new
+// tables exist before any view definition can be created.
+export const SCHEMA_VERSION = '1.4.0';
 export const DB_SCHEMA_VERSION_TABLE = 'RIA_META_SchemaVersion';
 export const DB_SCHEMA_VERSION_NODE_ID = 'ria-core';
 
@@ -225,6 +226,26 @@ export const CANONICAL_NODE_TABLES: CanonicalNodeTableDef[] = [
     ],
   },
   {
+    // A view is a peer of a namespace: a named, saved, metamodel-typed virtual
+    // projection over one or more source namespaces (docs/coreSpecs/RiaViews.md).
+    // Only the definition is persisted here — view CONTENT is computed on demand
+    // and never stored, so there is deliberately no content_hash, computed_at, or
+    // staleness column (a materialized view would have to solve refresh
+    // orchestration and node-ID-reassignment survival; a virtual view has none of
+    // those problems by construction).
+    name: 'RIA_UNIV_View',
+    layer: 'universe',
+    primaryKey: 'name',
+    jsonColumns: ['parameters'],
+    columns: [
+      { name: 'name', type: 'STRING' },
+      { name: 'description', type: 'STRING' },
+      { name: 'metamodel', type: 'STRING' },
+      { name: 'mapping', type: 'STRING' },
+      { name: 'parameters', type: 'STRING' },
+    ],
+  },
+  {
     name: 'RIA_UNIV_NamespaceRelation',
     layer: 'cross_namespace',
     primaryKey: 'rel_id',
@@ -325,6 +346,14 @@ export const CANONICAL_REL_TABLES: CanonicalRelTableDef[] = [
   // Direction is always imported → authored; carries no payload columns — the
   // endpoint pair (imported source, authored target) is the entire content.
   { name: 'RIA_UNIV_NamespaceConnection', layer: 'universe', fromTable: 'RIA_UNIV_Namespace', toTable: 'RIA_UNIV_Namespace' },
+  // View relationships (docs/coreSpecs/RiaViews.md). Distinct tables rather than a
+  // reuse of RIA_META_DEFINEDBY / RIA_META_CATEGORIZEDBY, because a rel table
+  // declares a single FROM/TO pair and those are already declared FROM
+  // RIA_UNIV_Namespace — they cannot also serve a View source.
+  { name: 'RIA_UNIV_VIEW_DEFINEDBY', layer: 'universe', fromTable: 'RIA_UNIV_View', toTable: 'RIA_META_Metamodel' },
+  { name: 'RIA_UNIV_VIEW_CATEGORIZEDBY', layer: 'universe', fromTable: 'RIA_UNIV_View', toTable: 'RIA_META_Metamodel' },
+  // The defining relationship of the concept: a view with zero sources is invalid.
+  { name: 'RIA_UNIV_VIEW_SOURCE', layer: 'universe', fromTable: 'RIA_UNIV_View', toTable: 'RIA_UNIV_Namespace' },
   { name: 'RIA_UNIV_NSR_SOURCE', layer: 'cross_namespace', fromTable: 'RIA_UNIV_NamespaceRelation', toTable: 'RIA_UNIV_Namespace' },
   { name: 'RIA_UNIV_NSR_TARGET', layer: 'cross_namespace', fromTable: 'RIA_UNIV_NamespaceRelation', toTable: 'RIA_UNIV_Namespace' },
   {

@@ -39,6 +39,28 @@ export { createImportCrossNsImpactService } from './importers/import-crossns-imp
 export type { IImportCrossNsImpactService } from './importers/import-crossns-impact-service.js';
 export { createProfileRegistry } from './profiles/profile-registry.js';
 export type { IProfileRegistry, AuthoredProfileDescriptor } from './profiles/profile-registry.js';
+export { createBuiltInMetamodelRegistry } from './profiles/builtin-metamodel-registry.js';
+export type { IBuiltInMetamodelRegistry, BuiltInMetamodelDescriptor } from './profiles/builtin-metamodel-registry.js';
+export { createMappingRegistry } from './views/mapping-registry.js';
+export type { IMappingRegistry, MappingDescriptor, AttributeShaper, RawRepresentativeRow, ShapedRepresentative } from './views/mapping-registry.js';
+export { loadCatalog, resolveQuery, REPO_CATALOG_RELATIVE_PATH } from './views/query-catalog.js';
+export type { ViewQueryCatalog, ResolvedQuery, CatalogEntrySource } from './views/query-catalog.js';
+export { createViewService } from './views/view-service.js';
+export type { IViewService } from './views/view-service.js';
+export {
+  loadPresentationCatalog, resolvePresentation, presentationForMetamodel,
+  REPO_PRESENTATION_RELATIVE_PATH,
+} from './views/presentation-catalog.js';
+export type { PresentationCatalog, ResolvedPresentation, PresentationEntrySource } from './views/presentation-catalog.js';
+export {
+  registerBuiltInMappings,
+  ARXML_MAPPING_ID,
+  SYSML_V2_MAPPING_ID,
+  SPHINX_NEEDS_MAPPING_ID,
+  ARXML_QUERY_IDS,
+  SYSML_V2_QUERY_IDS,
+  SPHINX_NEEDS_QUERY_IDS,
+} from './views/builtin-mappings.js';
 export { createNamespaceService } from './namespaces/namespace-service.js';
 export type { INamespaceService } from './namespaces/namespace-service.js';
 export { createConnectionService } from './namespaces/connection-service.js';

@@ -1,0 +1,247 @@
+##
+## common-model.linkml.yaml
+##
+## Structural definition of the CommonModel metamodel (docs/coreSpecs/RiaViews.md).
+##
+## A deliberately small, unified vocabulary of structural and behavioural model
+## content, shared across source metamodels. CommonModel is purely an immediate
+## metamodel for views — it is never attached to a namespace, and never attached
+## to a view or namespace as a categorizational metamodel. No namespace declares
+## it as its immediate metamodel in v1 (view-only).
+##
+## Registered in RIA as "COMMON_MODEL", seeded idempotently on workspace open by
+## IBuiltInMetamodelRegistry — distinct from IProfileRegistry, which creates
+## authored namespaces from profiles and cannot express a namespace-less
+## metamodel (its AuthoredProfileDescriptor hardcodes namespaceRole: 'authored').
+##
+## Concept hierarchy:
+##   Element (abstract) -> StructuralElement | ActiveElement | Requirement
+##   Port (abstract)     -> InPort | OutPort | InOutPort
+##   Connection (standalone — deliberately not an Element or Port subtype, so
+##     there is never more than one containment path to the same element)
+##
+## Each concrete class redeclares the attributes it inherits from its abstract
+## parent, because RIA_META_NodeAttribute rows are registered per concrete
+## concept only (registerMetamodel skips abstract classes — they have no
+## instances) and are not resolved by walking RIA_META_CONCEPT_SUBTYPEOF at
+## query time.
+
+id: https://ria.io/schema/common-model/meta
+name: common_model_meta
+display_identifier_attrs:
+  - name
+title: CommonModel Metamodel — Unified Structural/Behavioural Vocabulary
+description: >-
+  A deliberately small, unified vocabulary of structural and behavioural model
+  content, shared across source metamodels, for use as a view's immediate
+  metamodel only. Registered in RIA as "COMMON_MODEL".
+version: "1.0.0"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  cm: https://example.org/common-model#
+
+default_prefix: cm
+default_range: string
+
+imports:
+  - linkml:types
+
+##############################################################################
+# CLASSES
+##############################################################################
+
+classes:
+
+  # ── Element (abstract) ────────────────────────────────────────────────────
+  Element:
+    abstract: true
+    description: Anything that can participate in the ownership hierarchy.
+
+  StructuralElement:
+    is_a: Element
+    description: Structural containers such as packages and compositions.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all subtypes.
+        required: true
+      qualified_name:
+        description: Fully qualified source name where available.
+        required: false
+      description:
+        description: Free text.
+        required: false
+      kind:
+        description: Source-specific discriminator, e.g. 'package', 'composition'.
+        required: false
+
+  ActiveElement:
+    is_a: Element
+    description: Elements that perform actions or have behaviour.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all subtypes.
+        required: true
+      qualified_name:
+        description: Fully qualified source name where available.
+        required: false
+      description:
+        description: Free text.
+        required: false
+      kind:
+        description: Source-specific discriminator, e.g. 'part', 'action', 'state'.
+        required: false
+
+  Requirement:
+    is_a: Element
+    description: A requirement.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all subtypes.
+        required: true
+      qualified_name:
+        description: Fully qualified source name where available.
+        required: false
+      description:
+        description: Free text.
+        required: false
+      requirement_id:
+        description: Source requirement identifier.
+        required: false
+      text:
+        description: Requirement statement text.
+        required: false
+
+  # ── Port (abstract) ───────────────────────────────────────────────────────
+  Port:
+    abstract: true
+    description: An interaction point exposed by an active element.
+
+  InPort:
+    is_a: Port
+    description: Receives from a connection.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all port subtypes.
+        required: true
+      kind:
+        description: Source-specific discriminator.
+        required: false
+
+  OutPort:
+    is_a: Port
+    description: Provides to a connection.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all port subtypes.
+        required: true
+      kind:
+        description: Source-specific discriminator.
+        required: false
+
+  InOutPort:
+    is_a: Port
+    description: Both directions.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Short name, inherited by all port subtypes.
+        required: true
+      kind:
+        description: Source-specific discriminator.
+        required: false
+
+  # ── Connection ─────────────────────────────────────────────────────────────
+  Connection:
+    description: >-
+      A connection between two ports, modelled as a node because in most source
+      metamodels a connector is a first-class element carrying its own name,
+      kind, and metadata. Deliberately not an Element or Port subtype.
+    attributes:
+      uuid:
+        description: Stable technical identity, assigned by materialization.
+        required: true
+        identifier: true
+      name:
+        description: Connector name where the source provides one.
+        required: false
+      kind:
+        description: e.g. 'assembly', 'delegation', 'flow'.
+        required: false
+
+##############################################################################
+# RELATIONSHIPS (slots)
+##############################################################################
+
+slots:
+
+  Ownership:
+    description: >-
+      Ownership hierarchy. Typed Element -> Element; the permitted pairs
+      (structural->structural, structural->active, structural->requirement,
+      active->active) are a mapping obligation and evaluation validation rule,
+      not a typing rule (docs/coreSpecs/RiaViews.md).
+    domain: Element
+    range: Element
+    is_containment: true
+
+  Expose:
+    description: Represents the exposure of a port by an active element.
+    domain: ActiveElement
+    range: Port
+    is_containment: true
+
+  ConnectionSource:
+    description: The connection's source port.
+    domain: Connection
+    range: Port
+
+  ConnectionTarget:
+    description: The connection's target port.
+    domain: Connection
+    range: Port
+
+  ConnectionOwner:
+    description: >-
+      The element that owns the connection — a composition in ARXML, the
+      enclosing part or package in SysML v2. Deliberately NOT containment:
+      Connection is not an Element, so Ownership cannot carry this, and the
+      objection to making Connection ownable is specifically about creating a
+      second *containment* path. A non-containment relation raises no such
+      conflict, and anchoring it at the Connection node mirrors how
+      ConnectionSource/ConnectionTarget already do (docs/coreSpecs/RiaViews.md).
+    domain: Connection
+    range: Element
+
+  Refinement:
+    description: Represents refinement relationships between requirements.
+    domain: Requirement
+    range: Requirement
+
+  Implements:
+    description: Represents implementation relationships between active elements and requirements.
+    domain: ActiveElement
+    range: Requirement

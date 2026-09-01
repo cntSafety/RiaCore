@@ -94,7 +94,7 @@ export function ScopedPropagationDiagram({
   onNavigateToReference,
 }: ScopedPropagationDiagramProps) {
   const queryClient = useQueryClient();
-  const { data, isLoading, isError, error } = usePropagationsForComponent(structuralNodeId);
+  const { data, isLoading, isError, error } = usePropagationsForComponent(structuralNodeId, namespace);
 
   // Normalise ScopedPropagationResult → PropagationCanvas types
   const { canvasNodes, canvasEdges } = useMemo(() => {

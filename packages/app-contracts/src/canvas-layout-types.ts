@@ -46,3 +46,20 @@ export interface LayoutRecord {
 
 /** The complete Diagram_Layout: at most one LayoutRecord per Layout_Key. */
 export type DiagramLayout = LayoutRecord[];
+
+/**
+ * One representative's source element, as the layout service needs it to key a
+ * stored position (spec-view.md Phase 4.2).
+ *
+ * `stable_path` is deliberately **not** carried here, nor on `SourceReference`:
+ * resolving it costs a query, and the great majority of evaluations never draw
+ * anything. The layout service resolves `node_id -> stable_path` itself, in one
+ * bounded query, only when a layout is actually saved or loaded.
+ *
+ * It lives in app-contracts because the view-layout channels carry it across
+ * the IPC boundary.
+ */
+export interface ViewLayoutSourceRef {
+  namespace: string;
+  nodeId: number;
+}

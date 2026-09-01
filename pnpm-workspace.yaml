@@ -9,6 +9,7 @@ allowBuilds:
   electron: true
   esbuild: true
   '@ladybugdb/core': true
+  electron-winstaller: true
 overrides:
   '@fast-csv/format>@types/node': 20.19.37
   '@fast-csv/parse>@types/node': 20.19.37

@@ -7,12 +7,17 @@ directories:
   output: dist-electron
 files:
   - '**/*'
+  # Portable Git is copied once to Contents/Resources/git below. electron-builder
+  # also collects production dependencies from the workspace, so this exclusion is
+  # required even though prepare-package.cjs already removes Dugite's bundled copy.
+  - '!node_modules/dugite/git'
+  - '!node_modules/dugite/git/**/*'
 extraResources:
   - from: .release/sidecar
     to: node-sidecar
     filter:
       - '**/*'
-  - from: "../../node_modules/.pnpm/dugite@2.7.1/node_modules/dugite/git"
+  - from: .release/git
     to: git
     filter:
       - '**/*'
@@ -27,11 +32,18 @@ win:
         - x64
 mac:
   icon: build/icons/mac/icon.icns
+  # Sign the complete app without an Apple certificate, locally and on CI.
+  # electron-builder's default entitlements allow JIT and disable library
+  # validation so ad-hoc-signed Electron and the Node sidecar can run.
+  identity: "-"
+  hardenedRuntime: true
+  notarize: false
   target:
     - target: dmg
       arch:
         - arm64
 linux:
+  executableName: RiaCore
   icon: build/icons/png
   target:
     - target: AppImage

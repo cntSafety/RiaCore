@@ -89,7 +89,7 @@ interface TreeContextMenuProps {
   onPasteMalfunction?: () => void;
   /** Whether the clipboard currently holds a copied malfunction. */
   hasCopiedMalfunction?: boolean;
-  /** Open the Table View lens for this architecture scope element. */
+  /** Open the Malfunctions lens (the malfunction table) for this architecture scope element. */
   onOpenInTableView?: () => void;
   /** Open the reconnect-orphaned-malfunction picker for this architecture element. */
   onReconnectOrphanedMalfunction?: () => void;
@@ -185,7 +185,7 @@ export function TreeContextMenu({
         items.push({ id: 'pasteMalfunction', label: `Paste Malfunction ${formatShortcutHint(['CmdOrCtrl', 'Shift'], 'M')}` });
         handlers.pasteMalfunction = onPasteMalfunction;
       }
-      items.push({ id: 'openInTableView', label: 'Open in Table View' });
+      items.push({ id: 'openInTableView', label: 'Open in Malfunctions' });
       handlers.openInTableView = onOpenInTableView;
     }
     if (isLlmEligible) {

@@ -17,17 +17,25 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { useState, useCallback, useRef } from 'react';
-import { Input, Popover, Button, List, Tag, Spin, Empty, Typography, theme } from 'antd';
+import { useState, useCallback, useRef, useMemo } from 'react';
+import { Input, Popover, Button, List, Tag, Spin, Empty, Typography, theme, App } from 'antd';
 import type { InputRef } from 'antd';
 import { SearchOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import type { ConceptInstanceData } from '@riacore/app-contracts';
 import { useSearchRequirementsAcrossNamespaces } from '../hooks/useSafetyQueries';
 import { useLinkDirectRequirementToFm } from '../hooks/useSafetyMutations';
+import { useNamespaceConnections, useConnectMutation } from '../../../../../hooks/useNamespaceConnections';
+import { useCrossNsLinkSettings } from '../../../../../hooks/useCrossNsLinkSettings';
 
 interface ImportedRequirementPickerProps {
   fmNodeId: number;
   linkedNodeIds: Set<number>;
+  /**
+   * Namespace the malfunction itself lives in. This is the connection
+   * *target* (authored side) for any match whose namespace isn't connected
+   * yet — see `CrossNsLinkSettings`.
+   */
+  malfunctionNamespace: string;
 }
 
 function getLabel(req: ConceptInstanceData): string {
@@ -52,14 +60,38 @@ function getNamespaceBadgeText(req: ConceptInstanceData): string {
   return req.namespace;
 }
 
-export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds }: ImportedRequirementPickerProps) {
+export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunctionNamespace }: ImportedRequirementPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const inputRef = useRef<InputRef>(null);
   const link = useLinkDirectRequirementToFm();
+  const connect = useConnectMutation();
+  const { message, modal } = App.useApp();
   const { token } = theme.useToken();
 
   const { data: results, isFetching, isError, error } = useSearchRequirementsAcrossNamespaces(query);
+  const { data: connectionGraph } = useNamespaceConnections();
+  const { data: linkSettings } = useCrossNsLinkSettings();
+  const unconnectedMode = linkSettings?.unconnectedNamespaceMode ?? 'prompt';
+
+  // Namespaces already connected (imported -> this malfunction's authored namespace).
+  const connectedNamespaces = useMemo(() => {
+    const names = (connectionGraph?.connections ?? [])
+      .filter((c) => c.target === malfunctionNamespace)
+      .map((c) => c.source);
+    return new Set(names);
+  }, [connectionGraph, malfunctionNamespace]);
+
+  const isConnected = useCallback(
+    (req: ConceptInstanceData) => connectedNamespaces.has(req.namespace),
+    [connectedNamespaces],
+  );
+
+  // In "restrict" mode, only ever show matches that can be linked immediately.
+  const visibleResults = useMemo(() => {
+    if (!results || unconnectedMode !== 'restrict') return results;
+    return results.filter(isConnected);
+  }, [results, unconnectedMode, isConnected]);
 
   const handleOpen = useCallback((visible: boolean) => {
     setOpen(visible);
@@ -69,15 +101,40 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds }: ImportedR
     }
   }, []);
 
-  const handleSelect = async (req: ConceptInstanceData) => {
+  const performLink = useCallback(async (req: ConceptInstanceData) => {
+    await link.mutateAsync({ failureModeNodeId: fmNodeId, requirementNodeId: req.node_id });
+    setOpen(false);
+    setQuery('');
+  }, [link, fmNodeId]);
+
+  const handleSelect = (req: ConceptInstanceData) => {
     if (linkedNodeIds.has(req.node_id)) return;
-    try {
-      await link.mutateAsync({ failureModeNodeId: fmNodeId, requirementNodeId: req.node_id });
-      setOpen(false);
-      setQuery('');
-    } catch {
-      // error surfaced by React Query
+
+    if (isConnected(req)) {
+      performLink(req).catch((err: unknown) => {
+        message.error(String((err as Error)?.message ?? 'Failed to link requirement'));
+      });
+      return;
     }
+
+    // Unreachable in "restrict" mode (unconnected matches are filtered out),
+    // but guard anyway in case settings change mid-search.
+    if (unconnectedMode === 'restrict') return;
+
+    modal.confirm({
+      title: 'Connect namespaces?',
+      content: `"${req.namespace}" isn't connected to this analysis yet. Connect it and link the requirement? Declining creates neither the connection nor the link.`,
+      okText: 'Connect & Link',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await connect.mutateAsync({ sourceNamespace: req.namespace, targetNamespace: malfunctionNamespace });
+          await performLink(req);
+        } catch (err) {
+          message.error(String((err as Error)?.message ?? 'Failed to connect and link requirement'));
+        }
+      },
+    });
   };
 
   const content = (
@@ -102,15 +159,24 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds }: ImportedR
         <Typography.Text type="secondary" style={{ fontSize: 12, padding: '8px 0', display: 'block' }}>
           Type to search across imported namespaces
         </Typography.Text>
-      ) : !results || results.length === 0 ? (
-        <Empty description="No requirements found" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '8px 0' }} />
+      ) : !visibleResults || visibleResults.length === 0 ? (
+        results && results.length > 0 ? (
+          <Empty
+            description="Matches exist, but their namespaces aren't connected to this analysis yet. Change this in Settings → Imported Requirement Linking."
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            style={{ margin: '8px 0' }}
+          />
+        ) : (
+          <Empty description="No requirements found" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '8px 0' }} />
+        )
       ) : (
         <List
           size="small"
-          dataSource={results}
+          dataSource={visibleResults}
           style={{ maxHeight: 280, overflowY: 'auto' }}
           renderItem={(req) => {
             const already = linkedNodeIds.has(req.node_id);
+            const connected = isConnected(req);
             return (
               <List.Item
                 style={{
@@ -130,6 +196,9 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds }: ImportedR
                     {getLabel(req)}
                   </span>
                   {already && <Tag style={{ marginLeft: 'auto', fontSize: 10 }}>Linked</Tag>}
+                  {!already && !connected && (
+                    <Tag color="orange" style={{ marginLeft: 'auto', fontSize: 10 }}>Not connected</Tag>
+                  )}
                 </div>
               </List.Item>
             );

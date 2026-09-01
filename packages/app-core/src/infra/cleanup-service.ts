@@ -73,6 +73,17 @@ async function cleanupTempNamespaces(db: IDbModule): Promise<CleanupStepResult> 
   // Delete in dependency order (mirrors deleteNamespace in persistor-helpers)
   for (const ns of names) {
     const esc = ns.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    // Names of the views about to be cascade-deleted below, collected before the
+    // cascade removes them. Their canvas layout records are keyed by the
+    // Element_Kind 'view:<viewName>' (spec-view.md Phase 4.2) and there is
+    // nothing left to derive that from afterwards.
+    const cascadedViewRows = await db.runQuery(
+      `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(nsNode:RIA_UNIV_Namespace)
+       WHERE nsNode.name = $name RETURN DISTINCT v.name AS name`,
+      { name: ns },
+    );
+    const cascadedViewNames = cascadedViewRows.map((row) => String(row.name ?? '')).filter((n) => n.length > 0);
+
     const stmts = [
       `MATCH (a:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(b:RIA_UNIV_ConceptInstance)
        WHERE a.namespace = '${esc}' OR b.namespace = '${esc}' DELETE r`,
@@ -90,7 +101,22 @@ async function cleanupTempNamespaces(db: IDbModule): Promise<CleanupStepResult> 
        WHERE nr.source_namespace = '${esc}' OR nr.target_namespace = '${esc}' DELETE nr`,
       // Delete the associated Source record if one exists (supervised-update creates one)
       `MATCH (s:RIA_SRC_Source) WHERE s.target_namespace = '${esc}' DETACH DELETE s`,
+      // A view does not outlive its sources (docs/coreSpecs/RiaViews.md), so a
+      // namespace deletion cascades to every view referencing it. Must run
+      // BEFORE the namespace DETACH DELETE below, which removes the VIEW_SOURCE
+      // edge that finds them. Kept in step with the same statement in
+      // deleteNamespace (persistor-helpers.ts) — the two sequences are separate
+      // copies and this one had already drifted out of date once.
+      `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(ns:RIA_UNIV_Namespace)
+       WHERE ns.name = '${esc}' WITH DISTINCT v DETACH DELETE v`,
       `MATCH (ns:RIA_UNIV_Namespace) WHERE ns.name = '${esc}' DETACH DELETE ns`,
+      // Companion statement for the cascade above — layout records of a deleted
+      // view are keyed 'view:<viewName>' and no other statement here reaches
+      // them. Mirrors deleteNamespace (persistor-helpers.ts).
+      ...cascadedViewNames.map((viewName) => {
+        const viewEsc = viewName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `MATCH (l:RIA_UNIV_CanvasLayout) WHERE l.element_kind = 'view:${viewEsc}' DELETE l`;
+      }),
     ];
     for (const stmt of stmts) {
       await db.runQuery(stmt);
@@ -164,6 +190,61 @@ async function cleanupDanglingNodes(db: IDbModule): Promise<CleanupStepResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Step 3 — Remove dangling views (no remaining source namespace)
+// ---------------------------------------------------------------------------
+// A view is derived and is not meaningful without its full source set, so
+// deleting a namespace deletes every view over it (docs/coreSpecs/RiaViews.md).
+// A view left with zero RIA_UNIV_VIEW_SOURCE edges is therefore an invalid
+// state — reachable only if a deletion path forgot the cascade, or was
+// interrupted between the two statements. This is the safety net for that, the
+// counterpart of danglingNodes for the view tables.
+//
+// Note this is NOT a change to cleanupDanglingNodes: that routine remains
+// deliberately view-blind, because a view never writes a ConceptInstance. Any
+// future change that materializes view content into RIA_UNIV_ConceptInstance
+// must make that routine view-aware first.
+
+async function cleanupDanglingViews(db: IDbModule): Promise<CleanupStepResult> {
+  const rows = await db.runQuery(
+    `MATCH (v:RIA_UNIV_View)
+     WHERE NOT EXISTS { MATCH (v)-[:RIA_UNIV_VIEW_SOURCE]->(:RIA_UNIV_Namespace) }
+     RETURN v.name AS name`,
+  );
+
+  if (rows.length === 0) {
+    return { name: 'danglingViews', removedCount: 0 };
+  }
+
+  const names = rows.map(r => String(r.name ?? ''));
+
+  // DETACH DELETE removes the view's DEFINEDBY/CATEGORIZEDBY edges with it; a
+  // view has no stored content to clean up beyond its own relationships.
+  await db.runQuery(
+    `MATCH (v:RIA_UNIV_View)
+     WHERE NOT EXISTS { MATCH (v)-[:RIA_UNIV_VIEW_SOURCE]->(:RIA_UNIV_Namespace) }
+     DETACH DELETE v`,
+  );
+
+  // ...and the canvas layout records belonging to their content, which are
+  // keyed by the Element_Kind 'view:<viewName>' and have no resolver, so
+  // nothing else would ever prune them (spec-view.md Phase 4.2).
+  for (const name of names) {
+    await db.runQuery(
+      `MATCH (l:RIA_UNIV_CanvasLayout) WHERE l.element_kind = $element_kind DELETE l`,
+      { element_kind: `view:${name}` },
+    );
+  }
+
+  await db.checkpoint();
+
+  return {
+    name: 'danglingViews',
+    removedCount: names.length,
+    details: `Removed view(s) with no source namespace: ${names.join(', ')}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Step registry
 // ---------------------------------------------------------------------------
 // Add new cleanup steps here.  Steps are executed in order; earlier steps
@@ -189,6 +270,11 @@ const CLEANUP_STEPS: CleanupStep[] = [
     name: 'danglingNodes',
     description: 'Delete concept nodes whose owning namespace no longer exists',
     run: cleanupDanglingNodes,
+  },
+  {
+    name: 'danglingViews',
+    description: 'Delete views left with no source namespace',
+    run: cleanupDanglingViews,
   },
   // ── Future cleanup steps ─────────────────────────────────────────────────
   // To add another step, define a function above and add an entry here, e.g.:

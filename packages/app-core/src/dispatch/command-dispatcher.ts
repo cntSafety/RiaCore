@@ -31,6 +31,7 @@ import { registerProvisioningChannels } from './handlers/provisioning-channels.j
 import { registerNamespaceChannels } from './handlers/namespace-channels.js';
 import { registerMetamodelChannels } from './handlers/metamodel-channels.js';
 import { registerNamespaceConnectionChannels } from './handlers/namespace-connection-channels.js';
+import { registerCrossNsLinkSettingsChannels } from './handlers/cross-ns-link-settings-channels.js';
 import { registerCanvasLayoutChannels } from './handlers/canvas-layout-channels.js';
 import { registerNamespaceMergeChannels } from './handlers/namespace-merge-channels.js';
 import { registerGraphChannels } from './handlers/graph-channels.js';
@@ -40,6 +41,8 @@ import { registerDiffChannels } from './handlers/diff-channels.js';
 import { registerGitChannels } from '../git/git-commands.js';
 import { registerCheckChannels } from './handlers/check-channels.js';
 import { registerLlmChannels } from './handlers/llm-channels.js';
+import { registerViewChannels } from './handlers/view-channels.js';
+import { registerPresentationChannels } from './handlers/presentation-channels.js';
 
 export interface ICommandDispatcher {
   /** Dispatch a channel call. Throws on unknown channel or service error. */
@@ -78,6 +81,7 @@ export function createCommandDispatcher(): ICommandDispatcher {
   registerNamespaceChannels(reg);
   registerMetamodelChannels(reg);
   registerNamespaceConnectionChannels(reg);
+  registerCrossNsLinkSettingsChannels(reg);
   registerCanvasLayoutChannels(reg);
   registerNamespaceMergeChannels(reg);
   registerGraphChannels(reg);
@@ -87,6 +91,8 @@ export function createCommandDispatcher(): ICommandDispatcher {
   registerGitChannels(reg);
   registerCheckChannels(reg);
   registerLlmChannels(reg);
+  registerViewChannels(reg);
+  registerPresentationChannels(reg);
 
   const { map: registry } = reg;
 
@@ -201,6 +207,11 @@ export function createCommandDispatcher(): ICommandDispatcher {
     'imports.run',
     'persistor.load',
     'db.close',
+    // Materializing a view creates a new authored namespace with real content,
+    // exactly like imports.run — a stale containment/hidden-concept cache would
+    // misrender it. The other views.* channels never touch namespace/concept
+    // data, so they don't need this.
+    'views.materialize',
   ]);
 
   return {

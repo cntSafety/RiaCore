@@ -25,6 +25,7 @@ import {
   SafetyCertificateOutlined,
   SecurityScanOutlined,
   ThunderboltOutlined,
+  RadarChartOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -48,6 +49,7 @@ type NamespaceKind =
   | 'safety_analysis'
   | 'system_safety_analysis'
   | 'monitoring_analysis'
+  | 'sotif_analysis'
   | 'security_analysis';
 
 const KIND_DECORATION: Record<NamespaceKind, NamespaceTypeDecoration> = {
@@ -66,6 +68,11 @@ const KIND_DECORATION: Record<NamespaceKind, NamespaceTypeDecoration> = {
   // "a safety analysis", but uses a thunderbolt/sparks icon to signal the
   // runtime-monitoring viewpoint. Keyed off the MONITORING_ANALYSIS metamodel.
   monitoring_analysis: { icon: ThunderboltOutlined,        color: '#ea7317', label: 'Monitoring Analysis' },
+  // SOTIF analysis shares the safety family's orange accent so it reads as
+  // "a safety analysis", but uses a radar/scenario icon to signal the
+  // no-fault, scenario-based SOTIF viewpoint. Keyed off the SOTIF_ANALYSIS
+  // metamodel, so it stays driven by the profile's YAML identity.
+  sotif_analysis:    { icon: RadarChartOutlined,           color: '#e8590c', label: 'SOTIF Analysis' },
   security_analysis: { icon: SecurityScanOutlined,         color: '#d4a017', label: 'Security Analysis' },
 };
 
@@ -96,6 +103,7 @@ function kindFromMetamodel(metamodel: string): NamespaceKind | null {
   if (metamodel === 'SAFETY_ANALYSIS') return 'safety_analysis';
   if (metamodel === 'SYSTEM_SAFETY_ANALYSIS') return 'system_safety_analysis';
   if (metamodel === 'MONITORING_ANALYSIS') return 'monitoring_analysis';
+  if (metamodel === 'SOTIF_ANALYSIS') return 'sotif_analysis';
   if (metamodel === 'SECURITY_ANALYSIS') return 'security_analysis';
   return null;
 }

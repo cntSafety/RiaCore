@@ -120,8 +120,19 @@ import type {
   NamespaceConnectionGraph,
   ConnectionEntry,
   DisconnectResult,
+  CrossNsLinkSettings,
   LayoutRecord,
+  ViewLayoutSourceRef,
   DiagramLayout,
+  ViewDefinition,
+  CreateViewParams,
+  UpdateViewParams,
+  EvaluateViewParams,
+  EvaluationResult,
+  MaterializeViewParams,
+  MaterializeResult,
+  ConceptPresentation,
+  GetPresentationInput,
 } from '@riacore/app-contracts';
 import type {
   GitRepoStatus,
@@ -232,9 +243,21 @@ declare global {
         disconnect(params: { importedNamespace: string; authoredNamespace: string; deleteDependents: boolean }): Promise<DisconnectResult>;
         countDependents(params: { importedNamespace: string; authoredNamespace: string }): Promise<number>;
       };
+      crossNsLinkSettings: {
+        getSettings(): Promise<CrossNsLinkSettings>;
+        saveSettings(settings: CrossNsLinkSettings): Promise<void>;
+      };
       canvasLayout: {
         getLayout(): Promise<DiagramLayout>;
         setRecords(records: LayoutRecord[]): Promise<DiagramLayout>;
+        getViewLayout(
+          viewName: string,
+          sources: ViewLayoutSourceRef[],
+        ): Promise<Array<{ nodeId: number; x: number; y: number }>>;
+        setViewLayout(
+          viewName: string,
+          records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }>,
+        ): Promise<DiagramLayout>;
       };
       namespaces: {
         list(): Promise<NamespaceInfo[]>;
@@ -262,7 +285,7 @@ declare global {
         addPropagation(params: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }): Promise<{ edge_id: number }>;
         removePropagation(params: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }): Promise<void>;
         getPropagations(params: { failureModeNodeId: number }): Promise<{ propagatesTo: (ConceptInstanceData & { occursAtTarget?: { node_id: number; namespace: string; concept: string } | null })[]; propagatesFrom: (ConceptInstanceData & { occursAtTarget?: { node_id: number; namespace: string; concept: string } | null })[] }>;
-        getPropagationsForComponent(params: { structuralNodeId: number }): Promise<ScopedPropagationResult>;
+        getPropagationsForComponent(params: { structuralNodeId: number; safetyNamespace?: string }): Promise<ScopedPropagationResult>;
         createRiskRating(params: CreateRiskRatingParams): Promise<{ node_id: number }>;
         getRiskRating(params: { failureModeNodeId: number }): Promise<ConceptInstanceData | null>;
         updateRiskRating(params: { nodeId: number; updates: Record<string, unknown> }): Promise<void>;
@@ -276,6 +299,22 @@ declare global {
         getMalfunctionForReviewItem(params: { reviewItemNodeId: number }): Promise<ConceptInstanceData | null>;
         updateSafetyTask(params: { nodeId: number; updates: Record<string, unknown> }): Promise<void>;
         deleteSafetyTask(params: { nodeId: number }): Promise<void>;
+        createFunctionalInsufficiency(params: { namespace: string; name: string; description?: string; source?: string }): Promise<{ node_id: number }>;
+        linkFunctionalInsufficiencyToFm(params: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }): Promise<{ edge_id: number }>;
+        unlinkFunctionalInsufficiencyFromFm(params: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }): Promise<void>;
+        getFunctionalInsufficiencies(params: { failureModeNodeId: number }): Promise<ConceptInstanceData[]>;
+        getAllFunctionalInsufficiencies(params: { namespace: string }): Promise<ConceptInstanceData[]>;
+        getMalfunctionsForFunctionalInsufficiency(params: { functionalInsufficiencyNodeId: number }): Promise<ConceptInstanceData[]>;
+        updateFunctionalInsufficiency(params: { nodeId: number; updates: Record<string, unknown> }): Promise<void>;
+        deleteFunctionalInsufficiency(params: { nodeId: number }): Promise<void>;
+        createTriggeringCondition(params: { namespace: string; name: string; description?: string; source?: string }): Promise<{ node_id: number }>;
+        linkTriggeringConditionToFm(params: { failureModeNodeId: number; triggeringConditionNodeId: number }): Promise<{ edge_id: number }>;
+        unlinkTriggeringConditionFromFm(params: { failureModeNodeId: number; triggeringConditionNodeId: number }): Promise<void>;
+        getTriggeringConditions(params: { failureModeNodeId: number }): Promise<ConceptInstanceData[]>;
+        getAllTriggeringConditions(params: { namespace: string }): Promise<ConceptInstanceData[]>;
+        getMalfunctionsForTriggeringCondition(params: { triggeringConditionNodeId: number }): Promise<ConceptInstanceData[]>;
+        updateTriggeringCondition(params: { nodeId: number; updates: Record<string, unknown> }): Promise<void>;
+        deleteTriggeringCondition(params: { nodeId: number }): Promise<void>;
         createRequirement(params: { namespace: string; name: string; reqId: string; reqText: string; asil?: string; linkedToUrl?: string }): Promise<{ node_id: number }>;
         getRequirement(params: { nodeId: number }): Promise<ConceptInstanceData>;
         getRequirements(params: { namespace: string }): Promise<ConceptInstanceData[]>;
@@ -295,6 +334,7 @@ declare global {
         updateReviewItem(params: { nodeId: number; updates: Record<string, unknown> }): Promise<void>;
         deleteReviewItem(params: { nodeId: number }): Promise<void>;
         getMalfunctionsForElement(params: { targetNodeId: number }): Promise<ConceptInstanceData[]>;
+        getMalfunctionsForElements(params: { targetNodeIds: number[]; safetyNamespace?: string }): Promise<Record<number, ConceptInstanceData[]>>;
         getMalfunctionsForRequirement(params: { requirementNodeId: number }): Promise<ConceptInstanceData[]>;
         getMalfunctionForTask(params: { safetyTaskNodeId: number }): Promise<ConceptInstanceData | null>;
         getRequirementsForFm(params: { failureModeNodeId: number }): Promise<ConceptInstanceData[]>;
@@ -393,6 +433,18 @@ declare global {
         invalidate(payload: CacheInvalidationOutbound): void;
         /** Subscribe to inbound cache-invalidation messages. Requirements: 15.5 */
         onCacheInvalidate(handler: (msg: CacheInvalidationMessage) => void): () => void;
+      };
+      views: {
+        list(): Promise<ViewDefinition[]>;
+        get(params: { name: string }): Promise<ViewDefinition>;
+        create(params: CreateViewParams): Promise<ViewDefinition>;
+        update(params: UpdateViewParams): Promise<ViewDefinition>;
+        delete(params: { name: string }): Promise<void>;
+        evaluate(params: EvaluateViewParams): Promise<EvaluationResult>;
+        materialize(params: MaterializeViewParams): Promise<MaterializeResult>;
+      };
+      presentation: {
+        get(params: GetPresentationInput): Promise<ConceptPresentation[]>;
       };
       arxml: {
         getPortConnectors(params: GetPortConnectorsInput): Promise<PortConnectorResult>;

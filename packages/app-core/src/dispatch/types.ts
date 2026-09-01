@@ -28,10 +28,13 @@ import type { IConnectionService } from '../namespaces/connection-service.js';
 import type { IInstanceService } from '../namespaces/instance-service.js';
 import type { ISafetyCommands } from '../safety/safety-commands.js';
 import type { IPersistorService } from '../persistor/persistor.js';
+import type { IViewService } from '../views/view-service.js';
+import type { IMappingRegistry } from '../views/mapping-registry.js';
 import type { ImportLogger } from '../infra/logger.js';
 import type { NamespaceDiffResult, ThreeWayDiffResult, CheckAttributeEntry } from '@riacore/app-contracts';
 import type { IGitService } from '@riacore/git-service';
 import type { LlmSettingsStore } from '../llm/llm-settings-store.js';
+import type { CrossNsLinkSettingsStore } from '../settings/cross-ns-link-settings-store.js';
 import type { WebContentsLike, ReviewRunRegistry } from '../llm/review-run-registry.js';
 import type { LanguageModel } from 'ai';
 
@@ -65,6 +68,10 @@ export interface ServiceDependencies {
   instanceService?: IInstanceService;
   safetyCommands?: ISafetyCommands;
   persistorService?: IPersistorService;
+  /** View definition CRUD, evaluation, and materialization (docs/coreSpecs/RiaViews.md). */
+  viewService?: IViewService;
+  /** Mapping_Registry backing viewService's evaluate/materialize — resolves a view's `mapping` attribute. */
+  mappingRegistry?: IMappingRegistry;
   /** Factory for creating per-operation loggers; receives workingDir */
   createLogger?: (workingDir: string) => ImportLogger;
   /** Git service for version control operations */
@@ -83,6 +90,17 @@ export interface ServiceDependencies {
    * @see Requirement 12.4 — credential boundary
    */
   llmSettingsStore?: LlmSettingsStore;
+  /**
+   * Persistent store for {@link CrossNsLinkSettings} — the preference
+   * governing what the Imported Requirement picker does when a matched
+   * element's namespace isn't connected yet. Injected by the host with
+   * `app.getPath('userData')`, same placement rationale as {@link LlmSettingsStore}
+   * but with no secrets, so no main-process interception is required.
+   *
+   * Optional: when absent, `crossNsLinkSettings.getSettings` falls back to
+   * `DEFAULT_CROSS_NS_LINK_SETTINGS` and `crossNsLinkSettings.saveSettings` throws.
+   */
+  crossNsLinkSettingsStore?: CrossNsLinkSettingsStore;
   /**
    * Test seam: a pre-built Vercel AI SDK `LanguageModel` to use instead of
    * constructing one from stored credentials. When set, the `llm.startReview`

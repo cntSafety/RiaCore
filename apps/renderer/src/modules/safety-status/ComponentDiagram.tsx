@@ -34,6 +34,8 @@
 import { useState } from 'react';
 import { Modal, Descriptions, Tag } from 'antd';
 import type { ComponentExportData, MalfunctionExportData, PortExportData } from '@riacore/app-contracts';
+import { ActionPriorityTag } from '../namespace/editors/safety-analysis/components/ActionPriorityTag';
+import { useSafetyProfileMetadata } from '../namespace/editors/safety-analysis/hooks/useSafetyProfileMetadata';
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
 
@@ -100,6 +102,7 @@ interface ComponentDiagramProps {
 
 export function ComponentDiagram({ component }: ComponentDiagramProps) {
   const [selectedMF, setSelectedMF] = useState<MalfunctionExportData | null>(null);
+  const profile = useSafetyProfileMetadata();
 
   const { receiverPorts, providerPorts } = derivePorts(component);
   const allMFs = [...component.functionalMFs, ...component.receiverPortMFs, ...component.providerPortMFs];
@@ -279,6 +282,14 @@ export function ComponentDiagram({ component }: ComponentDiagramProps) {
                 <Descriptions.Item label="Occurrence">{selectedMF.riskRating.has_occurrence_level}</Descriptions.Item>
                 <Descriptions.Item label="Detection">{selectedMF.riskRating.has_detection_level}</Descriptions.Item>
                 <Descriptions.Item label="RPN">{selectedMF.riskRating.risk_priority_number}</Descriptions.Item>
+                <Descriptions.Item label="Action Priority">
+                  <ActionPriorityTag
+                    actionPriority={profile.actionPriority}
+                    severity={selectedMF.riskRating.has_severity}
+                    occurrence={selectedMF.riskRating.has_occurrence_level}
+                    detection={selectedMF.riskRating.has_detection_level}
+                  />
+                </Descriptions.Item>
               </>
             )}
           </Descriptions>

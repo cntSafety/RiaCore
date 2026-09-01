@@ -74,7 +74,7 @@ const BUILT_IN_PROFILES: AuthoredProfileDescriptor[] = [
   {
     profileId: 'safety-core',
     label: 'SW Safety Analysis',
-    version: '4.0.5',
+    version: '4.0.6',
     description: 'FMEA-style safety analysis authored profile.',
     metamodelName: 'SAFETY_ANALYSIS',
     // Composed from the shared base + a thin SW-safety overlay.
@@ -132,6 +132,26 @@ const BUILT_IN_PROFILES: AuthoredProfileDescriptor[] = [
     // Shares the 'Safety-Analysis' owning application so it routes to the same
     // SafetyEditor. The distinct metamodel (MONITORING_ANALYSIS) keeps its own
     // profile_metadata snapshot (monitoring occurrence/detection wording).
+    owningApplication: 'Safety-Analysis',
+  },
+  {
+    profileId: 'sotif-core',
+    label: 'SOTIF Analysis',
+    version: '1.0.0',
+    description:
+      'SOTIF analysis authored profile. Shares the FMEA base with the safety profiles but characterises each no-fault concern by its functional insufficiencies and triggering conditions instead of a Severity/Occurrence/Detection risk rating; Risk Rating is reduced to a free-text residual-risk argument. Reuses the Safety Analysis editor.',
+    metamodelName: 'SOTIF_ANALYSIS',
+    // Composed from the shared base + a thin SOTIF overlay that adds the
+    // functional_insufficiency and triggering_condition concepts.
+    layers: [
+      path.join(PROFILES_ROOT, '_base', 'safety-analysis-base.linkml.yaml'),
+      path.join(PROFILES_ROOT, 'sotif-core', 'sotif-meta', 'sotif.overlay.linkml.yaml'),
+    ],
+    namespaceRole: 'authored',
+    // Shares the 'Safety-Analysis' owning application so it routes to the same
+    // SafetyEditor. The distinct metamodel (SOTIF_ANALYSIS) keeps its own
+    // profile_metadata snapshot (functional insufficiency / triggering condition
+    // catalogs, SOTIF review checklist).
     owningApplication: 'Safety-Analysis',
   },
 ];

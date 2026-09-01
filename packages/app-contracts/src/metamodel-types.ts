@@ -19,6 +19,8 @@
  */
 /** Contract types for metamodel-driven rendering and profile metadata. */
 
+import type { ActionPriorityMetadata } from './action-priority-types.js';
+
 /** Resolved rendering settings for a single metamodel concept. */
 export interface ConceptRendering {
   /** ant-design icon component name (e.g. "BlockOutlined"); absent when omitted. */
@@ -134,6 +136,8 @@ export interface MetamodelProfileMetadata {
   slots: ProfileSlotMetadata[];
   enums: ProfileEnumMetadata[];
   review?: ProfileReviewMetadata;
+  /** Action Priority lookup table, parsed from `annotations.action_priority`. Absent when the profile has not migrated from RPN. */
+  actionPriority?: ActionPriorityMetadata;
   /** Ordered list of attribute names to try when producing a display label for a node from this metamodel. */
   displayIdentifierAttrs?: string[];
 }

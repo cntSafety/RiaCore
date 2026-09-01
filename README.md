@@ -1,10 +1,22 @@
-# RiaCore
+# RiaCore: Modernize Your Safety Engineering Workflow
 
-A desktop application for working with RIA graph data, built as a pnpm monorepo with TypeScript.
+Struggling to bridge the gap between complex system design and rigorous safety standards? RiaCore is an open-source toolkit designed to streamline your safety analysis process, making safety engineering more accessible, collaborative, and structured.
 
-Main repository: [github.com/cntSafety/RiaCore](https://github.com/cntSafety/RiaCore)
+Built with the systems engineer in mind, RiaCore transforms fragmented documentation into a cohesive, analysis-ready framework. Whether you are managing safety goals, defining system requirements, or architecting complex software, RiaCore provides the environment you need to keep your development lifecycle compliant and efficient.
 
-## Download
+Why choose RiaCore?
+
+- Continuous Safety Integration: Say goodbye to the "wait until the end" approach to safety. RiaCore is highly efficient at continuously updating imported artifacts, allowing you to perform ongoing safety analyses and effortlessly track project progress alongside the engineering lifecycle.
+
+- Integrated Analysis: Move seamlessly from safety goals to software architecture within a unified platform.
+
+- Industry-Ready: Designed to handle standard workflows, including support for formats like ARXML, making it a natural fit for automotive and embedded systems projects.
+
+- Open-Source Flexibility: Leverage a transparent, community-driven tool that puts you in control of your safety engineering pipeline.
+
+Stop wrestling with disconnected spreadsheets and manual tracking. Empower your team with a tool built for the modern safety lifecycle—check out RiaCore.
+
+## Installation
 
 You do not need to build anything to try RiaCore. Prebuilt applications are published in the
 [Releases section](https://github.com/cntSafety/RiaCore/releases) of the main repository:
@@ -16,19 +28,14 @@ You do not need to build anything to try RiaCore. Prebuilt applications are publ
 Grab the package for your platform, start the app, and continue with
 [Getting Started with Sample Data](#getting-started-with-sample-data).
 
+If you would like to build RiaCore from source, see [Building from source](#building-from-source) below.
+
 ## Screenshots
 
 ![RiaCore desktop app — namespace tree and analysis view](readme_img.png)
 
 ![RiaCore desktop app — safety analysis working area](readme_img2.png)
 
-## ⚠️ Qualification notice
-
-**No tool qualification is provided with RiaCore.** Before using it in any project, the qualification
-has to be performed according to that project's specific requirements and the applicable safety
-standards — for example ISO 26262, IEC 61508, or others relevant to your domain. Deciding on the
-required qualification measures, performing them, and documenting the evidence remains the
-responsibility of the using project.
 
 ## Getting Started with Sample Data
 
@@ -44,6 +51,14 @@ git clone https://github.com/cntSafety/ref-project.git
 ```
 
 Then point RiaCore at the cloned directory as its working directory and load the data from there.
+
+## ⚠️ Qualification notice
+
+**No tool qualification is provided with RiaCore.** Before using it in any project, the qualification
+has to be performed according to that project's specific requirements and the applicable safety
+standards — for example ISO 26262, IEC 61508, or others relevant to your domain. Deciding on the
+required qualification measures, performing them, and documenting the evidence remains the
+responsibility of the using project.
 
 ## Where data lives
 
@@ -73,7 +88,7 @@ For a given working directory:
 
 ---
 
-## Building from source (optional)
+## Building from source
 
 Only needed if you want to develop RiaCore or build your own packages. For normal use, take a
 prebuilt application from the [Releases section](https://github.com/cntSafety/RiaCore/releases) instead.

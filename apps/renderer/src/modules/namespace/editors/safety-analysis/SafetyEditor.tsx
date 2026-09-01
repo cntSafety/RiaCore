@@ -197,8 +197,9 @@ export function SafetyEditor({ ns }: SafetyEditorProps) {
     void treePanelRef.current?.navigateToSelectedReference(node);
   }, []);
 
-  // Open Table View for the right-clicked architecture scope element.
-  // Selects the node as the scope (if not already selected) and switches the lens.
+  // Open the Malfunctions lens (the malfunction table) for the right-clicked
+  // architecture scope element. Selects the node as the scope (if not already
+  // selected) and switches the lens.
   const handleOpenInTableView = useCallback((node: SelectedTreeElement) => {
     setSelectedTreeElement(node);
     useWorkspaceStore.getState().setElementLensView('table');

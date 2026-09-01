@@ -42,15 +42,24 @@ interface XmlNode {
   attrs: Record<string, string>;
   children: XmlNode[];
   text: string;
+  /** Ordered text/children, needed for mixed-content documentation such as DESC. */
+  content: Array<string | XmlNode>;
+}
+
+function decodeXmlText(text: string): string {
+  const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+  return text.replace(/&(#x[\da-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (match, entity: string) => {
+    if (!entity.startsWith('#')) return entities[entity];
+    const value = entity.startsWith('#x') ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+    return value > 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff)
+      ? String.fromCodePoint(value) : match;
+  });
 }
 
 function parseXml(source: string): XmlNode | null {
-  // Strip processing instructions and XML comments
-  const xml = source
-    .replace(/<\?[^?]*\?>/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
+  const xml = source;
 
-  const root: XmlNode = { tag: '#root', attrs: {}, children: [], text: '' };
+  const root: XmlNode = { tag: '#root', attrs: {}, children: [], text: '', content: [] };
   const stack: XmlNode[] = [root];
   let i = 0;
   const len = xml.length;
@@ -61,11 +70,35 @@ function parseXml(source: string): XmlNode | null {
 
     // Text between tags
     if (ltIdx > i) {
-      const text = xml.slice(i, ltIdx).trim();
+      const rawText = xml.slice(i, ltIdx);
+      const text = rawText.trim();
+      stack[stack.length - 1]?.content.push(decodeXmlText(rawText));
       if (text) {
         const top = stack[stack.length - 1];
         if (top) top.text = text;
       }
+    }
+
+    // Skip markup here, not with a global replacement that would alter CDATA.
+    if (xml.startsWith('<!--', ltIdx) || xml.startsWith('<?', ltIdx)) {
+      const closing = xml.startsWith('<!--', ltIdx) ? '-->' : '?>';
+      const end = xml.indexOf(closing, ltIdx + 2);
+      if (end === -1) break;
+      i = end + closing.length;
+      continue;
+    }
+
+    if (xml.startsWith('<![CDATA[', ltIdx)) {
+      const end = xml.indexOf(']]>', ltIdx + 9);
+      if (end === -1) break;
+      const value = xml.slice(ltIdx + 9, end);
+      const top = stack[stack.length - 1];
+      if (top) {
+        top.text = value;
+        top.content.push(value);
+      }
+      i = end + 3;
+      continue;
     }
 
     const gtIdx = xml.indexOf('>', ltIdx);
@@ -96,9 +129,12 @@ function parseXml(source: string): XmlNode | null {
         attrs[am[1]] = am[2];
       }
 
-      const node: XmlNode = { tag: tagName, attrs, children: [], text: '' };
+      const node: XmlNode = { tag: tagName, attrs, children: [], text: '', content: [] };
       const top = stack[stack.length - 1];
-      if (top) top.children.push(node);
+      if (top) {
+        top.children.push(node);
+        top.content.push(node);
+      }
       if (!selfClosing) stack.push(node);
     }
   }
@@ -119,6 +155,26 @@ function child(node: XmlNode | undefined, tag: string): XmlNode | undefined {
 /** Text content of the first child matching `tag`. */
 function textOf(node: XmlNode | undefined, tag: string): string {
   return child(node, tag)?.text.trim() ?? '';
+}
+
+function documentationText(node: XmlNode): string {
+  return node.content.map(part => typeof part === 'string' ? part : documentationText(part)).join('');
+}
+
+/** Collect only an element's own DESC; do not inherit a parent's or a child's note. */
+function collectDescriptions(node: XmlNode, parentPath: string, descriptions: Map<string, string>): void {
+  const name = textOf(node, 'SHORT-NAME');
+  const path = name ? `${parentPath}/${name}` : parentPath;
+  const desc = child(node, 'DESC');
+  if (name && desc && !descriptions.has(path)) {
+    const languages = children(desc, 'L-2');
+    const text = languages.length ? languages.map(language => {
+      const value = documentationText(language).replace(/\s+/g, ' ').trim();
+      return languages.length > 1 ? `[${language.attrs.L ?? 'und'}] ${value}` : value;
+    }).join('\n') : documentationText(desc).replace(/\s+/g, ' ').trim();
+    if (text) descriptions.set(path, text);
+  }
+  for (const nested of node.children) collectDescriptions(nested, path, descriptions);
 }
 
 // ── Model types ───────────────────────────────────────────────────────────────
@@ -618,6 +674,8 @@ export interface ArxmlModel {
   ecucContainerValues: EcucContainerValueInfo[];
   /** Element types skipped because they are not in the metamodel, grouped by tag name */
   skippedElements: Map<string, number>;
+  /** Plain-text DESC documentation keyed by the same stable paths as imported elements. */
+  descriptions?: Map<string, string>;
 }
 
 // ── Extraction state (deduplication sets) ─────────────────────────────────────
@@ -1738,6 +1796,7 @@ export function parseArxmlProject(
     // Phase C
     ecucValueCollections: [], ecucModuleConfigs: [], ecucContainerValues: [],
     skippedElements: new Map(),
+    descriptions: new Map(),
   };
 
   // Use provided file list or discover files from directory
@@ -1778,6 +1837,9 @@ export function parseArxmlProject(
     // Root element is <AUTOSAR>, its direct child is <AR-PACKAGES>
     const arPackages = child(tree, 'AR-PACKAGES');
     if (!arPackages) continue;
+
+    // Separate from element deduplication: a later split declaration may supply DESC.
+    collectDescriptions(arPackages, '', model.descriptions!);
 
     for (const pkg of children(arPackages, 'AR-PACKAGE')) {
       extractPackage(pkg, null, model, categories);

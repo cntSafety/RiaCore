@@ -115,8 +115,18 @@ import type {
   NamespaceConnectionGraph,
   ConnectionEntry,
   DisconnectResult,
+  CrossNsLinkSettings,
   LayoutRecord,
+  ViewLayoutSourceRef,
   DiagramLayout,
+  ViewDefinition,
+  CreateViewParams,
+  UpdateViewParams,
+  EvaluateViewParams,
+  EvaluationResult,
+  MaterializeViewParams,
+  MaterializeResult,
+  ConceptPresentation,
 } from '@riacore/app-contracts';
 import type {
   GitRepoStatus,
@@ -286,11 +296,34 @@ export const api = {
       window.riacore.namespaceConnections.countDependents({ importedNamespace, authoredNamespace }),
   },
 
+  crossNsLinkSettings: {
+    getSettings: (): Promise<CrossNsLinkSettings> =>
+      window.riacore.crossNsLinkSettings.getSettings(),
+    saveSettings: (settings: CrossNsLinkSettings): Promise<void> =>
+      window.riacore.crossNsLinkSettings.saveSettings(settings),
+  },
+
   canvasLayout: {
     getLayout: (): Promise<DiagramLayout> =>
       window.riacore.canvasLayout.getLayout(),
     setRecords: (records: LayoutRecord[]): Promise<DiagramLayout> =>
       window.riacore.canvasLayout.setRecords(records),
+    /**
+     * Stored positions for a view's content, keyed by the source element's
+     * `node_id` — the identity an evaluation result carries (spec-view.md
+     * Phase 4.2). Absent sources are auto-laid-out by the caller.
+     */
+    getViewLayout: (
+      viewName: string,
+      sources: ViewLayoutSourceRef[],
+    ): Promise<Array<{ nodeId: number; x: number; y: number }>> =>
+      window.riacore.canvasLayout.getViewLayout(viewName, sources),
+    /** Persist positions keyed by `stable_path`, so they survive a reimport. */
+    setViewLayout: (
+      viewName: string,
+      records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }>,
+    ): Promise<DiagramLayout> =>
+      window.riacore.canvasLayout.setViewLayout(viewName, records),
   },
 
   namespaces: {
@@ -343,8 +376,8 @@ export const api = {
       window.riacore.safety.removePropagation({ sourceFailureModeNodeId, targetFailureModeNodeId }),
     getPropagations: (failureModeNodeId: number): Promise<{ propagatesTo: PropagationMalfunctionData[]; propagatesFrom: PropagationMalfunctionData[] }> =>
       window.riacore.safety.getPropagations({ failureModeNodeId }),
-    getPropagationsForComponent: (structuralNodeId: number): Promise<ScopedPropagationResult> =>
-      window.riacore.safety.getPropagationsForComponent({ structuralNodeId }),
+    getPropagationsForComponent: (structuralNodeId: number, safetyNamespace?: string): Promise<ScopedPropagationResult> =>
+      window.riacore.safety.getPropagationsForComponent({ structuralNodeId, safetyNamespace }),
     createRiskRating: (params: CreateRiskRatingParams): Promise<{ node_id: number }> =>
       window.riacore.safety.createRiskRating(params),
     getRiskRating: (failureModeNodeId: number): Promise<ConceptInstanceData | null> =>
@@ -371,6 +404,40 @@ export const api = {
       window.riacore.safety.updateSafetyTask({ nodeId, updates }),
     deleteSafetyTask: (nodeId: number): Promise<void> =>
       window.riacore.safety.deleteSafetyTask({ nodeId }),
+    // SOTIF: functional insufficiencies (shared node, linked 1-to-n to malfunctions)
+    createFunctionalInsufficiency: (namespace: string, name: string, description?: string, source?: string): Promise<{ node_id: number }> =>
+      window.riacore.safety.createFunctionalInsufficiency({ namespace, name, description, source }),
+    linkFunctionalInsufficiencyToFm: (failureModeNodeId: number, functionalInsufficiencyNodeId: number): Promise<{ edge_id: number }> =>
+      window.riacore.safety.linkFunctionalInsufficiencyToFm({ failureModeNodeId, functionalInsufficiencyNodeId }),
+    unlinkFunctionalInsufficiencyFromFm: (failureModeNodeId: number, functionalInsufficiencyNodeId: number): Promise<void> =>
+      window.riacore.safety.unlinkFunctionalInsufficiencyFromFm({ failureModeNodeId, functionalInsufficiencyNodeId }),
+    getFunctionalInsufficiencies: (failureModeNodeId: number): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getFunctionalInsufficiencies({ failureModeNodeId }),
+    getAllFunctionalInsufficiencies: (namespace: string): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getAllFunctionalInsufficiencies({ namespace }),
+    getMalfunctionsForFunctionalInsufficiency: (functionalInsufficiencyNodeId: number): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getMalfunctionsForFunctionalInsufficiency({ functionalInsufficiencyNodeId }),
+    updateFunctionalInsufficiency: (nodeId: number, updates: Record<string, unknown>): Promise<void> =>
+      window.riacore.safety.updateFunctionalInsufficiency({ nodeId, updates }),
+    deleteFunctionalInsufficiency: (nodeId: number): Promise<void> =>
+      window.riacore.safety.deleteFunctionalInsufficiency({ nodeId }),
+    // SOTIF: triggering conditions (shared node, linked 1-to-n to malfunctions)
+    createTriggeringCondition: (namespace: string, name: string, description?: string, source?: string): Promise<{ node_id: number }> =>
+      window.riacore.safety.createTriggeringCondition({ namespace, name, description, source }),
+    linkTriggeringConditionToFm: (failureModeNodeId: number, triggeringConditionNodeId: number): Promise<{ edge_id: number }> =>
+      window.riacore.safety.linkTriggeringConditionToFm({ failureModeNodeId, triggeringConditionNodeId }),
+    unlinkTriggeringConditionFromFm: (failureModeNodeId: number, triggeringConditionNodeId: number): Promise<void> =>
+      window.riacore.safety.unlinkTriggeringConditionFromFm({ failureModeNodeId, triggeringConditionNodeId }),
+    getTriggeringConditions: (failureModeNodeId: number): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getTriggeringConditions({ failureModeNodeId }),
+    getAllTriggeringConditions: (namespace: string): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getAllTriggeringConditions({ namespace }),
+    getMalfunctionsForTriggeringCondition: (triggeringConditionNodeId: number): Promise<ConceptInstanceData[]> =>
+      window.riacore.safety.getMalfunctionsForTriggeringCondition({ triggeringConditionNodeId }),
+    updateTriggeringCondition: (nodeId: number, updates: Record<string, unknown>): Promise<void> =>
+      window.riacore.safety.updateTriggeringCondition({ nodeId, updates }),
+    deleteTriggeringCondition: (nodeId: number): Promise<void> =>
+      window.riacore.safety.deleteTriggeringCondition({ nodeId }),
     createRequirement: (namespace: string, name: string, reqId: string, reqText: string, asil?: string, linkedToUrl?: string): Promise<{ node_id: number }> =>
       window.riacore.safety.createRequirement({ namespace, name, reqId, reqText, asil, linkedToUrl }),
     getRequirement: (nodeId: number): Promise<ConceptInstanceData> =>
@@ -409,6 +476,8 @@ export const api = {
       window.riacore.safety.deleteReviewItem({ nodeId }),
     getMalfunctionsForElement: (targetNodeId: number): Promise<ConceptInstanceData[]> =>
       window.riacore.safety.getMalfunctionsForElement({ targetNodeId }),
+    getMalfunctionsForElements: (targetNodeIds: number[], safetyNamespace?: string): Promise<Record<number, ConceptInstanceData[]>> =>
+      window.riacore.safety.getMalfunctionsForElements({ targetNodeIds, safetyNamespace }),
     getMalfunctionsForRequirement: (requirementNodeId: number): Promise<ConceptInstanceData[]> =>
       window.riacore.safety.getMalfunctionsForRequirement({ requirementNodeId }),
     getMalfunctionForTask: (safetyTaskNodeId: number): Promise<ConceptInstanceData | null> =>
@@ -474,6 +543,29 @@ export const api = {
       window.riacore.graph.query({ cypher }),
     expand: (nodeId: string, nodeLabel: string, properties: Record<string, unknown>): Promise<GraphQueryResult> =>
       window.riacore.graph.expand({ nodeId, nodeLabel, properties }),
+  },
+
+  /**
+   * Views (docs/coreSpecs/RiaViews.md). `evaluate` is read-only and takes
+   * either a saved view name or an ad-hoc definition; the connection diagram
+   * uses the latter, because it opens from a tree selection in a namespace and
+   * there is no saved view to name.
+   */
+  views: {
+    list: (): Promise<ViewDefinition[]> => window.riacore.views.list(),
+    get: (name: string): Promise<ViewDefinition> => window.riacore.views.get({ name }),
+    create: (params: CreateViewParams): Promise<ViewDefinition> => window.riacore.views.create(params),
+    update: (params: UpdateViewParams): Promise<ViewDefinition> => window.riacore.views.update(params),
+    delete: (name: string): Promise<void> => window.riacore.views.delete({ name }),
+    evaluate: (params: EvaluateViewParams): Promise<EvaluationResult> => window.riacore.views.evaluate(params),
+    materialize: (params: MaterializeViewParams): Promise<MaterializeResult> =>
+      window.riacore.views.materialize(params),
+  },
+
+  /** Concept presentation catalog (spec-view.md Phase 4.1). */
+  presentation: {
+    get: (metamodel: string): Promise<ConceptPresentation[]> =>
+      window.riacore.presentation.get({ metamodel }),
   },
 
   arxml: {

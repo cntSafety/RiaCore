@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import type { Result, LayoutRecord, DiagramLayout } from '@riacore/app-contracts';
+import type { Result, LayoutRecord, DiagramLayout, ViewLayoutSourceRef } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
 import type { ImportLogger } from '../infra/logger.js';
 
@@ -71,6 +71,54 @@ export function decodeLayoutId(
     elementKey: layoutId.slice(idx + LAYOUT_ID_SEPARATOR.length),
   };
 }
+
+// ---------------------------------------------------------------------------
+// View layout keying (spec-view.md Phase 4.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Element_Kind prefix for a layout record belonging to a view's content.
+ *
+ * The existing Element_Key for a namespace tile is the bare namespace name, so
+ * a view record keyed the same way could collide with one. This prefix is what
+ * keeps the two record families apart — and it is also why
+ * `deleteNamespace`'s `element_key = <name>` statement does not clear view
+ * layouts, which is handled by a companion statement there instead.
+ */
+export const VIEW_LAYOUT_KIND_PREFIX = 'view:';
+
+/** Separator between the source namespace and the source element's `stable_path`. */
+const VIEW_LAYOUT_KEY_SEPARATOR = '#';
+
+/** The Element_Kind for records belonging to `viewName`'s content. */
+export function viewLayoutElementKind(viewName: string): string {
+  return `${VIEW_LAYOUT_KIND_PREFIX}${viewName}`;
+}
+
+/**
+ * The Element_Key for a representative, derived from the source element it
+ * stands for.
+ *
+ * Keyed by `stable_path` rather than by the representative's technical id
+ * because a representative id is a `node_id`, which is reassigned on reimport
+ * and is session-scoped by design (docs/coreSpecs/RiaViews.md — Traceability).
+ * A layout keyed on it would be lost on every reimport; a `stable_path` survives.
+ */
+export function viewLayoutElementKey(sourceNamespace: string, stablePath: string): string {
+  return `${sourceNamespace}${VIEW_LAYOUT_KEY_SEPARATOR}${stablePath}`;
+}
+
+/** Whether a stored record belongs to any view. Used to keep the two families apart. */
+export function isViewLayoutKind(elementKind: string): boolean {
+  return elementKind.startsWith(VIEW_LAYOUT_KIND_PREFIX);
+}
+
+/**
+ * Re-exported so existing importers of this module are unaffected. The type
+ * itself moved to app-contracts when the view-layout channels were added, since
+ * it now crosses the IPC boundary.
+ */
+export type { ViewLayoutSourceRef };
 
 // ---------------------------------------------------------------------------
 // Element_Kind resolver registry
@@ -138,6 +186,30 @@ export interface ILayoutService {
    * Records of an unregistered (unknown) Element_Kind are never pruned.
    */
   reconcile(): Promise<Result<{ layout: DiagramLayout; skipped: LayoutRecord[] }>>;
+
+  /**
+   * Every stored position belonging to `viewName`'s content, returned keyed by
+   * the source element's `node_id` rather than by `stable_path` — because
+   * `node_id` is what an evaluation result carries, and the caller would
+   * otherwise have to redo the resolution this method just did.
+   *
+   * A representative whose source element no longer exists yields no entry, so
+   * it is auto-laid-out. Records are NOT pruned here: a source may be
+   * temporarily absent mid-reimport, and discarding a position on a read would
+   * make the layout lossy in exactly the case Phase 4.2 exists to survive.
+   */
+  getViewLayout(viewName: string, sources: ViewLayoutSourceRef[]): Promise<Result<Map<number, { x: number; y: number }>>>;
+
+  /**
+   * Persist positions for a view's representatives, keyed by the `stable_path`
+   * of each one's source element. A representative with no source reference
+   * gets no record and is auto-laid-out; one with several uses its first, which
+   * is deterministic because catalog queries return sources in a fixed order.
+   */
+  setViewLayout(
+    viewName: string,
+    records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }>,
+  ): Promise<Result<DiagramLayout>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +240,36 @@ export function createLayoutService(
       x: Number(row.x),
       y: Number(row.y),
     }));
+  }
+
+  /**
+   * Resolve `node_id -> stable_path` for the given source elements in ONE
+   * bounded query, whichever namespaces they span.
+   *
+   * `stable_path` lives inside the opaque `attributes` JSON column rather than
+   * as a column of its own, so it is parsed here rather than projected. A node
+   * that does not exist, or whose attributes carry no `stable_path`, is simply
+   * absent from the result — the caller treats that as "no persisted position".
+   */
+  async function resolveStablePaths(sources: ViewLayoutSourceRef[]): Promise<Map<number, string>> {
+    const resolved = new Map<number, string>();
+    const nodeIds = [...new Set(sources.map((s) => s.nodeId))].filter((id) => Number.isFinite(id));
+    if (nodeIds.length === 0) return resolved;
+
+    const rows = await dbModule.runQuery(
+      `MATCH (ci:RIA_UNIV_ConceptInstance) WHERE ci.node_id IN $ids
+       RETURN ci.node_id AS node_id, ci.attributes AS attributes`,
+      { ids: nodeIds },
+    );
+    for (const row of rows) {
+      try {
+        const attrs = JSON.parse(String(row.attributes ?? '{}')) as Record<string, unknown>;
+        if (typeof attrs.stable_path === 'string' && attrs.stable_path.length > 0) {
+          resolved.set(Number(row.node_id), attrs.stable_path);
+        }
+      } catch { /* a node with unparseable attributes simply has no persisted position */ }
+    }
+    return resolved;
   }
 
   const service: ILayoutService = {
@@ -268,6 +370,73 @@ export function createLayoutService(
         // Return the post-prune layout plus the list of pruned (skipped) records so the
         // caller can surface a warning naming each one (Req 5.6).
         return { ok: true, data: { layout: await readLayout(), skipped } };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    async getViewLayout(
+      viewName: string,
+      sources: ViewLayoutSourceRef[],
+    ): Promise<Result<Map<number, { x: number; y: number }>>> {
+      try {
+        const byNodeId = new Map<number, { x: number; y: number }>();
+        if (sources.length === 0) return { ok: true, data: byNodeId };
+
+        const elementKind = viewLayoutElementKind(viewName);
+        const stablePaths = await resolveStablePaths(sources);
+        if (stablePaths.size === 0) return { ok: true, data: byNodeId };
+
+        // Read only this view's records. Every other Element_Kind — namespace
+        // tiles, other views — is untouched and invisible here.
+        const rows = await dbModule.runQuery(
+          `MATCH (l:RIA_UNIV_CanvasLayout) WHERE l.element_kind = $element_kind
+           RETURN l.element_key AS element_key, l.x AS x, l.y AS y`,
+          { element_kind: elementKind },
+        );
+        const positionByKey = new Map<string, { x: number; y: number }>();
+        for (const row of rows) {
+          positionByKey.set(String(row.element_key ?? ''), { x: Number(row.x), y: Number(row.y) });
+        }
+
+        for (const source of sources) {
+          const stablePath = stablePaths.get(source.nodeId);
+          if (stablePath === undefined) continue;
+          const position = positionByKey.get(viewLayoutElementKey(source.namespace, stablePath));
+          if (position !== undefined) byNodeId.set(source.nodeId, position);
+        }
+        return { ok: true, data: byNodeId };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    async setViewLayout(
+      viewName: string,
+      records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }>,
+    ): Promise<Result<DiagramLayout>> {
+      try {
+        const elementKind = viewLayoutElementKind(viewName);
+        const stablePaths = await resolveStablePaths(records.map((r) => r.source));
+
+        // A source that cannot be resolved to a stable_path is skipped rather
+        // than keyed on something unstable: a record we could not key correctly
+        // would silently resurface on the wrong element after a reimport, which
+        // is worse than not persisting the position at all.
+        const layoutRecords: LayoutRecord[] = [];
+        for (const record of records) {
+          const stablePath = stablePaths.get(record.source.nodeId);
+          if (stablePath === undefined) continue;
+          layoutRecords.push({
+            elementKind,
+            elementKey: viewLayoutElementKey(record.source.namespace, stablePath),
+            x: record.x,
+            y: record.y,
+          });
+        }
+        // Reuse setRecords so the all-or-nothing coordinate validation and the
+        // MERGE-on-layout_id upsert are shared rather than reimplemented.
+        return await service.setRecords(layoutRecords);
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }

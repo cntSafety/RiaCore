@@ -34,8 +34,18 @@ export class DbGenerationChangedError extends Error {
   /** Stable, serialization-safe discriminant (survives structured-clone / IPC). */
   static readonly CODE = 'DB_GENERATION_CHANGED';
   readonly code = DbGenerationChangedError.CODE;
-  constructor(expected: number, actual: number) {
-    super(`Database generation changed (expected ${expected}, got ${actual}); operation superseded`);
+  /**
+   * `reason` replaces the generation-comparison wording. It exists because the
+   * no-handle case reports `expected === actual`, and "generation changed
+   * (expected 0, got 0)" reads as a contradiction that says nothing about the
+   * real cause (the database was never opened, or `open()` failed).
+   */
+  constructor(expected: number, actual: number, reason?: string) {
+    super(
+      reason
+        ? `${reason}; operation superseded`
+        : `Database generation changed (expected ${expected}, got ${actual}); operation superseded`,
+    );
     this.name = 'DbGenerationChangedError';
     // Restore prototype chain for instanceof after transpilation to ES5-ish targets.
     Object.setPrototypeOf(this, DbGenerationChangedError.prototype);
@@ -328,7 +338,22 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
       // close() already superseded this database, so fail fast (Req 5.5). Callers
       // that hold a Connection across a close will additionally see the runQuery /
       // transaction re-checks throw DbGenerationChangedError.
-      if (!database) throw new DbGenerationChangedError(generation, generation);
+      if (!database) {
+        // Same error type in every no-handle case, because every caller that
+        // treats a superseded operation as benign must keep doing so. Only the
+        // wording differs: a module that was never opened, or whose open()
+        // failed, is not a "generation change", and reporting it as one hides
+        // the recorded open error from whoever has to diagnose it.
+        throw new DbGenerationChangedError(
+          generation,
+          generation,
+          currentStatus.state === 'error'
+            ? `Database is not open — open() failed: ${currentStatus.error}`
+            : generation === 0
+              ? 'Database is not open — open() was never called'
+              : undefined,
+        );
+      }
       return new lbug.Connection(database);
     },
 

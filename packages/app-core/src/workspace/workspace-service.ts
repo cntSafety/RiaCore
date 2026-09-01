@@ -32,6 +32,10 @@ import { createLayoutService } from '../namespaces/layout-service.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
 import { runAllCleanups } from '../infra/cleanup-service.js';
 import { DEFAULT_CHECKS } from './default-checks.js';
+import { createBuiltInMetamodelRegistry } from '../profiles/builtin-metamodel-registry.js';
+import { seedDefaultViews } from '../views/view-service.js';
+import { createImportWriteService } from '../importers/import-write-service.js';
+import { parseLinkMLSchema } from '../importers/linkml-parser.js';
 
 // Serialized content written verbatim to ria-data/checks.json for new (or
 // check-less) workspaces. The source of truth is the typed DEFAULT_CHECKS
@@ -613,6 +617,38 @@ export function createWorkspaceService(
     }
   }
 
+  /**
+   * Seed the shipped built-in metamodels (currently COMMON_MODEL) used only as
+   * a view's immediate metamodel (docs/coreSpecs/RiaViews.md, IBuiltInMetamodelRegistry).
+   * `registerMetamodelFromSchema` is already idempotent by metamodel name, so
+   * repeated workspace opens are a no-op after the first. Registering a
+   * metamodel is metamodel data, not schema, so it does not bump SCHEMA_VERSION;
+   * it does change ria-data/meta/ content (and therefore meta_hash) on first
+   * seed, which is expected. Non-fatal, mirroring ensureNamespaceWiring.
+   */
+  async function ensureBuiltInMetamodelsRegistered(): Promise<void> {
+    try {
+      const writeService = createImportWriteService(dbModule);
+      for (const descriptor of createBuiltInMetamodelRegistry().listAvailable()) {
+        const schema = parseLinkMLSchema(descriptor.metamodelPath);
+        await writeService.registerMetamodelFromSchema(schema, descriptor.metamodelName);
+      }
+    } catch (err) {
+      logger?.warn?.('ensureBuiltInMetamodelsRegistered failed (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Give every imported namespace a default CommonModel view if it has none.
+    // Sits here, right after the metamodel it depends on is registered, because
+    // this is the one place *every* entry point passes through: the desktop
+    // worker, the web dev server, and the CLI all call `workspaceService.open()`,
+    // whereas only the first two go through the command dispatcher. Seeding at
+    // the dispatcher missed the CLI entirely, which is how `views list` came to
+    // report nothing after a CLI import. Idempotent and best-effort.
+    await seedDefaultViews(dbModule, undefined, 'workspace open');
+  }
+
   async function openLocked(config: WorkspaceConfig): Promise<Result<WorkspaceInfo>> {
       logger?.info?.('Workspace open requested', { workingDir: config.workingDir });
 
@@ -805,6 +841,7 @@ export function createWorkspaceService(
         state = { config, dbPath, dbStatus: openResult.dbStatus, isOpen: true, lifecycleAction: 'created' };
         commitStatus();
         logger?.info?.('Workspace created (Case A)', { workingDir: config.workingDir });
+        await ensureBuiltInMetamodelsRegistered();
 
         return {
           ok: true,
@@ -877,6 +914,8 @@ export function createWorkspaceService(
           }
           // Re-check after the await points above: a transition can commit while
           // cleanup runs (Requirement 4.3 — "before or during").
+          if (epoch !== loadEpoch) return;
+          await ensureBuiltInMetamodelsRegistered();
           if (epoch !== loadEpoch) return;
           state.lifecycleAction = 'opened_loaded_from_ria_data';
           commitStatus();
@@ -1041,6 +1080,7 @@ export function createWorkspaceService(
         // successful rebuild so a load_failed rebuild does not run wiring.
         if (state.lifecycleAction === 'opened_loaded_from_ria_data') {
           await ensureNamespaceWiring();
+          await ensureBuiltInMetamodelsRegistered();
         }
         return {
           ok: true,
@@ -1080,6 +1120,7 @@ export function createWorkspaceService(
       if (consistencyResult.status === 'consistent') {
         logger?.info?.('Workspace consistent (Case D)', { workingDir: config.workingDir });
         await ensureNamespaceWiring();
+        await ensureBuiltInMetamodelsRegistered();
         return {
           ok: true,
           data: {
@@ -1109,6 +1150,7 @@ export function createWorkspaceService(
         commitStatus();
 
         await ensureNamespaceWiring();
+        await ensureBuiltInMetamodelsRegistered();
         return {
           ok: true,
           data: {
@@ -1230,6 +1272,7 @@ export function createWorkspaceService(
       state = { config, dbPath, dbStatus: openResult.dbStatus, isOpen: true, lifecycleAction: 'created' };
       commitStatus();
       logger?.info?.('Workspace created', { workingDir: config.workingDir, dbPath });
+      await ensureBuiltInMetamodelsRegistered();
 
       return {
         ok: true,

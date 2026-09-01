@@ -24,6 +24,7 @@ import type { CopiedMalfunctionData } from '../../../../../store/workspaceStore'
 import { treeChildrenQueryKey } from './useTreeQueries';
 import { requestCrossWindowInvalidation } from '../../../../../lib/cache-invalidation-subscriber';
 import { beginOpTrace, type OpTrace } from '../../../../../lib/opTrace';
+import { invalidateModelViewQueries } from '../../../../../hooks/useModelView';
 
 // ---------------------------------------------------------------------------
 // Diagnostics helper: how many tree.children queries are currently cached for a
@@ -176,6 +177,14 @@ async function invalidateElementInTree(
       })(),
     );
   }
+
+  // The model view draws the same "which element carries what" facts the tree
+  // does — a malfunction shows up there as a warning marker and an ASIL colour
+  // — so anything that refreshes the tree has to refresh it too. Doing it here
+  // rather than at each call site is what keeps the two from drifting apart;
+  // the drift is exactly how the view came to need several switches before a
+  // new malfunction appeared (spec-view.md Phase 5.2).
+  tasks.push(invalidateModelViewQueries(qc));
 
   await Promise.all(tasks);
 }
@@ -530,6 +539,188 @@ export function useDeleteSafetyTask(namespace: string, workspaceKey: string | nu
   });
 }
 
+// ── SOTIF: Functional Insufficiency mutations ───────────────────────────────
+
+// Shared invalidation for a functional-insufficiency change affecting one fm.
+async function invalidateFi(
+  qc: ReturnType<typeof useQueryClient>,
+  workspaceKey: string | null,
+  namespace: string,
+  fmNodeId?: number,
+) {
+  await Promise.all([
+    fmNodeId !== undefined
+      ? qc.invalidateQueries({ queryKey: ['safety.functionalInsufficiencies', fmNodeId] })
+      : Promise.resolve(),
+    qc.invalidateQueries({ queryKey: ['safety.allFunctionalInsufficiencies', namespace] }),
+    // Reverse 1-to-n mapping may change for any FI node.
+    qc.invalidateQueries({ queryKey: ['safety.malfunctionsForFunctionalInsufficiency'] }),
+    invalidateElementInTree(qc, workspaceKey, namespace),
+  ]);
+}
+
+/**
+ * Add a functional insufficiency to a malfunction with 1-to-n reuse: if a node
+ * with the same name already exists in the namespace, link it; otherwise create
+ * a new shared node and link it. This makes "Heavy rain"-style entries a single
+ * shared node referenced by many malfunctions.
+ */
+export function useAddFunctionalInsufficiency(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { failureModeNodeId: number; name: string; description?: string; source?: string }) => {
+      const existing = (await api.safety.getAllFunctionalInsufficiencies(namespace))
+        .find((x) => String(x.attributes?.has_name ?? '').trim().toLowerCase() === params.name.trim().toLowerCase());
+      const nodeId = existing
+        ? existing.node_id
+        : (await api.safety.createFunctionalInsufficiency(namespace, params.name, params.description, params.source)).node_id;
+      await api.safety.linkFunctionalInsufficiencyToFm(params.failureModeNodeId, nodeId);
+      return { node_id: nodeId, reused: Boolean(existing) };
+    },
+    onSuccess: async (_data, params) => {
+      await invalidateFi(qc, workspaceKey, namespace, params.failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+/** Link an existing (shared) functional insufficiency to another malfunction. */
+export function useLinkFunctionalInsufficiencyToFm(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ failureModeNodeId, functionalInsufficiencyNodeId }: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }) =>
+      api.safety.linkFunctionalInsufficiencyToFm(failureModeNodeId, functionalInsufficiencyNodeId),
+    onSuccess: async (_data, { failureModeNodeId }) => {
+      await invalidateFi(qc, workspaceKey, namespace, failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+/** Unlink a functional insufficiency from ONE malfunction (the shared node is kept). */
+export function useUnlinkFunctionalInsufficiencyFromFm(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ failureModeNodeId, functionalInsufficiencyNodeId }: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }) =>
+      api.safety.unlinkFunctionalInsufficiencyFromFm(failureModeNodeId, functionalInsufficiencyNodeId),
+    onSuccess: async (_data, { failureModeNodeId }) => {
+      await invalidateFi(qc, workspaceKey, namespace, failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+export function useUpdateFunctionalInsufficiency(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId, updates }: { nodeId: number; updates: Record<string, unknown>; fmNodeId?: number }) =>
+      api.safety.updateFunctionalInsufficiency(nodeId, updates),
+    onSuccess: async (_data, { fmNodeId }) => {
+      await invalidateFi(qc, workspaceKey, namespace, fmNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+/** Delete the shared functional-insufficiency node entirely (removes it from every malfunction). */
+export function useDeleteFunctionalInsufficiency(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId }: { nodeId: number; fmNodeId?: number }) =>
+      api.safety.deleteFunctionalInsufficiency(nodeId),
+    onSuccess: async (_data, { fmNodeId }) => {
+      await invalidateFi(qc, workspaceKey, namespace, fmNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+// ── SOTIF: Triggering Condition mutations ───────────────────────────────────
+
+async function invalidateTc(
+  qc: ReturnType<typeof useQueryClient>,
+  workspaceKey: string | null,
+  namespace: string,
+  fmNodeId?: number,
+) {
+  await Promise.all([
+    fmNodeId !== undefined
+      ? qc.invalidateQueries({ queryKey: ['safety.triggeringConditions', fmNodeId] })
+      : Promise.resolve(),
+    qc.invalidateQueries({ queryKey: ['safety.allTriggeringConditions', namespace] }),
+    qc.invalidateQueries({ queryKey: ['safety.malfunctionsForTriggeringCondition'] }),
+    invalidateElementInTree(qc, workspaceKey, namespace),
+  ]);
+}
+
+/** Add a triggering condition to a malfunction with 1-to-n reuse (see useAddFunctionalInsufficiency). */
+export function useAddTriggeringCondition(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { failureModeNodeId: number; name: string; description?: string; source?: string }) => {
+      const existing = (await api.safety.getAllTriggeringConditions(namespace))
+        .find((x) => String(x.attributes?.has_name ?? '').trim().toLowerCase() === params.name.trim().toLowerCase());
+      const nodeId = existing
+        ? existing.node_id
+        : (await api.safety.createTriggeringCondition(namespace, params.name, params.description, params.source)).node_id;
+      await api.safety.linkTriggeringConditionToFm(params.failureModeNodeId, nodeId);
+      return { node_id: nodeId, reused: Boolean(existing) };
+    },
+    onSuccess: async (_data, params) => {
+      await invalidateTc(qc, workspaceKey, namespace, params.failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+export function useLinkTriggeringConditionToFm(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ failureModeNodeId, triggeringConditionNodeId }: { failureModeNodeId: number; triggeringConditionNodeId: number }) =>
+      api.safety.linkTriggeringConditionToFm(failureModeNodeId, triggeringConditionNodeId),
+    onSuccess: async (_data, { failureModeNodeId }) => {
+      await invalidateTc(qc, workspaceKey, namespace, failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+export function useUnlinkTriggeringConditionFromFm(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ failureModeNodeId, triggeringConditionNodeId }: { failureModeNodeId: number; triggeringConditionNodeId: number }) =>
+      api.safety.unlinkTriggeringConditionFromFm(failureModeNodeId, triggeringConditionNodeId),
+    onSuccess: async (_data, { failureModeNodeId }) => {
+      await invalidateTc(qc, workspaceKey, namespace, failureModeNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+export function useUpdateTriggeringCondition(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId, updates }: { nodeId: number; updates: Record<string, unknown>; fmNodeId?: number }) =>
+      api.safety.updateTriggeringCondition(nodeId, updates),
+    onSuccess: async (_data, { fmNodeId }) => {
+      await invalidateTc(qc, workspaceKey, namespace, fmNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
+export function useDeleteTriggeringCondition(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ nodeId }: { nodeId: number; fmNodeId?: number }) =>
+      api.safety.deleteTriggeringCondition(nodeId),
+    onSuccess: async (_data, { fmNodeId }) => {
+      await invalidateTc(qc, workspaceKey, namespace, fmNodeId);
+      triggerAutoSave?.();
+    },
+  });
+}
+
 // ── Requirement mutations ───────────────────────────────────────────────────
 
 export function useCreateRequirement(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
@@ -747,6 +938,10 @@ export function useOccursAtMutation(
       const ns = targetNs ?? hostNamespace;
       if (ns) promises.push(invalidateTreeChildren(qc, workspaceKey, ns, targetNodeId));
     }
+    // Moving a malfunction from one element to another changes the marker on
+    // *both*. This path does not go through `invalidateElementInTree`, so it
+    // states the model-view refresh itself.
+    promises.push(invalidateModelViewQueries(qc));
     await Promise.all(promises);
   };
 

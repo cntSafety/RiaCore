@@ -28,6 +28,8 @@
  *
  * Current sections:
  *   - "SysML v2 Tree View" — toggles hidden elements in the namespace tree.
+ *   - "Imported Requirement Linking" — how the Imported Requirement picker
+ *     handles a match whose namespace isn't connected yet.
  *   - "LLM" — multi-provider LLM configuration (provider, model, credentials).
  */
 
@@ -40,6 +42,7 @@ import {
   Form,
   Input,
   Modal,
+  Radio,
   Select,
   Space,
   Spin,
@@ -50,11 +53,13 @@ import {
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
-import type { LlmProvider, LlmSaveSettingsInput, LlmSettings } from '@riacore/app-contracts';
+import type { LlmProvider, LlmSaveSettingsInput, LlmSettings, CrossNsLinkUnconnectedMode } from '@riacore/app-contracts';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAppSettingsDialogStore } from '../../store/appSettingsDialogStore';
 import { useLlmSettings } from '../../hooks/useLlmSettings';
 import { useSaveLlmSettings } from '../../hooks/useSaveLlmSettings';
+import { useCrossNsLinkSettings } from '../../hooks/useCrossNsLinkSettings';
+import { useSaveCrossNsLinkSettings } from '../../hooks/useSaveCrossNsLinkSettings';
 import { api } from '../../api/riacore';
 
 const { Text, Title } = Typography;
@@ -91,6 +96,64 @@ function SysmlTreeViewSection() {
           </div>
         </div>
       </Space>
+      <div style={{ marginTop: 12, color: token.colorTextTertiary, fontSize: 12 }}>
+        Changes apply immediately.
+      </div>
+    </div>
+  );
+}
+
+// ── Imported Requirement Linking section ─────────────────────────────────────
+
+function CrossNsLinkingSection() {
+  const { token } = theme.useToken();
+  const { message } = AntdApp.useApp();
+  const settingsQuery = useCrossNsLinkSettings();
+  const saveMutation = useSaveCrossNsLinkSettings();
+  const mode: CrossNsLinkUnconnectedMode = settingsQuery.data?.unconnectedNamespaceMode ?? 'prompt';
+
+  const handleChange = (next: CrossNsLinkUnconnectedMode) => {
+    saveMutation.mutate({ unconnectedNamespaceMode: next }, {
+      onError: (err) => message.error(String(err?.message ?? 'Failed to save setting')),
+    });
+  };
+
+  return (
+    <div>
+      <Title level={5} style={{ marginTop: 0 }}>
+        Imported Requirement Linking
+      </Title>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        Choose what happens when linking a malfunction to an imported requirement
+        whose namespace isn't connected to the current analysis yet.
+      </Text>
+      <Radio.Group
+        value={mode}
+        onChange={(e) => handleChange(e.target.value)}
+        disabled={settingsQuery.isLoading || saveMutation.isPending}
+        style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
+      >
+        <Radio value="prompt" style={{ whiteSpace: 'normal' }}>
+          <Text strong>Ask to connect (recommended)</Text>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              The search shows every matching requirement. Selecting one from an
+              unconnected namespace asks whether to connect the namespaces and
+              create the link together — declining creates neither.
+            </Text>
+          </div>
+        </Radio>
+        <Radio value="restrict" style={{ whiteSpace: 'normal' }}>
+          <Text strong>Only show already-linkable requirements</Text>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              The search only shows requirements from namespaces already
+              connected to the current analysis, so every visible result links
+              immediately without prompting.
+            </Text>
+          </div>
+        </Radio>
+      </Radio.Group>
       <div style={{ marginTop: 12, color: token.colorTextTertiary, fontSize: 12 }}>
         Changes apply immediately.
       </div>
@@ -493,6 +556,11 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     key: 'sysml-tree-view',
     label: 'SysML v2 Tree View',
     content: () => <SysmlTreeViewSection />,
+  },
+  {
+    key: 'cross-ns-linking',
+    label: 'Imported Requirement Linking',
+    content: () => <CrossNsLinkingSection />,
   },
   {
     key: 'llm',

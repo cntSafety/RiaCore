@@ -89,6 +89,7 @@ export function buildMetamodelProfileMetadata(
       })),
     })),
     ...(schema.review ? { review: schema.review } : {}),
+    ...(schema.actionPriority ? { actionPriority: schema.actionPriority } : {}),
     ...(schema.display_identifier_attrs?.length ? { displayIdentifierAttrs: schema.display_identifier_attrs } : {}),
   };
 }

@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { Tree, Empty, Spin, AutoComplete, Input, Button, Popover, theme } from 'antd';
+import { Tree, Empty, Spin, AutoComplete, Input, Button, Popover, Modal, theme } from 'antd';
 import { FolderOutlined, EditOutlined, LinkOutlined, LeftOutlined, RightOutlined, HistoryOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
   useState, useCallback, createElement, useEffect,
@@ -37,6 +37,7 @@ import type { TreeChildNode, TreeReferenceNode, SearchResultNode } from '@riacor
 import { TreeContextMenu } from './TreeContextMenu';
 import { CreateMalfunctionModal } from './CreateMalfunctionModal';
 import { ReconnectOrphanedModal } from './ReconnectOrphanedModal';
+import { SelectAnalysisNamespaceModal, type AnalysisNamespaceOption } from './SelectAnalysisNamespaceModal';
 import { AnomalyBanner } from './AnomalyBanner';
 import {
   treeReducer,
@@ -84,7 +85,7 @@ export interface NamespaceTreePanelProps {
   onPasteMalfunction?: (node: SelectedTreeElement) => void;
   /** Whether the clipboard currently holds a copied malfunction. */
   hasCopiedMalfunction?: boolean;
-  /** Open the Table View lens for the right-clicked architecture scope element. */
+  /** Open the Malfunctions lens (the malfunction table) for the right-clicked architecture scope element. */
   onOpenInTableView?: (node: SelectedTreeElement) => void;
 }
 
@@ -132,6 +133,8 @@ export interface NamespaceTreePanelHandle {
    * No-ops when no node is selected or the selected node is not a malfunction.
    */
   openDeleteMalfunctionModal: () => void;
+  /** Clear the tree's own visual selection without notifying onSelect. */
+  clearSelection: () => void;
 }
 
 /** Re-exported for test compatibility. */
@@ -380,6 +383,14 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   const [createModalTarget, setCreateModalTarget] = useState<SelectedTreeElement | null>(null);
   const [reconnectOrphanedOpen, setReconnectOrphanedOpen] = useState(false);
   const [reconnectOrphanedTarget, setReconnectOrphanedTarget] = useState<SelectedTreeElement | null>(null);
+  // Browse mode only (see `browseNamespace`): the panel has no fixed
+  // `safetyNamespace`, so "Add Malfunction" must first resolve which analysis
+  // to author into. `browseCreateNamespace` is the analysis chosen for the
+  // create-modal instance currently open; `selectAnalysisOptions` drives the
+  // picker itself.
+  const [selectAnalysisOpen, setSelectAnalysisOpen] = useState(false);
+  const [selectAnalysisOptions, setSelectAnalysisOptions] = useState<AnalysisNamespaceOption[]>([]);
+  const [browseCreateNamespace, setBrowseCreateNamespace] = useState<string | null>(null);
 
   // Virtual scrolling
   const [panelHeight, setPanelHeight] = useState(600);
@@ -1207,6 +1218,9 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
         name: selectedRecord.title as string,
       });
     },
+    clearSelection() {
+      dispatch({ type: 'SET_SELECTED', key: null });
+    },
   }), [state.nodesByKey, state.expandedKeys, navigateToTreeNode, fetchChildren, refreshNode, performNavigateToReference, resolveReferenceTarget]);
 
   const handleSearchChange = useCallback((value: string) => {
@@ -1436,11 +1450,15 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       dispatch({ type: 'TOGGLE_EXPAND', key: parentKey });
     }
 
-    // The new malfunction lives in safetyNamespace, not createModalTarget.namespace.
-    const createdKey = `${safetyNamespace}:${created.nodeId}`;
+    // The new malfunction lives in the analysis namespace it was authored
+    // into, not createModalTarget.namespace — normally safetyNamespace, but in
+    // browse mode (no fixed safetyNamespace) it is whatever the user picked in
+    // SelectAnalysisNamespaceModal.
+    const malfunctionNamespace = browseNamespace ? (browseCreateNamespace ?? safetyNamespace) : safetyNamespace;
+    const createdKey = `${malfunctionNamespace}:${created.nodeId}`;
     dispatch({ type: 'SET_SELECTED', key: createdKey });
-    onSelect({ nodeId: created.nodeId, namespace: safetyNamespace, concept: 'malfunction', name: created.name });
-  }, [createModalTarget, onSelect, refreshNode, state.expandedKeys, safetyNamespace]);
+    onSelect({ nodeId: created.nodeId, namespace: malfunctionNamespace, concept: 'malfunction', name: created.name });
+  }, [createModalTarget, onSelect, refreshNode, state.expandedKeys, safetyNamespace, browseNamespace, browseCreateNamespace]);
 
   // ---------------------------------------------------------------------------
   // Back / Forward navigation handlers
@@ -1700,10 +1718,33 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
         position={contextMenuPosition}
         onClose={() => setContextMenuNode(null)}
         onAddMalfunction={() => {
+          if (browseNamespace) {
+            // Browse mode has no fixed analysis scope (safetyNamespace is
+            // empty here — see NamespaceTreePanelProps.browseNamespace), so
+            // resolve one from the connection graph before authoring anything.
+            const connectedAnalysisNames = new Set(
+              (connectionGraph?.connections ?? [])
+                .filter((c) => c.source === browseNamespace)
+                .map((c) => c.target),
+            );
+            const connectedAnalyses = (connectionGraph?.analyses ?? [])
+              .filter((a) => connectedAnalysisNames.has(a.name));
+            if (connectedAnalyses.length === 0) {
+              Modal.error({
+                title: 'No analysis scope available',
+                content: `Malfunctions require an analysis scope. "${browseNamespace}" is not connected to any analysis — connect it to one first.`,
+              });
+              return;
+            }
+            setCreateModalTarget(contextMenuNode);
+            setSelectAnalysisOptions(connectedAnalyses);
+            setSelectAnalysisOpen(true);
+            return;
+          }
           setCreateModalTarget(contextMenuNode);
           setCreateModalOpen(true);
         }}
-        onReconnectOrphanedMalfunction={() => {
+        onReconnectOrphanedMalfunction={browseNamespace ? undefined : () => {
           setReconnectOrphanedTarget(contextMenuNode);
           setReconnectOrphanedOpen(true);
         }}
@@ -1883,11 +1924,22 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
         </DeleteWithPreview>
       )}
 
+      <SelectAnalysisNamespaceModal
+        open={selectAnalysisOpen}
+        analyses={selectAnalysisOptions}
+        targetName={createModalTarget?.name}
+        onClose={() => { setSelectAnalysisOpen(false); setCreateModalTarget(null); }}
+        onSelect={(namespace) => {
+          setBrowseCreateNamespace(namespace);
+          setSelectAnalysisOpen(false);
+          setCreateModalOpen(true);
+        }}
+      />
       <CreateMalfunctionModal
         open={createModalOpen}
-        namespace={safetyNamespace}
+        namespace={browseNamespace ? (browseCreateNamespace ?? '') : safetyNamespace}
         selectedTreeElement={createModalTarget}
-        onClose={() => { setCreateModalOpen(false); setCreateModalTarget(null); }}
+        onClose={() => { setCreateModalOpen(false); setCreateModalTarget(null); setBrowseCreateNamespace(null); }}
         onCreated={handleFailureModeCreated}
         workspaceKey={workspaceKey}
         occursAtNamespace={createModalTarget?.namespace}

@@ -36,6 +36,9 @@ const SAFETY_CONCEPTS = [
   'safety_note',
   'review_item',
   'tag',
+  // SOTIF-only concepts (present only in the SOTIF_ANALYSIS metamodel)
+  'functional_insufficiency',
+  'triggering_condition',
 ] as const;
 
 export type SafetyConcept = (typeof SAFETY_CONCEPTS)[number];
@@ -74,9 +77,10 @@ export interface CreateTagParams {
 
 export interface CreateRiskRatingParams {
   failureModeNodeId: number;
-  severity: string;
-  occurrence: string;
-  detection: string;
+  // Optional so SOTIF can create a note-only risk rating (no S/O/D/RPN persisted).
+  severity?: string;
+  occurrence?: string;
+  detection?: string;
   note?: string;
 }
 
@@ -137,6 +141,34 @@ export interface ISafetyCommands {
   getAllSafetyTasks(namespace: string): Promise<Result<ConceptInstanceData[]>>;
   updateSafetyTask(nodeId: number, updates: Record<string, unknown>): Promise<Result<void>>;
   deleteSafetyTask(nodeId: number): Promise<Result<void>>;
+
+  // --- SOTIF: Functional Insufficiency CRUD (shared node, linked 1-to-n to malfunctions) ---
+  createFunctionalInsufficiency(
+    namespace: string,
+    name: string,
+    description?: string,
+    source?: string,
+  ): Promise<Result<{ node_id: number }>>;
+  linkFunctionalInsufficiencyToFm(failureModeNodeId: number, functionalInsufficiencyNodeId: number): Promise<Result<{ edge_id: number }>>;
+  unlinkFunctionalInsufficiencyFromFm(failureModeNodeId: number, functionalInsufficiencyNodeId: number): Promise<Result<void>>;
+  getFunctionalInsufficiencies(failureModeNodeId: number): Promise<Result<ConceptInstanceData[]>>;
+  getAllFunctionalInsufficiencies(namespace: string): Promise<Result<ConceptInstanceData[]>>;
+  updateFunctionalInsufficiency(nodeId: number, updates: Record<string, unknown>): Promise<Result<void>>;
+  deleteFunctionalInsufficiency(nodeId: number): Promise<Result<void>>;
+
+  // --- SOTIF: Triggering Condition CRUD (shared node, linked 1-to-n to malfunctions) ---
+  createTriggeringCondition(
+    namespace: string,
+    name: string,
+    description?: string,
+    source?: string,
+  ): Promise<Result<{ node_id: number }>>;
+  linkTriggeringConditionToFm(failureModeNodeId: number, triggeringConditionNodeId: number): Promise<Result<{ edge_id: number }>>;
+  unlinkTriggeringConditionFromFm(failureModeNodeId: number, triggeringConditionNodeId: number): Promise<Result<void>>;
+  getTriggeringConditions(failureModeNodeId: number): Promise<Result<ConceptInstanceData[]>>;
+  getAllTriggeringConditions(namespace: string): Promise<Result<ConceptInstanceData[]>>;
+  updateTriggeringCondition(nodeId: number, updates: Record<string, unknown>): Promise<Result<void>>;
+  deleteTriggeringCondition(nodeId: number): Promise<Result<void>>;
 
   // --- Requirement CRUD ---
   createRequirement(
@@ -242,7 +274,7 @@ export function computeContentHash(attributes: Record<string, unknown>): string 
  * Severity weights for RPN computation.
  */
 const SEVERITY_WEIGHTS: Record<string, number> = {
-  'Safety-Impact': 2,
+  'Safety-Impact': 5,
   'QM-Impact': 1,
 };
 
@@ -837,16 +869,30 @@ export function createSafetyCommands(
       const guard = await assertAuthoredNamespace(dbModule, fmCheck.data.namespace, 'risk_rating');
       if (!guard.ok) return guard;
 
-      const rpn = computeRPN(params.severity, params.occurrence, params.detection);
       const attributes: Record<string, unknown> = {
         uuid: crypto.randomUUID(),
         has_name: `Risk Rating`,
-        has_severity: params.severity,
-        has_occurrence_level: params.occurrence,
-        has_detection_level: params.detection,
-        risk_priority_number: String(rpn),
         risk_rating_note: params.note ?? '',
       };
+      // SOTIF reduces the risk rating to a free-text residual-risk note: no
+      // Severity/Occurrence/Detection and no RPN are persisted (or exported).
+      // Guard on the malfunction's metamodel so this holds for EVERY create
+      // path (detail tab, inline expanded row, table view), regardless of what
+      // S/O/D defaults a generic UI passes. FMEA profiles keep the full rating.
+      const isSotif = fmCheck.data.metamodel === 'SOTIF_ANALYSIS';
+      if (
+        !isSotif &&
+        params.severity !== undefined &&
+        params.occurrence !== undefined &&
+        params.detection !== undefined
+      ) {
+        attributes.has_severity = params.severity;
+        attributes.has_occurrence_level = params.occurrence;
+        attributes.has_detection_level = params.detection;
+        attributes.risk_priority_number = String(
+          computeRPN(params.severity, params.occurrence, params.detection),
+        );
+      }
 
       const createResult = await instanceService.createInstance(
         fmCheck.data.namespace,
@@ -998,6 +1044,186 @@ export function createSafetyCommands(
 
     async deleteSafetyTask(nodeId: number): Promise<Result<void>> {
       const check = await assertConcept(instanceService, nodeId, 'safety_task');
+      if (!check.ok) return check;
+      await cascadeDeleteReviewItems(nodeId);
+      return instanceService.deleteInstance(nodeId);
+    },
+
+    // -----------------------------------------------------------------
+    // SOTIF: Functional Insufficiency CRUD
+    //
+    // A functional_insufficiency is created in the authored SOTIF namespace and
+    // linked to its parent malfunction in one call via the
+    // has_functional_insufficiencies relationship (mirrors createRiskRating).
+    // The concept exists only in the SOTIF metamodel, so createInstance rejects
+    // it in a non-SOTIF namespace — which is the intended guard.
+    // -----------------------------------------------------------------
+    async createFunctionalInsufficiency(
+      namespace: string,
+      name: string,
+      description?: string,
+      source?: string,
+    ): Promise<Result<{ node_id: number }>> {
+      const guard = await assertAuthoredNamespace(dbModule, namespace, 'functional_insufficiency');
+      if (!guard.ok) return guard;
+
+      const attributes: Record<string, unknown> = {
+        uuid: crypto.randomUUID(),
+        has_name: name,
+        fi_description: description ?? '',
+        fi_source: source ?? 'custom',
+      };
+
+      // Standalone create — a functional_insufficiency is a shared node that can
+      // be linked to many malfunctions (1-to-n). Linking is a separate step.
+      return instanceService.createInstance(namespace, 'functional_insufficiency', attributes);
+    },
+
+    async linkFunctionalInsufficiencyToFm(
+      failureModeNodeId: number,
+      functionalInsufficiencyNodeId: number,
+    ): Promise<Result<{ edge_id: number }>> {
+      const fmCheck = await assertConcept(instanceService, failureModeNodeId, 'malfunction');
+      if (!fmCheck.ok) return fmCheck;
+      const fiCheck = await assertConcept(instanceService, functionalInsufficiencyNodeId, 'functional_insufficiency');
+      if (!fiCheck.ok) return fiCheck;
+
+      return instanceService.createRelationship(
+        failureModeNodeId,
+        functionalInsufficiencyNodeId,
+        'has_functional_insufficiencies',
+      );
+    },
+
+    async unlinkFunctionalInsufficiencyFromFm(
+      failureModeNodeId: number,
+      functionalInsufficiencyNodeId: number,
+    ): Promise<Result<void>> {
+      const rows = await dbModule.runQuery(
+        `MATCH (ri:RIA_UNIV_RelationshipInstance)
+         WHERE ri.source_node_id = $srcId AND ri.target_node_id = $tgtId AND ri.relationship = 'has_functional_insufficiencies'
+         RETURN ri.edge_id AS edge_id`,
+        { srcId: failureModeNodeId, tgtId: functionalInsufficiencyNodeId },
+      );
+      if (rows.length === 0) {
+        return {
+          ok: false,
+          error: `No has_functional_insufficiencies edge found between ${failureModeNodeId} and ${functionalInsufficiencyNodeId}`,
+        };
+      }
+      return instanceService.deleteRelationship(Number(rows[0].edge_id));
+    },
+
+    async getFunctionalInsufficiencies(
+      failureModeNodeId: number,
+    ): Promise<Result<ConceptInstanceData[]>> {
+      const fiIds = await forwardTargetIds(failureModeNodeId, 'has_functional_insufficiencies');
+      const fis = await fetchNodesByIds(fiIds, 'functional_insufficiency');
+      return { ok: true, data: fis };
+    },
+
+    async getAllFunctionalInsufficiencies(namespace: string): Promise<Result<ConceptInstanceData[]>> {
+      return instanceService.getInstances(namespace, 'functional_insufficiency');
+    },
+
+    async updateFunctionalInsufficiency(
+      nodeId: number,
+      updates: Record<string, unknown>,
+    ): Promise<Result<void>> {
+      const check = await assertConcept(instanceService, nodeId, 'functional_insufficiency');
+      if (!check.ok) return check;
+      return instanceService.updateInstance(nodeId, updates);
+    },
+
+    async deleteFunctionalInsufficiency(nodeId: number): Promise<Result<void>> {
+      const check = await assertConcept(instanceService, nodeId, 'functional_insufficiency');
+      if (!check.ok) return check;
+      await cascadeDeleteReviewItems(nodeId);
+      // deleteInstance removes the node and all its relationship edges, so every
+      // malfunction it was linked to loses the link automatically.
+      return instanceService.deleteInstance(nodeId);
+    },
+
+    // -----------------------------------------------------------------
+    // SOTIF: Triggering Condition CRUD (mirrors Functional Insufficiency)
+    // -----------------------------------------------------------------
+    async createTriggeringCondition(
+      namespace: string,
+      name: string,
+      description?: string,
+      source?: string,
+    ): Promise<Result<{ node_id: number }>> {
+      const guard = await assertAuthoredNamespace(dbModule, namespace, 'triggering_condition');
+      if (!guard.ok) return guard;
+
+      const attributes: Record<string, unknown> = {
+        uuid: crypto.randomUUID(),
+        has_name: name,
+        tc_description: description ?? '',
+        tc_source: source ?? 'custom',
+      };
+
+      return instanceService.createInstance(namespace, 'triggering_condition', attributes);
+    },
+
+    async linkTriggeringConditionToFm(
+      failureModeNodeId: number,
+      triggeringConditionNodeId: number,
+    ): Promise<Result<{ edge_id: number }>> {
+      const fmCheck = await assertConcept(instanceService, failureModeNodeId, 'malfunction');
+      if (!fmCheck.ok) return fmCheck;
+      const tcCheck = await assertConcept(instanceService, triggeringConditionNodeId, 'triggering_condition');
+      if (!tcCheck.ok) return tcCheck;
+
+      return instanceService.createRelationship(
+        failureModeNodeId,
+        triggeringConditionNodeId,
+        'has_triggering_conditions',
+      );
+    },
+
+    async unlinkTriggeringConditionFromFm(
+      failureModeNodeId: number,
+      triggeringConditionNodeId: number,
+    ): Promise<Result<void>> {
+      const rows = await dbModule.runQuery(
+        `MATCH (ri:RIA_UNIV_RelationshipInstance)
+         WHERE ri.source_node_id = $srcId AND ri.target_node_id = $tgtId AND ri.relationship = 'has_triggering_conditions'
+         RETURN ri.edge_id AS edge_id`,
+        { srcId: failureModeNodeId, tgtId: triggeringConditionNodeId },
+      );
+      if (rows.length === 0) {
+        return {
+          ok: false,
+          error: `No has_triggering_conditions edge found between ${failureModeNodeId} and ${triggeringConditionNodeId}`,
+        };
+      }
+      return instanceService.deleteRelationship(Number(rows[0].edge_id));
+    },
+
+    async getTriggeringConditions(
+      failureModeNodeId: number,
+    ): Promise<Result<ConceptInstanceData[]>> {
+      const tcIds = await forwardTargetIds(failureModeNodeId, 'has_triggering_conditions');
+      const tcs = await fetchNodesByIds(tcIds, 'triggering_condition');
+      return { ok: true, data: tcs };
+    },
+
+    async getAllTriggeringConditions(namespace: string): Promise<Result<ConceptInstanceData[]>> {
+      return instanceService.getInstances(namespace, 'triggering_condition');
+    },
+
+    async updateTriggeringCondition(
+      nodeId: number,
+      updates: Record<string, unknown>,
+    ): Promise<Result<void>> {
+      const check = await assertConcept(instanceService, nodeId, 'triggering_condition');
+      if (!check.ok) return check;
+      return instanceService.updateInstance(nodeId, updates);
+    },
+
+    async deleteTriggeringCondition(nodeId: number): Promise<Result<void>> {
+      const check = await assertConcept(instanceService, nodeId, 'triggering_condition');
       if (!check.ok) return check;
       await cascadeDeleteReviewItems(nodeId);
       return instanceService.deleteInstance(nodeId);

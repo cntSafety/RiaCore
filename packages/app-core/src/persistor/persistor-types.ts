@@ -94,6 +94,15 @@ export interface LoadResult {
    * (Requirement 8.5).
    */
   connections_skipped?: { source: string; target: string }[];
+  /**
+   * View definitions (RIA_UNIV_View) that were persisted but could NOT be fully
+   * restored because at least one of their VIEW_SOURCE namespaces or
+   * VIEW_DEFINEDBY/VIEW_CATEGORIZEDBY metamodels is absent from the loaded
+   * workspace. A view left with zero VIEW_SOURCE edges after skipping dangling
+   * ones is dropped entirely — a view with zero sources is invalid
+   * (docs/coreSpecs/RiaViews.md). Present only when at least one view was skipped.
+   */
+  views_skipped?: { view: string; reason: string }[];
 }
 
 export interface RepairManifestResult {

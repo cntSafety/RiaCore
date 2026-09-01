@@ -77,4 +77,36 @@ export function registerCanvasLayoutChannels(
     requiresWorkspace: true,
     category: 'canvasLayout',
   });
+
+  // ── canvasLayout:getViewLayout ───────────────────────────────────────────────
+  // Positions stored for a view's content (spec-view.md Phase 4.2), keyed by the
+  // source element's node_id. Returned as an array of pairs rather than the
+  // service's Map, because a Map does not survive structured cloning across the
+  // worker and preload bridges.
+  registry.register('canvasLayout:getViewLayout', async (payload, deps, _ctx) => {
+    const service = createLayoutService(deps.dbModule);
+    const result = await service.getViewLayout(payload.viewName, payload.sources);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    return [...result.data].map(([nodeId, position]) => ({ nodeId, ...position }));
+  }, {
+    requiresWorkspace: true,
+    category: 'canvasLayout',
+  });
+
+  // ── canvasLayout:setViewLayout ───────────────────────────────────────────────
+  // Persist positions keyed by the source element's stable_path, so a layout
+  // survives a reimport of the source namespace.
+  registry.register('canvasLayout:setViewLayout', async (payload, deps, _ctx) => {
+    const service = createLayoutService(deps.dbModule);
+    const result = await service.setViewLayout(payload.viewName, payload.records);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    return result.data satisfies DiagramLayout;
+  }, {
+    requiresWorkspace: true,
+    category: 'canvasLayout',
+  });
 }

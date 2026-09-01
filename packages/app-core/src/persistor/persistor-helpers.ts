@@ -442,17 +442,45 @@ const SHARED_LAYERS: Array<'meta' | 'sourcemaster' | 'cross_namespace'> = [
  * Within each group the order is cross_namespace → sourcemaster → meta so that
  * foreign-key-like references are removed before the nodes they point to.
  *
+ * "Rel tables first" means every edge touching a node about to be deleted, not
+ * only the edges declared in a shared layer. A rel table declared in the
+ * `universe` layer can still have an endpoint in a shared-layer node table —
+ * RIA_UNIV_VIEW_DEFINEDBY and RIA_UNIV_VIEW_CATEGORIZEDBY both point at
+ * RIA_META_Metamodel — and Kuzu refuses a plain DELETE of a node that still has
+ * a connected edge. Those edges are therefore derived from the declared
+ * endpoints rather than from the layer label, so a new rel table into the meta
+ * layer is covered here without a further edit.
+ *
  * Excludes RIA_META_SchemaVersion — that node is managed separately and must
  * survive a load cycle.
  */
 export function buildSharedLayerClearStatements(): string[] {
   const stmts: string[] = [];
+  const clearedNodeTables = new Set(
+    CANONICAL_NODE_TABLES
+      .filter(t => (SHARED_LAYERS as string[]).includes(t.layer) && t.name !== 'RIA_META_SchemaVersion')
+      .map(t => t.name),
+  );
+  const emittedRels = new Set<string>();
+  const clearRel = (name: string): void => {
+    if (emittedRels.has(name)) return;
+    emittedRels.add(name);
+    stmts.push(`MATCH ()-[r:${name}]->() DELETE r`);
+  };
 
   // 1. Rel tables — edges must be deleted before the nodes they connect.
   for (const layer of SHARED_LAYERS) {
-    const relTables = CANONICAL_REL_TABLES.filter(t => t.layer === layer);
-    for (const rel of relTables) {
-      stmts.push(`MATCH ()-[r:${rel.name}]->() DELETE r`);
+    for (const rel of CANONICAL_REL_TABLES.filter(t => t.layer === layer)) {
+      clearRel(rel.name);
+    }
+  }
+
+  // 1b. Rel tables from any other layer that reference a node table cleared in
+  // step 2. Without these the node DELETE fails with "has connected edges in
+  // table <rel> in the bwd direction, which cannot be deleted".
+  for (const rel of CANONICAL_REL_TABLES) {
+    if (clearedNodeTables.has(rel.fromTable) || clearedNodeTables.has(rel.toTable)) {
+      clearRel(rel.name);
     }
   }
 
@@ -591,6 +619,20 @@ export async function exportLayer(
  */
 export async function deleteNamespace(name: string, dbModule: IDbModule, tx?: DbTransaction): Promise<void> {
   const runner = tx ?? dbModule;
+
+  // Views sourced on this namespace are cascade-deleted below. Their canvas
+  // layout records are keyed ('view:<viewName>', '<ns>#<stable_path>'), which
+  // the `element_key = <name>` statement at the end does NOT match — that one
+  // only clears namespace *tiles*, whose Element_Key is the bare namespace name
+  // (spec-view.md Phase 4.2). Collect the names first: after the cascade the
+  // views are gone and there is nothing left to derive the Element_Kind from.
+  const cascadedViewRows = await runner.runQuery(
+    `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(ns:RIA_UNIV_Namespace)
+     WHERE ns.name = $name RETURN DISTINCT v.name AS name`,
+    { name },
+  );
+  const cascadedViewNames = cascadedViewRows.map((row) => String(row.name ?? '')).filter((n) => n.length > 0);
+
   const stmts = [
     // INSTANCE_REL edges are strictly intra-namespace: both endpoints always belong to the
     // same namespace. Scoping by source namespace alone is sufficient and safe — using OR on
@@ -611,6 +653,16 @@ export async function deleteNamespace(name: string, dbModule: IDbModule, tx?: Db
      WHERE nr.source_namespace = '${e(name)}' OR nr.target_namespace = '${e(name)}' DELETE r`,
     `MATCH (nr:RIA_UNIV_NamespaceRelation)
      WHERE nr.source_namespace = '${e(name)}' OR nr.target_namespace = '${e(name)}' DELETE nr`,
+    // A view is derived and does not outlive its sources: deleting a namespace
+    // deletes every view that references it as a source, regardless of how many
+    // other source namespaces those views have (docs/coreSpecs/RiaViews.md — views
+    // do not outlive their sources). Must run BEFORE the namespace DETACH DELETE
+    // below, because that statement removes the VIEW_SOURCE edge itself, after
+    // which the views referencing this namespace can no longer be found this way.
+    // DETACH DELETE on the view node removes its VIEW_DEFINEDBY/CATEGORIZEDBY/
+    // SOURCE edges in the same step — a view has no other stored content to clean up.
+    `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(ns:RIA_UNIV_Namespace)
+     WHERE ns.name = '${e(name)}' WITH DISTINCT v DETACH DELETE v`,
     // DETACH DELETE removes the namespace node and ALL directly-attached edges,
     // which includes RIA_UNIV_NamespaceConnection edges to/from this namespace —
     // those are implicitly cleaned up here without a separate statement.
@@ -621,6 +673,13 @@ export async function deleteNamespace(name: string, dbModule: IDbModule, tx?: Db
     // statement so the layout file written by the next universe-scoped auto-save
     // reflects the current (reduced) tile set rather than keeping a stale record.
     `MATCH (l:RIA_UNIV_CanvasLayout) WHERE l.element_key = '${e(name)}' DELETE l`,
+    // Companion statement for the views cascade-deleted above: their layout
+    // records are keyed by Element_Kind 'view:<viewName>', never by the
+    // namespace name, so the statement above cannot reach them and they would
+    // otherwise survive as orphans that no resolver ever prunes.
+    ...cascadedViewNames.map(
+      (viewName) => `MATCH (l:RIA_UNIV_CanvasLayout) WHERE l.element_kind = 'view:${e(viewName)}' DELETE l`,
+    ),
   ];
 
   for (const stmt of stmts) {

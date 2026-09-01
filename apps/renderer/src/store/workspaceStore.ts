@@ -104,10 +104,11 @@ interface WorkspaceStore {
   pendingCheckAutoRun: Record<string, boolean>;
   copiedMalfunction: CopiedMalfunctionData | null;
   /**
-   * Persisted lens view for diagram elements (Connections / Propagation / Notes / Table View).
+   * Persisted tab selection for the element detail view (Model / Propagation /
+   * Malfunctions / Notes / Details).
    * Stored globally as a session-level UI preference — survives navigation between nodes.
    */
-  elementLensView: 'diagram' | 'propagation' | 'details' | 'table';
+  elementLensView: 'diagram' | 'propagation' | 'table' | 'notes' | 'details';
   /**
    * When true, the safety tree renders all model elements regardless of the
    * per-metamodel tree rendering config. Session-level UI/view preference —
@@ -135,7 +136,7 @@ interface WorkspaceStore {
   setPendingPropagationSource: (safetyNs: string, src: PendingPropagationSource | null) => void;
   setPendingCheckAutoRun: (namespaceId: string, pending: boolean) => void;
   setCopiedMalfunction: (data: CopiedMalfunctionData | null) => void;
-  setElementLensView: (view: 'diagram' | 'propagation' | 'details' | 'table') => void;
+  setElementLensView: (view: 'diagram' | 'propagation' | 'table' | 'notes' | 'details') => void;
   setShowAllTreeElements: (v: boolean) => void;
   /** Enter/leave the Auto_Layout_Active_State (true) or Deactivated (false). */
   setAutoLayoutActive: (active: boolean) => void;

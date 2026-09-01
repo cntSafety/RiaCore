@@ -26,7 +26,7 @@ title: Safety Analysis Base Metamodel — Shared Structure
 description: >-
   Shared base for FMEA-style analysis profiles. Composed with a profile overlay
   before parsing; not used standalone.
-version: "1.0.1"
+version: "1.0.2"
 
 prefixes:
   linkml: https://w3id.org/linkml/
@@ -40,6 +40,61 @@ display_identifier_attrs:
 
 imports:
   - linkml:types
+
+##############################################################################
+# ANNOTATIONS (profile-invariant)
+#
+# action_priority: profile-configurable Action Priority (AP) lookup — see
+# docs/particular/SafetyImprove.md §2. Lives in the base (not an overlay)
+# because every FMEA-style profile uses the same 5-level OccurrenceLevel /
+# DetectionLevel shape and the same two-level SeverityLevel from this base,
+# so the table applies uniformly. Annotation merge is per-key (mergeReplace):
+# an overlay only needs its own `action_priority` key if it wants to override
+# this table — none currently do, so all profiles built on this base
+# (SAFETY_ANALYSIS, SYSTEM_SAFETY_ANALYSIS, MONITORING_ANALYSIS) inherit it
+# unchanged. Computed on demand by the renderer; never persisted on the
+# risk_rating instance.
+##############################################################################
+
+annotations:
+  action_priority:
+    tag: action_priority
+    value: |-
+      {
+        "occurrenceLevels": ["Level1", "Level2", "Level3", "Level4", "Level5"],
+        "detectionLevels": ["Level1", "Level2", "Level3", "Level4", "Level5"],
+        "severityClasses": [
+          {
+            "id": "S_safety",
+            "label": "Safety-Impact",
+            "whenSeverity": ["Safety-Impact"],
+            "table": [
+              ["L", "L", "M", "H", "H"],
+              ["L", "L", "M", "H", "H"],
+              ["M", "M", "H", "H", "H"],
+              ["M", "H", "H", "H", "H"],
+              ["H", "H", "H", "H", "H"]
+            ]
+          },
+          {
+            "id": "S_qm",
+            "label": "QM-Impact",
+            "whenSeverity": ["QM-Impact"],
+            "table": [
+              ["L", "L", "L", "L", "L"],
+              ["L", "L", "L", "L", "M"],
+              ["L", "L", "L", "M", "M"],
+              ["L", "L", "M", "M", "H"],
+              ["L", "M", "M", "H", "H"]
+            ]
+          }
+        ],
+        "levels": {
+          "H": {"label": "High",   "color": "#ff4d4f", "description": "Highest priority. Requires a mitigation, or an explicit rationale for the current severity/occurrence/detection combination."},
+          "M": {"label": "Medium", "color": "#faad14", "description": "Moderate priority. Review the rating and consider whether further risk reduction is worthwhile."},
+          "L": {"label": "Low",    "color": "#52c41a", "description": "Lower priority given the current rating. Still subject to normal review."}
+        }
+      }
 
 ##############################################################################
 # ENUMERATIONS (profile-invariant only)

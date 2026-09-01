@@ -44,6 +44,10 @@ import { computeMetaHash, computeNamespaceHashFromFiles } from './persistor.js';
  */
 export const UNIVERSE_CANVAS_LAYOUT_REL = 'universe/RIA_UNIV_CanvasLayout.json';
 export const UNIVERSE_NAMESPACE_CONNECTION_REL = 'universe/RIA_UNIV_NamespaceConnection.json';
+export const UNIVERSE_VIEW_REL = 'universe/RIA_UNIV_View.json';
+export const UNIVERSE_VIEW_SOURCE_REL = 'universe/RIA_UNIV_VIEW_SOURCE.json';
+export const UNIVERSE_VIEW_DEFINEDBY_REL = 'universe/RIA_UNIV_VIEW_DEFINEDBY.json';
+export const UNIVERSE_VIEW_CATEGORIZEDBY_REL = 'universe/RIA_UNIV_VIEW_CATEGORIZEDBY.json';
 
 /**
  * Re-export the shared per-file Universe_Hash helper (now owned by
@@ -80,6 +84,48 @@ async function queryLayoutRows(dbModule: IDbModule): Promise<Record<string, unkn
 }
 
 /**
+ * Read the current `RIA_UNIV_View` rows from the DB, in the canonical order used
+ * for serialization. Shared with the full store path.
+ */
+async function queryViewRows(dbModule: IDbModule): Promise<Record<string, unknown>[]> {
+  return dbModule.runQuery(
+    `MATCH (v:RIA_UNIV_View)
+     RETURN v.name AS name, v.description AS description, v.metamodel AS metamodel,
+            v.mapping AS mapping, v.parameters AS parameters
+     ORDER BY name`
+  );
+}
+
+/**
+ * Read the current `RIA_UNIV_VIEW_SOURCE` / `RIA_UNIV_VIEW_DEFINEDBY` /
+ * `RIA_UNIV_VIEW_CATEGORIZEDBY` rows from the DB, in the canonical order used for
+ * serialization. Shared with the full store path.
+ */
+async function queryViewSourceRows(dbModule: IDbModule): Promise<Record<string, unknown>[]> {
+  return dbModule.runQuery(
+    `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(ns:RIA_UNIV_Namespace)
+     RETURN v.name AS src_name, ns.name AS dst_name
+     ORDER BY src_name, dst_name`
+  );
+}
+
+async function queryViewDefinedByRows(dbModule: IDbModule): Promise<Record<string, unknown>[]> {
+  return dbModule.runQuery(
+    `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_DEFINEDBY]->(mm:RIA_META_Metamodel)
+     RETURN v.name AS src_name, mm.name AS dst_name
+     ORDER BY src_name, dst_name`
+  );
+}
+
+async function queryViewCategorizedByRows(dbModule: IDbModule): Promise<Record<string, unknown>[]> {
+  return dbModule.runQuery(
+    `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_CATEGORIZEDBY]->(mm:RIA_META_Metamodel)
+     RETURN v.name AS src_name, mm.name AS dst_name
+     ORDER BY src_name, dst_name`
+  );
+}
+
+/**
  * Universe-scoped store (Req 1.4, 2.3, 4.4, 5.1, 5.2, 6.1, 6.2, 10.1–10.3).
  *
  * Writes ONLY the two universe-layer files, reading the current DB rows at
@@ -106,21 +152,37 @@ async function storeUniverseOnly(
   // same primitives / sort keys as the full store path so bytes are identical.
   const connectionRows = await queryConnectionRows(dbModule);
   const layoutRows = await queryLayoutRows(dbModule);
+  const viewRows = await queryViewRows(dbModule);
+  const viewSourceRows = await queryViewSourceRows(dbModule);
+  const viewDefinedByRows = await queryViewDefinedByRows(dbModule);
+  const viewCategorizedByRows = await queryViewCategorizedByRows(dbModule);
 
   const connectionContent = serializeTable(connectionRows, 'src_name', [], []);
   const layoutContent = serializeTable(layoutRows, 'layout_id', [], []);
+  const viewContent = serializeTable(viewRows, 'name', ['parameters'], []);
+  const viewSourceContent = serializeTable(viewSourceRows, 'src_name', [], []);
+  const viewDefinedByContent = serializeTable(viewDefinedByRows, 'src_name', [], []);
+  const viewCategorizedByContent = serializeTable(viewCategorizedByRows, 'src_name', [], []);
 
   const connectionFilePath = path.join(exportDir, UNIVERSE_NAMESPACE_CONNECTION_REL);
   const layoutFilePath = path.join(exportDir, UNIVERSE_CANVAS_LAYOUT_REL);
+  const viewFilePath = path.join(exportDir, UNIVERSE_VIEW_REL);
+  const viewSourceFilePath = path.join(exportDir, UNIVERSE_VIEW_SOURCE_REL);
+  const viewDefinedByFilePath = path.join(exportDir, UNIVERSE_VIEW_DEFINEDBY_REL);
+  const viewCategorizedByFilePath = path.join(exportDir, UNIVERSE_VIEW_CATEGORIZEDBY_REL);
 
   // Atomic writes: an interrupted or failed write leaves the previous complete
   // file untouched (Req 5.1–5.4). A failure rethrows so the caller's failure
   // path engages.
   writeFileAtomic(layoutFilePath, layoutContent);
   writeFileAtomic(connectionFilePath, connectionContent);
+  writeFileAtomic(viewFilePath, viewContent);
+  writeFileAtomic(viewSourceFilePath, viewSourceContent);
+  writeFileAtomic(viewDefinedByFilePath, viewDefinedByContent);
+  writeFileAtomic(viewCategorizedByFilePath, viewCategorizedByContent);
 
-  // Load the existing manifest and mutate ONLY the two universe entries. This
-  // preserves namespace_hashes, meta_hash, and every other inventory entry
+  // Load the existing manifest and mutate ONLY the universe entries written here.
+  // This preserves namespace_hashes, meta_hash, and every other inventory entry
   // byte-identical (Req 10.2, 10.3). A universe-scoped store only runs on a
   // loaded workspace, which always has a manifest on disk.
   const manifestPath = path.join(exportDir, 'manifest.json');
@@ -134,27 +196,43 @@ async function storeUniverseOnly(
   const universeHashes: Record<string, string> = { ...(manifest.universe_hashes ?? {}) };
   universeHashes[UNIVERSE_CANVAS_LAYOUT_REL] = computeUniverseFileHash(layoutContent);
   universeHashes[UNIVERSE_NAMESPACE_CONNECTION_REL] = computeUniverseFileHash(connectionContent);
+  universeHashes[UNIVERSE_VIEW_REL] = computeUniverseFileHash(viewContent);
+  universeHashes[UNIVERSE_VIEW_SOURCE_REL] = computeUniverseFileHash(viewSourceContent);
+  universeHashes[UNIVERSE_VIEW_DEFINEDBY_REL] = computeUniverseFileHash(viewDefinedByContent);
+  universeHashes[UNIVERSE_VIEW_CATEGORIZEDBY_REL] = computeUniverseFileHash(viewCategorizedByContent);
   manifest.universe_hashes = universeHashes;
 
   manifest.file_inventory[UNIVERSE_CANVAS_LAYOUT_REL] = layoutRows.length;
   manifest.file_inventory[UNIVERSE_NAMESPACE_CONNECTION_REL] = connectionRows.length;
+  manifest.file_inventory[UNIVERSE_VIEW_REL] = viewRows.length;
+  manifest.file_inventory[UNIVERSE_VIEW_SOURCE_REL] = viewSourceRows.length;
+  manifest.file_inventory[UNIVERSE_VIEW_DEFINEDBY_REL] = viewDefinedByRows.length;
+  manifest.file_inventory[UNIVERSE_VIEW_CATEGORIZEDBY_REL] = viewCategorizedByRows.length;
 
   writeFileAtomic(manifestPath, serializeMetadata(manifest as unknown as Record<string, unknown>));
+
+  const totalRecords = layoutRows.length + connectionRows.length + viewRows.length +
+    viewSourceRows.length + viewDefinedByRows.length + viewCategorizedByRows.length;
+  const universeFilesWritten = [
+    UNIVERSE_CANVAS_LAYOUT_REL, UNIVERSE_NAMESPACE_CONNECTION_REL,
+    UNIVERSE_VIEW_REL, UNIVERSE_VIEW_SOURCE_REL, UNIVERSE_VIEW_DEFINEDBY_REL, UNIVERSE_VIEW_CATEGORIZEDBY_REL,
+  ];
 
   const elapsed = Date.now() - storeStart;
   logger.info(
     `store [scope=universe] done — ${UNIVERSE_CANVAS_LAYOUT_REL} (${layoutRows.length} record(s)), ` +
-    `${UNIVERSE_NAMESPACE_CONNECTION_REL} (${connectionRows.length} record(s)), elapsed=${elapsed}ms`
+    `${UNIVERSE_NAMESPACE_CONNECTION_REL} (${connectionRows.length} record(s)), ` +
+    `${UNIVERSE_VIEW_REL} (${viewRows.length} record(s)), elapsed=${elapsed}ms`
   );
 
   return {
     exported_at: exportedAt,
-    // Two universe files + the manifest.
-    files_written: 3,
+    // Six universe files + the manifest.
+    files_written: universeFilesWritten.length + 1,
     namespaces_skipped: [],
     namespaces_written: [],
-    total_records: layoutRows.length + connectionRows.length,
-    universe_files_written: [UNIVERSE_CANVAS_LAYOUT_REL, UNIVERSE_NAMESPACE_CONNECTION_REL],
+    total_records: totalRecords,
+    universe_files_written: universeFilesWritten,
   };
 }
 
@@ -448,6 +526,32 @@ async function storeImpl(
   totalRecords += layoutRows.length;
   filesWritten++;
 
+  // Step 5d: Export view definitions (RIA_UNIV_View) and their three relationship
+  // tables. Global (not scoped to a single namespace), like RIA_UNIV_CanvasLayout /
+  // RIA_UNIV_NamespaceConnection above — exported once here, NOT by any generic
+  // layer export, for both full and scoped stores.
+  const viewRows = await queryViewRows(dbModule);
+  const viewSourceRows = await queryViewSourceRows(dbModule);
+  const viewDefinedByRows = await queryViewDefinedByRows(dbModule);
+  const viewCategorizedByRows = await queryViewCategorizedByRows(dbModule);
+
+  const viewContent = serializeTable(viewRows, 'name', ['parameters'], []);
+  const viewSourceContent = serializeTable(viewSourceRows, 'src_name', [], []);
+  const viewDefinedByContent = serializeTable(viewDefinedByRows, 'src_name', [], []);
+  const viewCategorizedByContent = serializeTable(viewCategorizedByRows, 'src_name', [], []);
+
+  fs.writeFileSync(path.join(universeDir, 'RIA_UNIV_View.json'), viewContent, 'utf-8');
+  fs.writeFileSync(path.join(universeDir, 'RIA_UNIV_VIEW_SOURCE.json'), viewSourceContent, 'utf-8');
+  fs.writeFileSync(path.join(universeDir, 'RIA_UNIV_VIEW_DEFINEDBY.json'), viewDefinedByContent, 'utf-8');
+  fs.writeFileSync(path.join(universeDir, 'RIA_UNIV_VIEW_CATEGORIZEDBY.json'), viewCategorizedByContent, 'utf-8');
+
+  fileInventory[UNIVERSE_VIEW_REL] = viewRows.length;
+  fileInventory[UNIVERSE_VIEW_SOURCE_REL] = viewSourceRows.length;
+  fileInventory[UNIVERSE_VIEW_DEFINEDBY_REL] = viewDefinedByRows.length;
+  fileInventory[UNIVERSE_VIEW_CATEGORIZEDBY_REL] = viewCategorizedByRows.length;
+  totalRecords += viewRows.length + viewSourceRows.length + viewDefinedByRows.length + viewCategorizedByRows.length;
+  filesWritten += 4;
+
   // Record a Universe_Hash for each universe-layer file over the exact same
   // serialized bytes just written (reused, not re-read from disk), using the
   // shared hash-computation path (task 2.1 / 2.2) so store, load, and repair
@@ -455,6 +559,10 @@ async function storeImpl(
   const universeHashes: Record<string, string> = {
     [UNIVERSE_CANVAS_LAYOUT_REL]: computeUniverseFileHash(layoutContent),
     [UNIVERSE_NAMESPACE_CONNECTION_REL]: computeUniverseFileHash(connectionContent),
+    [UNIVERSE_VIEW_REL]: computeUniverseFileHash(viewContent),
+    [UNIVERSE_VIEW_SOURCE_REL]: computeUniverseFileHash(viewSourceContent),
+    [UNIVERSE_VIEW_DEFINEDBY_REL]: computeUniverseFileHash(viewDefinedByContent),
+    [UNIVERSE_VIEW_CATEGORIZEDBY_REL]: computeUniverseFileHash(viewCategorizedByContent),
   };
 
   // Step 6: Export each namespace
@@ -531,7 +639,6 @@ async function storeImpl(
       crossNsEdgesAsSource,
       nodeKeyAttrs,
       edgeKeyAttrs,
-      debugLog: (msg) => logger.debug(`[store/hash] ${msg}`, { namespace }),
     });
 
     // Delta skip: hash matches AND files exist on disk

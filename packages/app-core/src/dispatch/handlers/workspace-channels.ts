@@ -22,6 +22,10 @@ import { runAllCleanups } from '../../infra/cleanup-service.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+// Default views for imported namespaces are seeded inside `workspaceService.open()`
+// itself, not here: the CLI opens workspaces directly and never reaches these
+// handlers, so seeding at this layer would cover the desktop app and miss it.
+
 /**
  * Register workspace channels (open, getStatus).
  * Both require an open workspace context — `workspace.open` is the entry point

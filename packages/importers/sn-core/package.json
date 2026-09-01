@@ -9,14 +9,14 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@riacore/importer-sdk": "workspace:*",
     "@riacore/app-contracts": "workspace:*",
-    "yaml": "^2.7.0"
+    "@riacore/importer-sdk": "workspace:*",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.1",
-    "@ladybugdb/core": "*",
-    "typescript": "^5.4.0",
-    "vitest": "^3.0.0"
+    "@ladybugdb/core": "^0.19.1",
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

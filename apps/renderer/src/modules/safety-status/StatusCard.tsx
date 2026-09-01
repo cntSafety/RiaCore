@@ -33,6 +33,7 @@ import type { ComponentExportData, MalfunctionExportData } from '@riacore/app-co
 import { RiskMatrix, type RiskMatrixBubble } from './RiskMatrix';
 import { ComponentDiagram } from './ComponentDiagram';
 import { ShowInTreeTrigger } from '../../components/ShowInTreeTrigger';
+import { useSafetyProfileMetadata } from '../namespace/editors/safety-analysis/hooks/useSafetyProfileMetadata';
 
 export interface StatusCardProps {
   component: ComponentExportData;
@@ -92,6 +93,7 @@ function metamodelLabel(componentType: string): string {
 
 export function StatusCard({ component, safetyNamespace }: StatusCardProps) {
   const bubbles = computeRiskMatrixBubbles(component);
+  const profile = useSafetyProfileMetadata();
 
   return (
     <div data-testid="status-card">
@@ -124,7 +126,7 @@ export function StatusCard({ component, safetyNamespace }: StatusCardProps) {
         {bubbles.length > 0 && (
           <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <div style={{ fontSize: 12, marginBottom: 6, opacity: 0.75, alignSelf: 'flex-start' }}>Risk Matrix</div>
-            <RiskMatrix bubbles={bubbles} />
+            <RiskMatrix bubbles={bubbles} actionPriority={profile.actionPriority} />
           </div>
         )}
 

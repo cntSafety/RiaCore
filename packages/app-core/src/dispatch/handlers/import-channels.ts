@@ -365,6 +365,9 @@ export function registerImportChannels(
   registry: ReturnType<typeof createRegistry>,
 ): void {
   // ── imports.run ──────────────────────────────────────────────────────────────
+  // Default views for the imported namespace are seeded inside
+  // `orchestration.runImport` itself, not here: the CLI calls that service
+  // directly and never reaches this handler.
   registry.register('imports.run', async (payload, deps, _ctx) => {
     if (!deps.orchestration) throw new Error('Import orchestration not configured');
     const result = await deps.orchestration.runImport(payload);

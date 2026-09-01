@@ -19,6 +19,7 @@
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import type { ConceptInstanceData } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
 import { aggregateExportData } from './safety-export-aggregator.js';
 import { generateSphinxNeedsRst } from './sphinx-needs-generator.js';
@@ -131,6 +132,10 @@ export function registerSafetyChannels(
 
   registry.register('safety.getPropagationsForComponent', async (payload, deps, _ctx) => {
     const { structuralNodeId } = payload;
+    const analysisScope = {
+      allAnalyses: payload.safetyNamespace === undefined,
+      safetyNamespace: payload.safetyNamespace ?? '',
+    };
 
     const containmentRelRows = await deps.dbModule.runQuery(
       `MATCH (r:RIA_META_Relationship)
@@ -218,14 +223,15 @@ export function registerSafetyChannels(
       }),
     ];
 
-    // Step 2: Find all malfunctions that occurs_at any of these structural nodes
+    // Step 2: Find this analysis's malfunctions on the shared structural nodes.
     const fmRows = await deps.dbModule.runQuery(
       `MATCH (fm:RIA_UNIV_ConceptInstance)-[oa:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tgt:RIA_UNIV_ConceptInstance)
        WHERE oa.relationship = 'occurs_at' AND tgt.node_id IN $structuralIds AND fm.concept = 'malfunction'
+         AND ($allAnalyses OR fm.namespace = $safetyNamespace)
        RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
               fm.metamodel AS metamodel, fm.attributes AS attributes,
               tgt.node_id AS oa_node_id, tgt.namespace AS oa_namespace, tgt.concept AS oa_concept, tgt.attributes AS oa_attributes`,
-      { structuralIds: structuralNodeIds },
+      { structuralIds: structuralNodeIds, ...analysisScope },
     );
 
     const internalNodeIds = new Set(fmRows.map(r => Number(r.node_id)));
@@ -284,12 +290,13 @@ export function registerSafetyChannels(
       const boundaryRows = await deps.dbModule.runQuery(
         `MATCH (fm:RIA_UNIV_ConceptInstance)
          WHERE fm.node_id IN $boundaryIds AND fm.concept = 'malfunction'
+           AND ($allAnalyses OR fm.namespace = $safetyNamespace)
          OPTIONAL MATCH (fm)-[oa:RIA_UNIV_CROSSNS_INSTANCE_REL]->(oaTgt:RIA_UNIV_ConceptInstance)
            WHERE oa.relationship = 'occurs_at'
          RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
                 fm.metamodel AS metamodel, fm.attributes AS attributes,
                 oaTgt.node_id AS oa_node_id, oaTgt.namespace AS oa_namespace, oaTgt.concept AS oa_concept, oaTgt.attributes AS oa_attributes`,
-        { boundaryIds: Array.from(boundaryNodeIds) },
+        { boundaryIds: Array.from(boundaryNodeIds), ...analysisScope },
       );
       boundaryNodes = boundaryRows.map(row => ({
         node_id: Number(row.node_id),
@@ -303,7 +310,14 @@ export function registerSafetyChannels(
       }));
     }
 
-    return { internalNodes, boundaryNodes, internalEdges, boundaryEdges, structuralNodes };
+    // Structural boundary nodes remain visible within the analysis; a link to
+    // a malfunction in a different analysis must not reintroduce it or leave
+    // an edge whose endpoint was filtered out.
+    const visibleIds = new Set([...internalNodeIds, ...boundaryNodes.map(node => node.node_id)]);
+    return {
+      internalNodes, boundaryNodes, internalEdges, structuralNodes,
+      boundaryEdges: boundaryEdges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target)),
+    };
   }, { requiresWorkspace: true, category: CATEGORY });
 
   // ── Risk Rating ──────────────────────────────────────────────────────────────
@@ -477,6 +491,165 @@ export function registerSafetyChannels(
     return result.data;
   }, { requiresWorkspace: true, category: CATEGORY });
 
+  // ── SOTIF: Functional Insufficiencies (shared node, 1-to-n to malfunctions) ──
+
+  registry.register('safety.createFunctionalInsufficiency', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.createFunctionalInsufficiency(
+      payload.namespace, payload.name, payload.description, payload.source,
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.linkFunctionalInsufficiencyToFm', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.linkFunctionalInsufficiencyToFm(
+      payload.failureModeNodeId, payload.functionalInsufficiencyNodeId,
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.unlinkFunctionalInsufficiencyFromFm', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.unlinkFunctionalInsufficiencyFromFm(
+      payload.failureModeNodeId, payload.functionalInsufficiencyNodeId,
+    );
+    if (!result.ok) throw new Error(result.error);
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getFunctionalInsufficiencies', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.getFunctionalInsufficiencies(payload.failureModeNodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getAllFunctionalInsufficiencies', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.getAllFunctionalInsufficiencies(payload.namespace);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getMalfunctionsForFunctionalInsufficiency', async (payload, deps, _ctx) => {
+    // Reverse 1-to-n query: which malfunctions reference this functional
+    // insufficiency. Union intra- and cross-namespace edges (mirrors
+    // getMalfunctionsForRequirement).
+    const rows = await deps.dbModule.runQuery(
+      `MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(fi:RIA_UNIV_ConceptInstance)
+       WHERE fi.node_id = $nodeId AND r.relationship = 'has_functional_insufficiencies' AND fm.concept = 'malfunction'
+       RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
+              fm.metamodel AS metamodel, fm.attributes AS attributes
+       UNION
+       MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(fi:RIA_UNIV_ConceptInstance)
+       WHERE fi.node_id = $nodeId AND r.relationship = 'has_functional_insufficiencies' AND fm.concept = 'malfunction'
+       RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
+              fm.metamodel AS metamodel, fm.attributes AS attributes`,
+      { nodeId: payload.functionalInsufficiencyNodeId },
+    );
+    return rows.map(row => ({
+      node_id: Number(row.node_id),
+      namespace: String(row.namespace),
+      concept: String(row.concept),
+      metamodel: String(row.metamodel),
+      attributes: JSON.parse(String(row.attributes || '{}')),
+    }));
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.updateFunctionalInsufficiency', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.updateFunctionalInsufficiency(payload.nodeId, payload.updates);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.deleteFunctionalInsufficiency', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.deleteFunctionalInsufficiency(payload.nodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  // ── SOTIF: Triggering Conditions (shared node, 1-to-n to malfunctions) ───────
+
+  registry.register('safety.createTriggeringCondition', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.createTriggeringCondition(
+      payload.namespace, payload.name, payload.description, payload.source,
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.linkTriggeringConditionToFm', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.linkTriggeringConditionToFm(
+      payload.failureModeNodeId, payload.triggeringConditionNodeId,
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.unlinkTriggeringConditionFromFm', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.unlinkTriggeringConditionFromFm(
+      payload.failureModeNodeId, payload.triggeringConditionNodeId,
+    );
+    if (!result.ok) throw new Error(result.error);
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getTriggeringConditions', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.getTriggeringConditions(payload.failureModeNodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getAllTriggeringConditions', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.getAllTriggeringConditions(payload.namespace);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getMalfunctionsForTriggeringCondition', async (payload, deps, _ctx) => {
+    const rows = await deps.dbModule.runQuery(
+      `MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(tc:RIA_UNIV_ConceptInstance)
+       WHERE tc.node_id = $nodeId AND r.relationship = 'has_triggering_conditions' AND fm.concept = 'malfunction'
+       RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
+              fm.metamodel AS metamodel, fm.attributes AS attributes
+       UNION
+       MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tc:RIA_UNIV_ConceptInstance)
+       WHERE tc.node_id = $nodeId AND r.relationship = 'has_triggering_conditions' AND fm.concept = 'malfunction'
+       RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
+              fm.metamodel AS metamodel, fm.attributes AS attributes`,
+      { nodeId: payload.triggeringConditionNodeId },
+    );
+    return rows.map(row => ({
+      node_id: Number(row.node_id),
+      namespace: String(row.namespace),
+      concept: String(row.concept),
+      metamodel: String(row.metamodel),
+      attributes: JSON.parse(String(row.attributes || '{}')),
+    }));
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.updateTriggeringCondition', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.updateTriggeringCondition(payload.nodeId, payload.updates);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.deleteTriggeringCondition', async (payload, deps, _ctx) => {
+    if (!deps.safetyCommands) throw new Error('Safety commands not configured');
+    const result = await deps.safetyCommands.deleteTriggeringCondition(payload.nodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
   // ── Requirements ─────────────────────────────────────────────────────────────
 
   registry.register('safety.createRequirement', async (payload, deps, _ctx) => {
@@ -627,6 +800,55 @@ export function registerSafetyChannels(
       metamodel: String(row.metamodel),
       attributes: JSON.parse(String(row.attributes || '{}')),
     }));
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  /**
+   * Batch peer of `safety.getMalfunctionsForElement`.
+   *
+   * The view-based connection diagram resolves malfunctions for every port and
+   * component it draws from `rep.sources[].nodeId` — safety data is outside
+   * `CommonModel` by design (spec-view.md Phase 4.3), so it is fetched
+   * alongside rather than through the view. Doing that one node at a time would
+   * be one round trip per pin on the diagram; this is the same query with `IN`.
+   * An analysis view supplies its authored safety namespace: the same imported
+   * element can have unrelated malfunctions in several analyses. Omitting the
+   * namespace retains the aggregate lookup used outside an analysis context.
+   *
+   * Every requested node id appears in the result, mapping to an empty array
+   * when it has no malfunctions, so a caller never has to distinguish "none"
+   * from "not asked for".
+   */
+  registry.register('safety.getMalfunctionsForElements', async (payload, deps, _ctx) => {
+    const targetNodeIds = [...new Set(payload.targetNodeIds ?? [])].filter((id) => Number.isFinite(id));
+    const result: Record<number, ConceptInstanceData[]> = {};
+    for (const nodeId of targetNodeIds) result[nodeId] = [];
+    if (targetNodeIds.length === 0) return result;
+
+    const rows = await deps.dbModule.runQuery(
+      `MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tgt:RIA_UNIV_ConceptInstance)
+       WHERE tgt.node_id IN $targetNodeIds AND r.relationship = 'occurs_at' AND fm.concept = 'malfunction'
+         AND ($allAnalyses OR fm.namespace = $safetyNamespace)
+       RETURN tgt.node_id AS target_node_id, fm.node_id AS node_id, fm.namespace AS namespace,
+              fm.concept AS concept, fm.metamodel AS metamodel, fm.attributes AS attributes`,
+      {
+        targetNodeIds,
+        allAnalyses: payload.safetyNamespace === undefined,
+        safetyNamespace: payload.safetyNamespace ?? '',
+      },
+    );
+    for (const row of rows) {
+      const targetNodeId = Number(row.target_node_id);
+      const list = result[targetNodeId];
+      if (!list) continue;
+      list.push({
+        node_id: Number(row.node_id),
+        namespace: String(row.namespace),
+        concept: String(row.concept),
+        metamodel: String(row.metamodel),
+        attributes: JSON.parse(String(row.attributes || '{}')),
+      });
+    }
+    return result;
   }, { requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getRequirementsForFm', async (payload, deps, _ctx) => {

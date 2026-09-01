@@ -36,6 +36,7 @@ import { getRecentWorkspaces, addRecentWorkspace } from './recent-workspaces.js'
 // utility-process worker). The settings store has no native deps, so a
 // direct path-import keeps the main process free of the native bindings.
 import { LlmSettingsStore } from '@riacore/app-core/dist/llm/llm-settings-store.js';
+import { CrossNsLinkSettingsStore } from '@riacore/app-core/dist/settings/cross-ns-link-settings-store.js';
 // Pure path helpers, no native deps — safe to load in the main process.
 import { toWorkspaceRelative } from '@riacore/importer-sdk';
 import {
@@ -69,6 +70,16 @@ export let manager: UtilityProcessManager;
  * Requirement 11.2, Requirement 12.4.
  */
 export let llmSettingsStore: LlmSettingsStore;
+
+/**
+ * File-backed store for the cross-namespace-link preference (what the
+ * Imported Requirement picker does when a match's namespace isn't connected
+ * yet). Constructed in the main process because it depends on
+ * `app.getPath('userData')`, unavailable in the worker / sidecar Node child
+ * process — same placement rationale as `llmSettingsStore`, minus the
+ * `safeStorage` dependency (this store holds no secrets).
+ */
+export let crossNsLinkSettingsStore: CrossNsLinkSettingsStore;
 
 /** Build the "Open Recent" submenu items from the persisted list. */
 function buildRecentSubmenu(): Electron.MenuItemConstructorOptions[] {
@@ -553,6 +564,9 @@ async function bootstrap(): Promise<void> {
     safeStorage,
     userDataDir: () => app.getPath('userData'),
   });
+  crossNsLinkSettingsStore = new CrossNsLinkSettingsStore({
+    userDataDir: () => app.getPath('userData'),
+  });
 
   // Spawn the utility process and wait for the "ready" handshake.
   // Requirements: 1.1, 1.2
@@ -563,7 +577,7 @@ async function bootstrap(): Promise<void> {
   // Register IPC relay — delegates every channel to the utility process.
   // llm.getSettings and llm.saveSettings are handled in main (require safeStorage).
   // Requirement: 1.3, 11.2, 12.4
-  registerIpcRelay(manager, llmSettingsStore);
+  registerIpcRelay(manager, llmSettingsStore, crossNsLinkSettingsStore);
 
   // Wire load-progress push events from the worker to all renderer windows.
   // Requirements: 16.3, 16.4

@@ -37,6 +37,7 @@ import {
   TagOutlined,
   ShareAltOutlined,
   ContainerOutlined,
+  FunctionOutlined,
 } from '@ant-design/icons';
 import type { ComponentType } from 'react';
 import type { MetamodelRenderingConfig } from '@riacore/app-contracts';
@@ -80,6 +81,10 @@ export const NODE_TYPE_CONFIG: Record<string, NodeDecoration> = {
   safety_note:           { icon: MessageOutlined,       color: '#1677ff' },
   review_item:           { icon: AuditOutlined,         color: '#eb2f96' },
   tag:                   { icon: TagOutlined,           color: '#597ef7' },
+
+  // SOTIF concepts
+  functional_insufficiency: { icon: FunctionOutlined,    color: '#9254de' },
+  triggering_condition:     { icon: ThunderboltOutlined, color: '#fa8c16' },
 
   // Default fallback
   default:               { icon: CodeOutlined,          color: '#8c8c8c' },

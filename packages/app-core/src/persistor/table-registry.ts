@@ -89,10 +89,20 @@ export const TABLE_REGISTRY: TableDef[] = [
   // §2 "Persistor — bespoke universe-layer store/load"). Keying by layout_id is what
   // keeps each Layout_Record stable across node-ID reassignment.
   nodeTable('RIA_UNIV_CanvasLayout', []),
+  // GLOBAL universe table keyed by name (a View's own primary key). Registered for
+  // schema/column/primary-key consistency ONLY — same reasoning as
+  // RIA_UNIV_CanvasLayout above: the persistor never exports the universe layer
+  // generically, so this entry does not itself store or load the table — the
+  // round-trip is provided by the bespoke store/load steps in persistor-store.ts /
+  // persistor-load.ts.
+  nodeTable('RIA_UNIV_View', []),
 
   // ── Universe layer: Rel tables ────────────────────────────────────────────
   { name: 'RIA_UNIV_INSTANCE_REL', layer: 'universe', type: 'rel', primaryKey: 'src_node_id', columns: [], jsonColumns: [], omitColumns: [], srcPk: 'node_id', dstPk: 'node_id' },
   { name: 'RIA_UNIV_NamespaceConnection', layer: 'universe', type: 'rel', primaryKey: 'src_name', columns: [], jsonColumns: [], omitColumns: [], srcPk: 'name', dstPk: 'name' },
+  { name: 'RIA_UNIV_VIEW_DEFINEDBY', layer: 'universe', type: 'rel', primaryKey: 'src_name', columns: [], jsonColumns: [], omitColumns: [], srcPk: 'name', dstPk: 'name' },
+  { name: 'RIA_UNIV_VIEW_CATEGORIZEDBY', layer: 'universe', type: 'rel', primaryKey: 'src_name', columns: [], jsonColumns: [], omitColumns: [], srcPk: 'name', dstPk: 'name' },
+  { name: 'RIA_UNIV_VIEW_SOURCE', layer: 'universe', type: 'rel', primaryKey: 'src_name', columns: [], jsonColumns: [], omitColumns: [], srcPk: 'name', dstPk: 'name' },
 
   // ── Cross-namespace layer: Node tables ────────────────────────────────────
   nodeTable('RIA_UNIV_NamespaceRelation', ['rel_id']),

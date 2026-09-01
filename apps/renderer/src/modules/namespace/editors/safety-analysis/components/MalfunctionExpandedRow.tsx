@@ -32,6 +32,7 @@ import { useTagsForElement } from '../../../../../hooks/useTags';
 import { useTags } from '../../../../../hooks/useTags';
 import { useTagMutations } from '../../../../../hooks/useTagMutations';
 import { TagChip } from './TagChip';
+import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 
 interface MalfunctionExpandedRowProps {
@@ -169,7 +170,7 @@ export function MalfunctionExpandedRow({ fmNodeId, namespace, onSelectElement }:
             })}
           </Space>
         ) : null}
-        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directReqLinkedIds} />
+        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directReqLinkedIds} malfunctionNamespace={namespace} />
       </div>
 
       {/* Safety Notes row */}
@@ -242,6 +243,12 @@ function EditableRiskRating({ riskRating, fmNodeId, onDelete }: { riskRating: Co
       {renderSelect('has_occurrence_level', profile.occurrenceOptions, 'orange')}
       {renderSelect('has_detection_level', profile.detectionOptions, 'blue')}
       <Tag style={{ fontSize: 11, margin: 0, fontWeight: 600 }}>RPN {String(attrs?.risk_priority_number ?? '—')}</Tag>
+      <ActionPriorityTag
+        actionPriority={profile.actionPriority}
+        severity={String(attrs?.has_severity ?? '')}
+        occurrence={String(attrs?.has_occurrence_level ?? '')}
+        detection={String(attrs?.has_detection_level ?? '')}
+      />
       {editField === 'risk_rating_note' ? (
         <Input size="small" defaultValue={noteVal} style={{ width: 160, fontSize: 11 }} autoFocus
           onBlur={(e) => save('risk_rating_note', e.target.value)}

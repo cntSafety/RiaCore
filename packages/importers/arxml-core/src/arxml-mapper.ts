@@ -43,7 +43,11 @@ export function mapModelToConceptBatches(model: ArxmlModel): ConceptBatch[] {
       batch = { concept, items: [] };
       batchMap.set(concept, batch);
     }
-    batch.items.push({ stablePath, attributes: { stable_path: stablePath, ...attributes } });
+    const description = model.descriptions?.get(stablePath);
+    batch.items.push({ stablePath, attributes: {
+      stable_path: stablePath, ...attributes,
+      ...(description ? { description } : {}),
+    } });
   }
 
   function addSimple(concept: string, items: Array<{ stablePath: string; uuid?: string; shortName?: string }>): void {

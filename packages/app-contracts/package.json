@@ -10,11 +10,12 @@
   },
   "dependencies": {
     "@riacore/git-service": "workspace:*",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "vitest": "^3.0.0",
-    "fast-check": "^3.0.0"
+    "@types/node": "^26.2.0",
+    "fast-check": "^4.9.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

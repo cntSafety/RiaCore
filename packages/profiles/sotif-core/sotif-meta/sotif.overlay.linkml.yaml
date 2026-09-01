@@ -1,0 +1,262 @@
+##
+## sotif.overlay.linkml.yaml
+##
+## OVERLAY for the SOTIF_ANALYSIS profile. Composed on top of
+## _base/safety-analysis-base.linkml.yaml via composeProfileSchema():
+##   layers = [ safety-analysis-base.linkml.yaml, sotif.overlay.linkml.yaml ]
+##
+## SOTIF (ISO 21448, Safety Of The Intended Functionality) analyses hazardous
+## behaviour that can arise while the intended function operates WITHOUT a fault.
+## The record centred on by the editor is still `malfunction` (kept as the stable
+## concept name; the UI may relabel it "Safety Concern"), but instead of an FMEA
+## risk rating with Severity/Occurrence/Detection, a SOTIF concern is
+## characterised by two catalog-backed, reusable concepts this overlay ADDS:
+##   - functional_insufficiency: how the intended function falls short even with
+##     no fault (sensor / algorithm / specification / integration limitations).
+##   - triggering_condition: a condition in the operating environment (or a
+##     project-specific one) that can trigger the insufficiency.
+##
+## The base still supplies risk_rating, requirement, safety_task, safety_note,
+## tag, review_item and all their slots. For SOTIF the editor reduces Risk Rating
+## to the free-text `risk_rating_note` only (the residual-risk argument that
+## points at the validation evidence) and hides Severity/Occurrence/Detection.
+## The Occurrence/Detection/TaskType enums are still defined here (the base omits
+## them) so the composed schema stays complete.
+##
+## Overlay merge rules (see composeProfileSchema):
+##   classes/slots -> field-level merge (overlay fields win, others kept).
+##                    NOTE: a class's `slots:` array is replaced WHOLESALE, so
+##                    the `malfunction` class below restates the full base slot
+##                    list plus the two SOTIF additions.
+##   enums         -> whole-enum replace
+##   annotations   -> per-key replace (profile_review added; base action_priority kept)
+
+id: https://ria.io/schema/sotif-analysis/meta
+name: sotif_analysis_meta
+title: SOTIF Analysis Metamodel — Overlay
+description: >-
+  SOTIF analysis profile. Reuses the FMEA base structure but
+  characterises each no-fault concern by its functional insufficiencies and
+  triggering conditions rather than a Severity/Occurrence/Detection risk rating.
+  Risk Rating is reduced to a free-text residual-risk argument that references
+  the scenario-based validation evidence.
+version: "1.0.0"
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  sotif: https://example.org/sotif-meta#
+
+default_prefix: sotif
+
+annotations:
+  profile_review:
+    tag: profile_review
+    value: |-
+      {
+        "version": 2,
+        "workflow": {
+          "verdicts": [
+            {"value": "OK", "label": "OK", "description": "Element is acceptable as-is", "color": "#52c41a", "tag": "success"},
+            {"value": "NOK", "label": "Not OK", "description": "Element is not acceptable; action is required", "color": "#ff4d4f", "tag": "error", "showAuthorStatusBreakdown": true},
+            {"value": "OK_with_comment", "label": "Note", "description": "Element is acceptable but the reviewer has a comment", "color": "#faad14", "tag": "warning", "showAuthorStatusBreakdown": true}
+          ],
+          "authorStatuses": [
+            {"value": "open", "label": "Open", "description": "No author response has been completed", "color": "#8c8c8c", "tag": "default"},
+            {"value": "in_analysis", "label": "In Analysis", "description": "The author is analyzing the review comment", "color": "#1677ff", "tag": "processing"},
+            {"value": "resolved", "label": "Resolved", "description": "The author has addressed and acknowledged the review", "color": "#52c41a", "tag": "success", "isResolution": true},
+            {"value": "rejected", "label": "Rejected", "description": "The author rejected the review comment with justification", "color": "#ff4d4f", "tag": "error"}
+          ],
+          "snapshotPolicy": "Capture the reviewed element content when the reviewer sets a verdict and again when the author resolves the review. Clear the snapshot when the author reopens the review or moves it to in_analysis. A verdict with a changed snapshot is suspect."
+        },
+        "instructions": {
+          "title": "SOTIF Analysis Review Checklist",
+          "catalogSource": "sotif_FM_List.json",
+          "catalogTitles": {
+            "functionalInsufficiencies": "Functional Insufficiencies (predefined)",
+            "triggeringConditions": "Triggering Conditions (predefined)"
+          },
+          "sections": [
+            {
+              "id": "concern-scope",
+              "title": "Question 1: Is the concern a no-fault SOTIF concern?",
+              "paragraphs": [
+                "A SOTIF concern describes a hazardous behaviour that can occur while the sensor, driver and algorithm all conform to their specification — no fault is asserted. Fault-induced failures belong in the SW/System safety analysis.",
+                "State the intended functionality and the element the concern occurs at."
+              ]
+            },
+            {
+              "id": "functional-insufficiencies",
+              "title": "Question 2: Are the functional insufficiencies identified?",
+              "paragraphs": [
+                "Each concern should list the functional insufficiencies that make the intended function fall short. The following list is a starting point — select the **relevant** ones and add project-specific insufficiencies as needed."
+              ],
+              "catalogs": ["functionalInsufficiencies"]
+            },
+            {
+              "id": "triggering-conditions",
+              "title": "Question 3: Are the triggering conditions identified?",
+              "paragraphs": [
+                "Triggering conditions are the environmental or operational conditions that trigger the insufficiency. Predefined conditions (e.g. heavy rain) are a starting point; project-specific conditions (e.g. sensor misalignment) are added by the analyst."
+              ],
+              "catalogs": ["triggeringConditions"]
+            },
+            {
+              "id": "requirements",
+              "title": "Question 4: Are the requirements linked?",
+              "paragraphs": [
+                "Link the requirements (e.g. performance or ODD requirements) that the concern relates to."
+              ]
+            },
+            {
+              "id": "residual-risk",
+              "title": "Question 5: Is the residual-risk argument documented?",
+              "paragraphs": [
+                "SOTIF does not use a Severity/Occurrence/Detection score. Instead, the Risk Rating Note holds a free-text argument that the residual risk is sufficiently reduced, pointing at the scenario-based validation evidence (scenario catalog, simulation/real-world results, runtime measures)."
+              ]
+            },
+            {
+              "id": "tasks",
+              "title": "Question 6: Are the tasks managed?",
+              "paragraphs": [
+                "If mitigations, runtime measures, or additional validation are required, a ticket shall be created to manage the task."
+              ]
+            }
+          ]
+        }
+      }
+
+classes:
+
+  # Restate the FULL base malfunction slot list (the field-level merge replaces
+  # a class's `slots:` array wholesale) plus the two SOTIF additions.
+  malfunction:
+    description: >-
+      A SOTIF safety concern: a hazardous behaviour that can occur while the
+      intended function operates without a fault. Kept under the `malfunction`
+      concept name for reuse; the SOTIF editor may present it as "Safety Concern".
+    slots:
+      - uuid
+      - has_name
+      - malfunction_description
+      - malfunction_asil
+      - occurs_at
+      - has_risk_rating
+      - has_safety_requirements
+      - has_direct_requirements
+      - has_safety_tasks
+      - has_functional_insufficiencies
+      - has_triggering_conditions
+      - propagates_to
+      - has_notes
+
+  functional_insufficiency:
+    description: >-
+      An insufficiency of the intended functionality — a specification or
+      performance limitation that can lead to hazardous behaviour even when no
+      fault is present (e.g. limited sensor resolution, classification algorithm
+      limitation, incomplete ODD specification, sensor-fusion integration issue).
+      Seeded from a predefined catalog or authored by the analyst. Attached to a
+      malfunction via has_functional_insufficiencies.
+    slots:
+      - uuid
+      - has_name
+      - fi_description
+      - fi_source
+
+  triggering_condition:
+    description: >-
+      A condition in the operating environment (or a project-specific condition)
+      that can trigger a functional insufficiency and lead to the hazardous
+      behaviour (e.g. heavy rain, low sun/glare, thermal crossover, sensor
+      misalignment). Seeded from a predefined catalog or authored by the analyst.
+      Attached to a malfunction via has_triggering_conditions.
+    slots:
+      - uuid
+      - has_name
+      - tc_description
+      - tc_source
+
+slots:
+
+  has_functional_insufficiencies:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of functional insufficiencies linked to this concern. Each
+      value references a functional_insufficiency.uuid. Stored as
+      RIA_UNIV_RelationshipInstance with relationship='has_functional_insufficiencies'.
+
+  has_triggering_conditions:
+    domain: malfunction
+    range: string
+    multivalued: true
+    description: >-
+      Identifiers of triggering conditions linked to this concern. Each value
+      references a triggering_condition.uuid. Stored as
+      RIA_UNIV_RelationshipInstance with relationship='has_triggering_conditions'.
+
+  fi_description:
+    domain: functional_insufficiency
+    range: string
+    description: Description of the functional insufficiency and how it limits the intended function.
+
+  fi_source:
+    domain: functional_insufficiency
+    range: string
+    ifabsent: string(custom)
+    description: >-
+      Provenance of the entry: "catalog" (selected from the predefined list) or
+      "custom" (authored by the analyst).
+
+  tc_description:
+    domain: triggering_condition
+    range: string
+    description: Description of the triggering condition and its applicability.
+
+  tc_source:
+    domain: triggering_condition
+    range: string
+    ifabsent: string(custom)
+    description: >-
+      Provenance of the entry: "catalog" (selected from the predefined list) or
+      "custom" (authored by the analyst).
+
+enums:
+
+  # Defined for schema completeness (the base omits Occurrence/Detection/TaskType).
+  # The SOTIF editor hides Severity/Occurrence/Detection and keeps only the
+  # free-text risk_rating_note, so these are rarely surfaced; the wording below
+  # reflects the SOTIF re-interpretation should any view read them.
+
+  OccurrenceLevel:
+    description: >-
+      Residual likelihood of the hazardous behaviour AFTER scenario-based
+      validation — a coarse projection of triggering-condition exposure and the
+      validated residual manifestation rate. Not used for a SOTIF acceptance
+      decision (see the residual-risk note). Level 1 = very low; Level 5 = very high.
+    permissible_values:
+      Level1: { description: "Level 1 — Very Low: triggering condition rare in the ODD and/or validated residual manifestation very low" }
+      Level2: { description: "Level 2 — Low: limited exposure and low validated residual manifestation" }
+      Level3: { description: "Level 3 — Medium: plausible exposure and moderate validated residual manifestation" }
+      Level4: { description: "Level 4 — High: frequent exposure or elevated residual manifestation" }
+      Level5: { description: "Level 5 — Very High: frequent triggering condition and high residual manifestation; validation target not met" }
+
+  DetectionLevel:
+    description: >-
+      Capability to detect the low-performance condition at runtime and react
+      (e.g. contrast monitor, confidence estimate, diverse channel, fallback).
+      Level 1 = high capability; Level 5 = low capability.
+    permissible_values:
+      Level1: { description: "Level 1 — High capability: the degraded condition is detected at runtime with high confidence and a defined reaction" }
+      Level2: { description: "Level 2 — Good capability: detected across the main operating conditions, some conditions less well covered" }
+      Level3: { description: "Level 3 — Moderate capability: detected under nominal conditions; corner cases may be missed" }
+      Level4: { description: "Level 4 — Limited capability: detected only under specific conditions" }
+      Level5: { description: "Level 5 — Low capability: no runtime means to notice the insufficiency; latent" }
+
+  TaskType:
+    description: Classification of the type of task.
+    permissible_values:
+      "runtime measures":  { description: "Measure implemented and active at runtime (e.g. monitor, confidence gate, fallback/degradation)" }
+      "dev-time measures": { description: "Measure applied during development (e.g. scenario validation, simulation, ODD restriction, design constraint)" }
+      "other":             { description: "Other task type not covered by the standard categories" }

@@ -21,7 +21,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { WorkspaceConfig, RunImportParams, PersistorLoadParams, PersistorStoreParams, PersistorRepairParams, ProvisionConfigParams, SaveImportConfigParams, RunFromSourceParams, ExportConfigParams, ImportConfigParams, CreateAuthoredNamespaceParams, CreateMalfunctionParams, CreateRiskRatingParams, CreateTagParams, RendererLogEntry, GetPortConnectorsInput, GetNamespacePortConnectorsInput, GetComponentPortConnectorsInput, DiffOptions, DiffResultSection, ConflictResolution, WorkspaceGitConfig, GitSemanticDiffParams, SupervisedMergePrepareResult } from '@riacore/app-contracts';
 import type { ShowInTreePayload, NavigationRequest, CacheInvalidationOutbound, CacheInvalidationMessage, LoadProgressPushEvent } from '@riacore/app-contracts';
 import type { LlmSaveSettingsInput, LlmStartReviewInput, LlmStartReviewResult, LlmCancelReviewInput, LlmStreamEvent, LlmSettings } from '@riacore/app-contracts';
-import type { LayoutRecord } from '@riacore/app-contracts';
+import type { LayoutRecord, ViewLayoutSourceRef } from '@riacore/app-contracts';
+import type { CrossNsLinkSettings } from '@riacore/app-contracts';
+import type { CreateViewParams, UpdateViewParams, EvaluateViewParams, MaterializeViewParams, GetPresentationInput } from '@riacore/app-contracts';
 import type { CommitParams, FetchParams, PullParams, PushParams, LogParams } from '@riacore/git-service';
 import type { IpcRendererEvent } from 'electron';
 
@@ -108,9 +110,17 @@ contextBridge.exposeInMainWorld('riacore', {
     disconnect: (params: { importedNamespace: string; authoredNamespace: string; deleteDependents: boolean }) => ipcRenderer.invoke('namespaceConnections:disconnect', params),
     countDependents: (params: { importedNamespace: string; authoredNamespace: string }) => ipcRenderer.invoke('namespaceConnections:countDependents', params),
   },
+  crossNsLinkSettings: {
+    getSettings: () => ipcRenderer.invoke('crossNsLinkSettings.getSettings') as Promise<CrossNsLinkSettings>,
+    saveSettings: (settings: CrossNsLinkSettings) => ipcRenderer.invoke('crossNsLinkSettings.saveSettings', settings) as Promise<void>,
+  },
   canvasLayout: {
     getLayout: () => ipcRenderer.invoke('canvasLayout:getLayout'),
     setRecords: (records: LayoutRecord[]) => ipcRenderer.invoke('canvasLayout:setRecords', { records }),
+    getViewLayout: (viewName: string, sources: ViewLayoutSourceRef[]) =>
+      ipcRenderer.invoke('canvasLayout:getViewLayout', { viewName, sources }),
+    setViewLayout: (viewName: string, records: Array<{ source: ViewLayoutSourceRef; x: number; y: number }>) =>
+      ipcRenderer.invoke('canvasLayout:setViewLayout', { viewName, records }),
   },
   namespaces: {
     list: () => ipcRenderer.invoke('namespaces.list'),
@@ -138,7 +148,7 @@ contextBridge.exposeInMainWorld('riacore', {
     addPropagation: (params: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }) => ipcRenderer.invoke('safety.addPropagation', params),
     removePropagation: (params: { sourceFailureModeNodeId: number; targetFailureModeNodeId: number }) => ipcRenderer.invoke('safety.removePropagation', params),
     getPropagations: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getPropagations', params),
-    getPropagationsForComponent: (params: { structuralNodeId: number }) => ipcRenderer.invoke('safety.getPropagationsForComponent', params),
+    getPropagationsForComponent: (params: { structuralNodeId: number; safetyNamespace?: string }) => ipcRenderer.invoke('safety.getPropagationsForComponent', params),
     createRiskRating: (params: CreateRiskRatingParams) => ipcRenderer.invoke('safety.createRiskRating', params),
     getRiskRating: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getRiskRating', params),
     updateRiskRating: (params: { nodeId: number; updates: Record<string, unknown> }) => ipcRenderer.invoke('safety.updateRiskRating', params),
@@ -153,6 +163,22 @@ contextBridge.exposeInMainWorld('riacore', {
     getAllSafetyTasks: (params: { namespace: string }) => ipcRenderer.invoke('safety.getAllSafetyTasks', params),
     updateSafetyTask: (params: { nodeId: number; updates: Record<string, unknown> }) => ipcRenderer.invoke('safety.updateSafetyTask', params),
     deleteSafetyTask: (params: { nodeId: number }) => ipcRenderer.invoke('safety.deleteSafetyTask', params),
+    createFunctionalInsufficiency: (params: { namespace: string; name: string; description?: string; source?: string }) => ipcRenderer.invoke('safety.createFunctionalInsufficiency', params),
+    linkFunctionalInsufficiencyToFm: (params: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }) => ipcRenderer.invoke('safety.linkFunctionalInsufficiencyToFm', params),
+    unlinkFunctionalInsufficiencyFromFm: (params: { failureModeNodeId: number; functionalInsufficiencyNodeId: number }) => ipcRenderer.invoke('safety.unlinkFunctionalInsufficiencyFromFm', params),
+    getFunctionalInsufficiencies: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getFunctionalInsufficiencies', params),
+    getAllFunctionalInsufficiencies: (params: { namespace: string }) => ipcRenderer.invoke('safety.getAllFunctionalInsufficiencies', params),
+    getMalfunctionsForFunctionalInsufficiency: (params: { functionalInsufficiencyNodeId: number }) => ipcRenderer.invoke('safety.getMalfunctionsForFunctionalInsufficiency', params),
+    updateFunctionalInsufficiency: (params: { nodeId: number; updates: Record<string, unknown> }) => ipcRenderer.invoke('safety.updateFunctionalInsufficiency', params),
+    deleteFunctionalInsufficiency: (params: { nodeId: number }) => ipcRenderer.invoke('safety.deleteFunctionalInsufficiency', params),
+    createTriggeringCondition: (params: { namespace: string; name: string; description?: string; source?: string }) => ipcRenderer.invoke('safety.createTriggeringCondition', params),
+    linkTriggeringConditionToFm: (params: { failureModeNodeId: number; triggeringConditionNodeId: number }) => ipcRenderer.invoke('safety.linkTriggeringConditionToFm', params),
+    unlinkTriggeringConditionFromFm: (params: { failureModeNodeId: number; triggeringConditionNodeId: number }) => ipcRenderer.invoke('safety.unlinkTriggeringConditionFromFm', params),
+    getTriggeringConditions: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getTriggeringConditions', params),
+    getAllTriggeringConditions: (params: { namespace: string }) => ipcRenderer.invoke('safety.getAllTriggeringConditions', params),
+    getMalfunctionsForTriggeringCondition: (params: { triggeringConditionNodeId: number }) => ipcRenderer.invoke('safety.getMalfunctionsForTriggeringCondition', params),
+    updateTriggeringCondition: (params: { nodeId: number; updates: Record<string, unknown> }) => ipcRenderer.invoke('safety.updateTriggeringCondition', params),
+    deleteTriggeringCondition: (params: { nodeId: number }) => ipcRenderer.invoke('safety.deleteTriggeringCondition', params),
     createRequirement: (params: { namespace: string; name: string; reqId: string; reqText: string; asil?: string; linkedToUrl?: string }) => ipcRenderer.invoke('safety.createRequirement', params),
     getRequirement: (params: { nodeId: number }) => ipcRenderer.invoke('safety.getRequirement', params),
     getRequirements: (params: { namespace: string }) => ipcRenderer.invoke('safety.getRequirements', params),
@@ -172,6 +198,7 @@ contextBridge.exposeInMainWorld('riacore', {
     updateReviewItem: (params: { nodeId: number; updates: Record<string, unknown> }) => ipcRenderer.invoke('safety.updateReviewItem', params),
     deleteReviewItem: (params: { nodeId: number }) => ipcRenderer.invoke('safety.deleteReviewItem', params),
     getMalfunctionsForElement: (params: { targetNodeId: number }) => ipcRenderer.invoke('safety.getMalfunctionsForElement', params),
+    getMalfunctionsForElements: (params: { targetNodeIds: number[]; safetyNamespace?: string }) => ipcRenderer.invoke('safety.getMalfunctionsForElements', params),
     getMalfunctionsForRequirement: (params: { requirementNodeId: number }) => ipcRenderer.invoke('safety.getMalfunctionsForRequirement', params),
     getRequirementsForFm: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getRequirementsForFm', params),
     linkRequirementToFm: (params: { failureModeNodeId: number; requirementNodeId: number }) => ipcRenderer.invoke('safety.linkRequirementToFm', params),
@@ -210,6 +237,22 @@ contextBridge.exposeInMainWorld('riacore', {
     saveSelection: (params: { namespace: string; selectedIds: string[] }) => ipcRenderer.invoke('checks.saveSelection', params),
     saveSummary: (params: { namespace: string; errors: number; warnings: number; hints: number; checksRun: number }) => ipcRenderer.invoke('checks.saveSummary', params),
     loadSummary: (params: { namespace: string }) => ipcRenderer.invoke('checks.loadSummary', params),
+  },
+  // Views (docs/coreSpecs/RiaViews.md) and the concept presentation catalog
+  // (spec-view.md Phase 4.1). `views.evaluate` is read-only and accepts either a
+  // saved view name or an ad-hoc definition, which is what lets the connection
+  // diagram evaluate a namespace it has no saved view for.
+  views: {
+    list: () => ipcRenderer.invoke('views.list'),
+    get: (params: { name: string }) => ipcRenderer.invoke('views.get', params),
+    create: (params: CreateViewParams) => ipcRenderer.invoke('views.create', params),
+    update: (params: UpdateViewParams) => ipcRenderer.invoke('views.update', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('views.delete', params),
+    evaluate: (params: EvaluateViewParams) => ipcRenderer.invoke('views.evaluate', params),
+    materialize: (params: MaterializeViewParams) => ipcRenderer.invoke('views.materialize', params),
+  },
+  presentation: {
+    get: (params: GetPresentationInput) => ipcRenderer.invoke('presentation.get', params),
   },
   arxml: {
     getPortConnectors: (params: GetPortConnectorsInput) => ipcRenderer.invoke('arxml.getPortConnectors', params),

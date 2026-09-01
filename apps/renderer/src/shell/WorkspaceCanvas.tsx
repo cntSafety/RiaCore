@@ -47,6 +47,7 @@ import {
   useEdgesState,
   useReactFlow,
   useNodesInitialized,
+  useUpdateNodeInternals,
   Panel,
   type Node,
   type Edge,
@@ -881,7 +882,10 @@ function AnalysisNode({ data }: NodeProps<AnalysisFlowNode>) {
         type="target"
         position={Position.Left}
         id={CONNECTION_HANDLE_ID}
-        style={{ background: token.colorSuccess, width: 11, height: 11, border: `2px solid ${token.colorBgContainer}` }}
+        // This handle is rendered before the card. Keep it above the card so
+        // the visible target remains pointer-interactive; otherwise the card
+        // intercepts clicks and connection drops at the handle's centre.
+        style={{ background: token.colorSuccess, width: 11, height: 11, border: `2px solid ${token.colorBgContainer}`, zIndex: 1 }}
       />
       <AuthoredNamespaceCardItem
         ns={ns}
@@ -1025,12 +1029,60 @@ function RfInstanceCapture({
   instanceRef: React.MutableRefObject<ReturnType<typeof useReactFlow> | null>;
 }) {
   const rf = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   instanceRef.current = rf;
-  // Dev/test only: expose fitView on window so Playwright can call it.
-  // Safe in packaged builds too — it's a no-op if never called.
+  // Dev/test only: expose a deterministic viewport fit for Playwright.
   if (typeof window !== 'undefined') {
-    (window as unknown as Record<string, unknown>)['__riaFitView'] = () =>
-      rf.fitView({ padding: 0.2, duration: 0 });
+    (window as unknown as Record<string, unknown>)['__riaFitView'] = async (nodeIds?: string[]) => {
+      let allNodes = rf.getNodes();
+      const requestedIds = new Set(nodeIds ?? []);
+
+      // A controlled-node rebuild can temporarily discard React Flow's measured
+      // dimensions. Chromium may not emit another ResizeObserver event for an
+      // unchanged off-screen element, leaving its wrapper visibility:hidden.
+      // Force every small overview-card node through React Flow's supported
+      // measurement path before calculating endpoint bounds.
+      if (allNodes.length > 0) {
+        updateNodeInternals(allNodes.map((node) => node.id));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      }
+
+      // Re-measuring can release GraphFitter's nodesInitialized gate and start
+      // its 200 ms whole-canvas animation. Wait for that transform to settle so
+      // it cannot overwrite the endpoint fit below.
+      const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
+      if (viewport) {
+        let previous = viewport.style.transform;
+        let stableSamples = 0;
+        const deadline = performance.now() + 1_500;
+        while (performance.now() < deadline) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+          const current = viewport.style.transform;
+          stableSamples = current === previous ? stableSamples + 1 : 0;
+          previous = current;
+          if (stableSamples >= 4) break;
+        }
+      }
+
+      allNodes = rf.getNodes();
+      const nodes = requestedIds.size > 0
+        ? allNodes.filter((node) => requestedIds.has(node.id))
+        : allNodes;
+      if (nodes.length === 0 || (requestedIds.size > 0 && nodes.length !== requestedIds.size)) {
+        return false;
+      }
+      if (nodes.some((node) =>
+        (node.measured?.width ?? node.width ?? 0) <= 0 ||
+        (node.measured?.height ?? node.height ?? 0) <= 0
+      )) {
+        return false;
+      }
+      // Generous padding keeps connection handles outside React Flow's edge
+      // auto-pan activation zone, so coordinates remain stable during a drag.
+      return rf.fitBounds(rf.getNodesBounds(nodes), { padding: 0.45, duration: 0 });
+    };
   }
   return null;
 }
@@ -1819,7 +1871,7 @@ export function WorkspaceCanvas({
   // invalidates the layout query, so the node re-resolves to its now-stored
   // coordinate on the next render (Req 2.5).
   const onNodeDragStop = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
+    (_event: MouseEvent | TouchEvent, node: Node) => {
       setAutoLayoutActive(false);
 
       const elementKind =
@@ -1861,19 +1913,48 @@ export function WorkspaceCanvas({
     [dragPersistMutation, setAutoLayoutActive, scheduleAutoSave, setAutoSaveStatus],
   );
 
+  // Removes the document-level selectstart guard installed by onConnectStart.
+  // Held in a ref because the guard outlives the render that created it.
+  const releaseSelectionGuard = useRef<(() => void) | null>(null);
+
   // The user began drawing a Namespace_Connection from a connection handle:
   // enter the Auto_Layout_Deactivated_State (Req 3.2). Actual connection
   // creation is handled by onConnect; this only flips the Auto_Layout state so a
   // subsequent data change never re-lays-out the arranged nodes.
+  //
+  // It also suppresses text selection for the duration of the drag. React Flow's
+  // NODE drag goes through d3-drag, which installs its own selectstart guard;
+  // its CONNECTION drag (XYHandle.onPointerDown) installs nothing and relies
+  // solely on `.react-flow__node { user-select: none }` from its stylesheet. That
+  // is a cascade accident — global.css now asserts the same rule, and this guard
+  // makes the behaviour independent of CSS altogether.
   const onConnectStart = useCallback(() => {
     setAutoLayoutActive(false);
+
+    releaseSelectionGuard.current?.();
+    const block = (event: Event) => event.preventDefault();
+    document.addEventListener('selectstart', block, true);
+    window.getSelection()?.removeAllRanges();
+    releaseSelectionGuard.current = () => {
+      document.removeEventListener('selectstart', block, true);
+      releaseSelectionGuard.current = null;
+    };
   }, [setAutoLayoutActive]);
+
+  // A drag can still be in flight when the canvas unmounts (workspace closed
+  // mid-gesture), which would leave the document-level listener behind.
+  useEffect(() => () => releaseSelectionGuard.current?.(), []);
 
   // When a connection drag is released on a node body (not on a handle), treat
   // it as if the user dropped on the connection handle — attempt the connection
   // if the direction is valid (issue #56).
   const onConnectEnd = useCallback(
     (_event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      // Fires for every drag, including cancelled and invalid ones, so this is
+      // the one place the selectstart guard is guaranteed to be lifted. Must run
+      // before the early returns below.
+      releaseSelectionGuard.current?.();
+
       // Only act when the drag ended on a node but NOT on a handle. If it ended
       // on a handle, onConnect already handled it.
       if (!connectionState.fromNode || !connectionState.toNode || connectionState.toHandle) return;

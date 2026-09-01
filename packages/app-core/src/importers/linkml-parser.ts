@@ -29,6 +29,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type {
+  ActionPriorityLevel,
+  ActionPriorityLevelMetadata,
+  ActionPriorityMetadata,
+  ActionPrioritySeverityClass,
   ProfileReviewCatalog,
   ProfileReviewCatalogItem,
   ProfileReviewInstructionSection,
@@ -247,6 +251,113 @@ function parseProfileReview(raw: RawLinkMLSchema, schemaPath: string): ProfileRe
       sections: parseReviewSections(instructions.sections),
       catalogs: loadReviewCatalogs(schemaPath, instructions.catalogSource, instructions.catalogTitles),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Action Priority (AP) parsing
+//
+// Parses `annotations.action_priority`, the AP replacement for the RPN
+// formula (see docs/particular/SafetyImprove.md §2). Deliberately separate
+// from parseProfileReview: AP is a per-profile risk-prioritization table, not
+// review workflow/checklist content, and a profile may define one without
+// the other.
+// ---------------------------------------------------------------------------
+
+const ACTION_PRIORITY_LEVELS: readonly ActionPriorityLevel[] = ['H', 'M', 'L'];
+
+function isActionPriorityLevel(value: unknown): value is ActionPriorityLevel {
+  return typeof value === 'string' && (ACTION_PRIORITY_LEVELS as readonly string[]).includes(value);
+}
+
+function parseOrdinalLevels(value: unknown, context: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || !value.every((v) => typeof v === 'string')) {
+    throw new Error(`${context} must be a non-empty string array`);
+  }
+  return value as string[];
+}
+
+function parseActionPriorityTable(
+  value: unknown,
+  detectionCount: number,
+  occurrenceCount: number,
+  context: string,
+): ActionPriorityLevel[][] {
+  if (!Array.isArray(value) || value.length !== detectionCount) {
+    throw new Error(`${context} must be an array of ${detectionCount} rows (one per detection level)`);
+  }
+  return value.map((row, rowIndex) => {
+    if (!Array.isArray(row) || row.length !== occurrenceCount) {
+      throw new Error(`${context}[${rowIndex}] must be an array of ${occurrenceCount} values (one per occurrence level)`);
+    }
+    return row.map((cell, colIndex) => {
+      if (!isActionPriorityLevel(cell)) {
+        throw new Error(`${context}[${rowIndex}][${colIndex}] must be one of "H", "M", "L"`);
+      }
+      return cell;
+    });
+  });
+}
+
+function parseActionPrioritySeverityClasses(
+  value: unknown,
+  detectionCount: number,
+  occurrenceCount: number,
+): ActionPrioritySeverityClass[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('action_priority.severityClasses must be a non-empty array');
+  }
+  return value.map((entry, index) => {
+    const item = asRecord(entry, `action_priority.severityClasses[${index}]`);
+    const whenSeverity = item.whenSeverity;
+    if (!Array.isArray(whenSeverity) || whenSeverity.length === 0 || !whenSeverity.every((v) => typeof v === 'string')) {
+      throw new Error(`action_priority.severityClasses[${index}].whenSeverity must be a non-empty string array`);
+    }
+    return {
+      id: requiredString(item.id, `action_priority.severityClasses[${index}].id`),
+      label: requiredString(item.label, `action_priority.severityClasses[${index}].label`),
+      whenSeverity: whenSeverity as string[],
+      table: parseActionPriorityTable(
+        item.table,
+        detectionCount,
+        occurrenceCount,
+        `action_priority.severityClasses[${index}].table`,
+      ),
+    };
+  });
+}
+
+function parseActionPriorityLevelMetadata(value: unknown): Record<ActionPriorityLevel, ActionPriorityLevelMetadata> {
+  const record = asRecord(value, 'action_priority.levels');
+  const result = {} as Record<ActionPriorityLevel, ActionPriorityLevelMetadata>;
+  for (const level of ACTION_PRIORITY_LEVELS) {
+    const entry = asRecord(record[level], `action_priority.levels.${level}`);
+    result[level] = {
+      label: requiredString(entry.label, `action_priority.levels.${level}.label`),
+      ...(optionalString(entry.color) ? { color: String(entry.color) } : {}),
+      ...(optionalString(entry.description) ? { description: String(entry.description) } : {}),
+    };
+  }
+  return result;
+}
+
+function parseActionPriority(raw: RawLinkMLSchema): ActionPriorityMetadata | undefined {
+  const annotation = raw.annotations?.action_priority;
+  if (annotation === undefined) return undefined;
+  const annotationValue = typeof annotation === 'string' ? annotation : annotation.value;
+  if (typeof annotationValue !== 'string') {
+    throw new Error('annotations.action_priority.value must be a JSON string');
+  }
+
+  const parsed = asRecord(JSON.parse(annotationValue), 'annotations.action_priority.value');
+  const occurrenceLevels = parseOrdinalLevels(parsed.occurrenceLevels, 'action_priority.occurrenceLevels');
+  const detectionLevels = parseOrdinalLevels(parsed.detectionLevels, 'action_priority.detectionLevels');
+
+  return {
+    occurrenceLevels,
+    detectionLevels,
+    severityClasses: parseActionPrioritySeverityClasses(parsed.severityClasses, detectionLevels.length, occurrenceLevels.length),
+    levels: parseActionPriorityLevelMetadata(parsed.levels),
   };
 }
 
@@ -502,6 +613,7 @@ function buildSchemaFromRaw(raw: RawLinkMLSchema, filePath: string): LinkMLSchem
     slots,
     enums,
     review: parseProfileReview(raw, filePath),
+    actionPriority: parseActionPriority(raw),
   };
   if (Array.isArray(raw.display_identifier_attrs) && raw.display_identifier_attrs.length > 0) {
     schema.display_identifier_attrs = raw.display_identifier_attrs.filter((v): v is string => typeof v === 'string');

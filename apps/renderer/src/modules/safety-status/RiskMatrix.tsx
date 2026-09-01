@@ -23,14 +23,22 @@
  * X-axis (occurrence): Level1=Very Low … Level5=Very High, left → right
  * Y-axis (detection):  Level1=Proven (bottom, low risk) … Level5=None (top, high risk)
  *
- * Cell colours are defined in CELL_COLORS below using a [row][col] address where:
- *   row 0 = bottom row = Proven detection (lowest risk row)
- *   row 4 = top row    = None detection   (highest risk row)
- *   col 0 = left col   = Very Low occurrence  (lowest risk col)
- *   col 4 = right col  = Very High occurrence (highest risk col)
+ * When the caller supplies the profile's `actionPriority` table, each cell is
+ * coloured by its resolved Action Priority level (H/M/L) instead of the
+ * legacy fixed gradient — see `cellColor()`. The matrix only ever plots
+ * `Safety-Impact` malfunctions (see `computeRiskMatrixBubbles` in
+ * `StatusCard.tsx`), so cells are resolved against that severity class. AP
+ * tints reuse the same pastel swatches (and 0.55 blend) as `CELL_COLORS`, so
+ * the visual language is unchanged from before AP existed. Falls back to the
+ * legacy `CELL_COLORS` gradient when no table is supplied (older profiles
+ * that have not migrated from RPN — see docs/particular/SafetyImprove.md §2).
  *
- * No hooks, no IPC calls — pure presentational.
+ * No hooks, no IPC calls — pure presentational. `actionPriority` is a plain
+ * prop so the caller (which does have context access) resolves it once.
  */
+
+import type { ActionPriorityLevel, ActionPriorityMetadata } from '@riacore/app-contracts';
+import { resolveActionPriority } from '@riacore/app-contracts';
 
 export interface RiskMatrixBubble {
   occurrence: string;
@@ -59,7 +67,7 @@ const DETECTION_LABELS: Record<string, string> = {
   Level5: 'None',
 };
 
-// ── Cell colour lookup table ──────────────────────────────────────────────────
+// ── Legacy fixed-gradient fallback (no actionPriority table supplied) ────────
 //
 // Address: CELL_COLORS[row][col]
 //
@@ -68,7 +76,6 @@ const DETECTION_LABELS: Record<string, string> = {
 //   col 0 = left col   = Level1 occurrence (Very Low) — lowest risk col
 //   col 4 = right col  = Level5 occurrence (Very High)— highest risk col
 //
-// Edit any hex value here to change the colour of that specific cell.
 // The table is written bottom-to-top so row 0 (Proven) is the first array entry.
 //
 //              col0        col1        col2        col3        col4
@@ -87,18 +94,49 @@ const CELL_COLORS = [
 ] as const;
 
 /**
+ * Colours per Action Priority level — reuses the same pastel swatches as the
+ * legacy `CELL_COLORS` gradient (the corners and a middle tone), blended at
+ * the same 0.55 opacity via `cellOpacity()` below.
+ */
+const AP_CELL_TINTS: Record<ActionPriorityLevel, string> = {
+  L: '#7bc67e', // same green as CELL_COLORS' lowest-risk corner
+  M: '#ffe0b2', // same amber as CELL_COLORS' mid-range cells
+  H: '#e57373', // same red as CELL_COLORS' highest-risk corner
+};
+
+/** Neutral fallback for a cell that resolves to no AP level (incomplete table). */
+const AP_CELL_UNRESOLVED = '#bdbdbd';
+
+/**
  * Return the background colour for a rendered grid cell.
  *
- * @param colIndex  0 = Very Low (left) … 4 = Very High (right)
- * @param rowIndex  0 = top of rendered grid (None) … 4 = bottom (Proven)
+ * @param occurrenceLevel  'Level1'..'Level5' (Very Low .. Very High)
+ * @param detectionLevel   'Level1'..'Level5' (Proven .. None)
+ * @param colIndex  0 = Very Low (left) … 4 = Very High (right) — legacy-fallback address
+ * @param rowIndex  0 = top of rendered grid (None) … 4 = bottom (Proven) — legacy-fallback address
+ * @param actionPriority  the profile's AP table, or undefined for the legacy gradient
  *
- * The rendered grid has rowIndex 0 at the top (highest risk), but CELL_COLORS
- * has row 0 at the bottom (lowest risk), so we flip the row index.
+ * This matrix only ever plots `Safety-Impact` malfunctions (see
+ * `computeRiskMatrixBubbles`), so the AP lookup is resolved against that
+ * severity class regardless of which malfunction populates a given cell.
  */
-function cellColor(colIndex: number, rowIndex: number): string {
+function cellColor(
+  occurrenceLevel: string,
+  detectionLevel: string,
+  colIndex: number,
+  rowIndex: number,
+  actionPriority: ActionPriorityMetadata | undefined,
+): string {
+  if (actionPriority) {
+    const level = resolveActionPriority(actionPriority, 'Safety-Impact', occurrenceLevel, detectionLevel);
+    return level ? AP_CELL_TINTS[level] : AP_CELL_UNRESOLVED;
+  }
   const tableRow = (CELL_COLORS.length - 1) - rowIndex;
   return CELL_COLORS[tableRow]?.[colIndex] ?? '#ffffff';
 }
+
+/** Cell background opacity — same 0.55 blend for both the AP tints and the legacy gradient. */
+const CELL_OPACITY = 0.55;
 
 /** Bubble diameter in px: min 18, max 60, scales with count. */
 function bubbleDiameter(count: number): number {
@@ -109,9 +147,11 @@ function bubbleDiameter(count: number): number {
 
 interface RiskMatrixProps {
   bubbles: RiskMatrixBubble[];
+  /** The active profile's AP table. Omit to keep the legacy fixed-gradient colouring. */
+  actionPriority?: ActionPriorityMetadata;
 }
 
-export function RiskMatrix({ bubbles }: RiskMatrixProps) {
+export function RiskMatrix({ bubbles, actionPriority }: RiskMatrixProps) {
   const bubbleMap = new Map<string, number>();
   for (const b of bubbles) {
     bubbleMap.set(`${b.occurrence}|${b.detection}`, b.count);
@@ -141,8 +181,8 @@ export function RiskMatrix({ bubbles }: RiskMatrixProps) {
               top: ri * CELL_H,
               width: CELL_W,
               height: CELL_H,
-              backgroundColor: cellColor(ci, ri),
-              opacity: 0.55,
+              backgroundColor: cellColor(occ, det, ci, ri, actionPriority),
+              opacity: CELL_OPACITY,
             }}
           />
         ))

@@ -7,9 +7,11 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const desktopHostDir = path.resolve(__dirname, '..');
 const rendererDir = path.join(repoRoot, 'apps', 'renderer');
 const profilesDir = path.join(repoRoot, 'packages', 'profiles');
+const gitServiceDir = path.join(repoRoot, 'packages', 'git-service');
 const releaseDir = path.join(desktopHostDir, '.release');
 const appDir = path.join(releaseDir, 'app');
 const sidecarDir = path.join(releaseDir, 'sidecar');
+const portableGitDir = path.join(releaseDir, 'git');
 const sourceIconPath = path.join(desktopHostDir, 'logo', 'icon_1024.png');
 const buildIconsDir = path.join(desktopHostDir, 'build', 'icons');
 
@@ -200,10 +202,27 @@ function copyDir(sourceDir, targetDir) {
  * app/node_modules/@scope/name still resolves everything in app/node_modules.
  */
 function copyPackageDir(sourceDir, targetDir) {
+  const packageJsonPath = path.join(sourceDir, 'package.json');
+  const packageName = fs.existsSync(packageJsonPath)
+    ? JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')).name
+    : null;
+
   fs.cpSync(sourceDir, targetDir, {
     recursive: true,
     dereference: true,
-    filter: (src) => path.basename(src) !== 'node_modules',
+    filter: (src) => {
+      const relative = path.relative(sourceDir, src);
+      const rootEntry = relative.split(path.sep)[0];
+
+      if (rootEntry === 'node_modules') return false;
+
+      // Dugite's portable Git is staged separately under Resources/git. Keeping it
+      // here as well duplicates hundreds of megabytes, and dereferencing the package
+      // would expand the alias symlinks that Dugite intentionally uses to stay small.
+      if (packageName === 'dugite' && rootEntry === 'git') return false;
+
+      return true;
+    },
   });
 }
 
@@ -277,6 +296,19 @@ function copyWorkspacePackage(pkg) {
   const importerDataDir = path.join(pkg.dir, 'importer-data');
   if (fs.existsSync(importerDataDir)) {
     copyDir(importerDataDir, path.join(packageTargetDir, 'importer-data'));
+  }
+
+  // Copy the on-demand JSON catalogs that ship *beside* dist/ rather than being
+  // compiled into it: queries/view-queries.json (view evaluation) and
+  // presentation/concept-presentation.json (concept presentation). Both are
+  // resolved at runtime relative to __dirname === <pkg>/dist/<subdir>, so they
+  // must land as siblings of dist/ in the staged package or every view
+  // evaluation resolves against an empty catalog.
+  for (const assetDir of ['queries', 'presentation']) {
+    const sourceDir = path.join(pkg.dir, assetDir);
+    if (fs.existsSync(sourceDir)) {
+      copyDir(sourceDir, path.join(packageTargetDir, assetDir));
+    }
   }
 }
 
@@ -389,11 +421,108 @@ function writeAppPackageJson(topLevel) {
 function copySidecarNode() {
   const sidecarName = process.platform === 'win32' ? 'node.exe' : 'node';
   const sidecarPath = path.join(sidecarDir, sidecarName);
-  copyFile(process.execPath, sidecarPath);
+
+  if (process.platform === 'darwin') {
+    const architectures = execFileSync('lipo', ['-archs', process.execPath], {
+      encoding: 'utf8',
+    }).trim().split(/\s+/);
+
+    if (!architectures.includes('arm64')) {
+      throw new Error(
+        `The macOS package targets arm64, but ${process.execPath} contains only: ` +
+        architectures.join(', '),
+      );
+    }
+
+    if (architectures.length === 1) {
+      copyFile(process.execPath, sidecarPath);
+    } else {
+      fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+      execFileSync('lipo', ['-thin', 'arm64', process.execPath, '-output', sidecarPath]);
+    }
+  } else {
+    // The Windows and Linux package targets are both x64 in electron-builder.yml.
+    if (process.arch !== 'x64') {
+      throw new Error(
+        `The ${process.platform} package targets x64, but the build Node is ${process.arch}.`,
+      );
+    }
+    copyFile(process.execPath, sidecarPath);
+  }
 
   if (process.platform !== 'win32') {
     fs.chmodSync(sidecarPath, 0o755);
   }
+}
+
+function countSymlinks(rootDir) {
+  let count = 0;
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        count++;
+      } else if (entry.isDirectory()) {
+        walk(entryPath);
+      }
+    }
+  };
+  walk(rootDir);
+  return count;
+}
+
+function copyPortableGit() {
+  const dugiteDir = resolvePackageDir('dugite', gitServiceDir);
+  assertExists(dugiteDir, 'Dugite package');
+
+  const dugitePackageJson = JSON.parse(
+    fs.readFileSync(path.join(dugiteDir, 'package.json'), 'utf8'),
+  );
+  const downloadGitScript = path.join(dugiteDir, 'script', 'download-git.js');
+  assertExists(downloadGitScript, `Dugite ${dugitePackageJson.version} download script`);
+
+  // pnpm's side-effects cache can restore Dugite's postinstall output with its
+  // symlinks expanded into full files. Re-running Dugite's checksum-verified
+  // extractor makes a clean install and a cached CI install produce the same tree.
+  execFileSync(process.execPath, [downloadGitScript], { stdio: 'inherit' });
+
+  const sourceGitDir = path.join(dugiteDir, 'git');
+  assertExists(sourceGitDir, `Dugite ${dugitePackageJson.version} portable Git`);
+
+  // Preserve Dugite's relative symlinks. Dereferencing these aliases inflates the
+  // macOS Git payload by hundreds of megabytes.
+  fs.cpSync(sourceGitDir, portableGitDir, {
+    recursive: true,
+    dereference: false,
+    verbatimSymlinks: true,
+  });
+
+  const gitRelativePath = process.platform === 'win32'
+    ? path.join('cmd', 'git.exe')
+    : path.join('bin', 'git');
+  const stagedGitBinary = path.join(portableGitDir, gitRelativePath);
+  assertExists(stagedGitBinary, 'staged portable Git executable');
+
+  if (process.platform !== 'win32') {
+    fs.accessSync(stagedGitBinary, fs.constants.X_OK);
+  }
+
+  const sourceSymlinkCount = countSymlinks(sourceGitDir);
+  const stagedSymlinkCount = countSymlinks(portableGitDir);
+  if (sourceSymlinkCount !== stagedSymlinkCount) {
+    throw new Error(
+      `Portable Git symlink count changed while staging: ` +
+      `${sourceSymlinkCount} source, ${stagedSymlinkCount} staged.`,
+    );
+  }
+
+  const gitVersion = execFileSync(stagedGitBinary, ['--version'], {
+    encoding: 'utf8',
+  }).trim();
+  console.log(
+    `[RiaCore] Staged Dugite ${dugitePackageJson.version} portable Git ` +
+    `(${gitVersion}, ${stagedSymlinkCount} symlinks)`,
+  );
 }
 
 function copyAboutIcon() {
@@ -521,6 +650,7 @@ function main() {
   copyAboutIcon();
   writeAppPackageJson(topLevel);
   copySidecarNode();
+  copyPortableGit();
 
   assertPackagedPathLengths();
 

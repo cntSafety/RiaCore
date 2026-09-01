@@ -15,9 +15,9 @@
     "langium": "1.2.1"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "langium-cli": "1.2.1",
-    "tsx": "^4.19.4",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
   }
 }

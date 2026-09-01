@@ -1,0 +1,101 @@
+[
+  {
+    "id": "COMMON_MODEL/Element",
+    "metamodel": "COMMON_MODEL",
+    "concept": "Element",
+    "icon": "BlockOutlined",
+    "color": "colorTextSecondary",
+    "shape": "rounded",
+    "order": 0,
+    "labelAttribute": "name",
+    "badgeAttributes": []
+  },
+  {
+    "id": "COMMON_MODEL/StructuralElement",
+    "metamodel": "COMMON_MODEL",
+    "concept": "StructuralElement",
+    "icon": "FolderOutlined",
+    "color": "colorTextSecondary",
+    "shape": "rounded",
+    "order": 10,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  },
+  {
+    "id": "COMMON_MODEL/ActiveElement",
+    "metamodel": "COMMON_MODEL",
+    "concept": "ActiveElement",
+    "icon": "AppstoreOutlined",
+    "color": "colorPrimary",
+    "shape": "rectangle",
+    "order": 20,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  },
+  {
+    "id": "COMMON_MODEL/Requirement",
+    "metamodel": "COMMON_MODEL",
+    "concept": "Requirement",
+    "icon": "FileTextOutlined",
+    "color": "colorInfo",
+    "shape": "rounded",
+    "order": 30,
+    "labelAttribute": "name",
+    "badgeAttributes": ["requirement_id"]
+  },
+  {
+    "id": "COMMON_MODEL/Port",
+    "metamodel": "COMMON_MODEL",
+    "concept": "Port",
+    "icon": "ApiOutlined",
+    "color": "colorTextSecondary",
+    "shape": "circle",
+    "order": 40,
+    "labelAttribute": "name",
+    "badgeAttributes": []
+  },
+  {
+    "id": "COMMON_MODEL/InPort",
+    "metamodel": "COMMON_MODEL",
+    "concept": "InPort",
+    "icon": "LoginOutlined",
+    "color": "colorInfo",
+    "shape": "chevron-right",
+    "order": 50,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  },
+  {
+    "id": "COMMON_MODEL/OutPort",
+    "metamodel": "COMMON_MODEL",
+    "concept": "OutPort",
+    "icon": "LogoutOutlined",
+    "color": "colorSuccess",
+    "shape": "chevron-right",
+    "order": 60,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  },
+  {
+    "id": "COMMON_MODEL/InOutPort",
+    "metamodel": "COMMON_MODEL",
+    "concept": "InOutPort",
+    "icon": "SwapOutlined",
+    "color": "colorWarning",
+    "shape": "diamond",
+    "order": 70,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  },
+  {
+    "id": "COMMON_MODEL/Connection",
+    "metamodel": "COMMON_MODEL",
+    "concept": "Connection",
+    "icon": "NodeIndexOutlined",
+    "color": "colorTextSecondary",
+    "shape": "line",
+    "order": 80,
+    "labelAttribute": "name",
+    "badgeAttributes": ["kind"]
+  }
+]

@@ -25,8 +25,9 @@
  * without ABI conflicts (Electron's modified ABI causes segfaults).
  */
 import * as path from 'node:path';
-import { createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createImportLogger, createCommandDispatcher, createLoadGate } from '@riacore/app-core';
-import type { IDbModule, IWorkspaceService, IImporterOrchestrationService, IImporterRegistry, IProvisioningService, IProfileRegistry, INamespaceService, IInstanceService, ISafetyCommands, ICommandDispatcher, ServiceDependencies, LoadGate } from '@riacore/app-core';
+import { existsSync } from 'node:fs';
+import { createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createImportLogger, createCommandDispatcher, createLoadGate, createMappingRegistry, registerBuiltInMappings, createViewService } from '@riacore/app-core';
+import type { IDbModule, IWorkspaceService, IImporterOrchestrationService, IImporterRegistry, IProvisioningService, IProfileRegistry, INamespaceService, IInstanceService, ISafetyCommands, ICommandDispatcher, ServiceDependencies, LoadGate, IMappingRegistry, IViewService } from '@riacore/app-core';
 import { createGitService } from '@riacore/git-service';
 import type { IGitService } from '@riacore/git-service';
 import type {
@@ -52,6 +53,8 @@ let namespaceService: INamespaceService;
 let instanceService: IInstanceService;
 let safetyCommands: ISafetyCommands;
 let gitService: IGitService;
+let mappingRegistry: IMappingRegistry;
+let viewService: IViewService;
 let dispatcher: ICommandDispatcher;
 let deps: ServiceDependencies;
 let gate: LoadGate;
@@ -89,6 +92,9 @@ async function initialize(): Promise<void> {
   instanceService = createInstanceService(dbModule);
   safetyCommands = createSafetyCommands(instanceService, dbModule);
   gitService = createGitService();
+  mappingRegistry = createMappingRegistry();
+  registerBuiltInMappings(mappingRegistry);
+  viewService = createViewService(mappingRegistry, dbModule, logger);
   sendLog('info', 'Worker initialization completed', { pid: process.pid });
 
   // Construct unified ServiceDependencies for the CommandDispatcher
@@ -106,6 +112,8 @@ async function initialize(): Promise<void> {
     safetyCommands,
     persistorService: undefined,
     gitService,
+    mappingRegistry,
+    viewService,
     createLogger: (workingDir: string) => createImportLogger(path.join(workingDir, 'logs')),
     llmStreamSink: {
       send(_channel: string, payload: unknown): void {
@@ -153,8 +161,43 @@ function handleMessage(data: MainMessage): void {
         const response: WorkerResponse = { type: 'response', id, ok: true, data: result };
         send(response);
       })
-      .catch((err) => {
+      .catch(async (err) => {
         const message = err instanceof Error ? err.message : String(err);
+        const errorContext = {
+          channel,
+          error: message,
+          errorType: err instanceof Error ? err.name : typeof err,
+          stack: err instanceof Error ? err.stack : undefined,
+        };
+        sendLog('error', 'Worker request failed', errorContext);
+
+        // Mirror request failures into the active workspace log. Many commands
+        // (notably safety mutations) do not carry workingDir in their payload,
+        // so fall back to the workspace service's current status.
+        try {
+          const payloadWorkingDir = payload && typeof payload === 'object'
+            && typeof (payload as { workingDir?: unknown }).workingDir === 'string'
+            ? (payload as { workingDir: string }).workingDir
+            : undefined;
+          const status = payloadWorkingDir ? null : await workspaceService.getStatus();
+          const workingDir = payloadWorkingDir
+            ?? (status?.state === 'open' ? status.info.workingDir : undefined);
+
+          if (workingDir && existsSync(workingDir)) {
+            const workspaceLogger = createImportLogger(path.join(workingDir, 'logs'));
+            try {
+              workspaceLogger.error('Request failed', errorContext);
+            } finally {
+              workspaceLogger.close();
+            }
+          }
+        } catch (loggingError) {
+          sendLog('warn', 'Failed to mirror request error to workspace log', {
+            channel,
+            error: loggingError instanceof Error ? loggingError.message : String(loggingError),
+          });
+        }
+
         const response: WorkerErrorResponse = { type: 'response', id, ok: false, error: message };
         send(response);
       });

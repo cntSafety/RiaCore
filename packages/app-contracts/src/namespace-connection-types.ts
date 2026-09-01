@@ -62,3 +62,20 @@ export interface DisconnectResult {
   /** Whether the derived RIA_META_CATEGORIZEDBY edge was ref-counted away. */
   removedCategorizedBy: boolean;
 }
+
+/**
+ * Governs what happens when the user tries to link a cross-namespace element
+ * (e.g. an imported requirement) whose namespace has no `RIA_UNIV_NamespaceConnection`
+ * to the current authored namespace yet.
+ *
+ * - `'prompt'`   — the picker shows every match regardless of connection state;
+ *                  selecting an unconnected one asks the user to create the
+ *                  connection and the link together (or neither, on cancel).
+ * - `'restrict'` — the picker only shows matches whose namespace is already
+ *                  connected, so every visible result links immediately.
+ */
+export type CrossNsLinkUnconnectedMode = 'prompt' | 'restrict';
+
+export interface CrossNsLinkSettings {
+  unconnectedNamespaceMode: CrossNsLinkUnconnectedMode;
+}

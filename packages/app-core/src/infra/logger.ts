@@ -107,24 +107,32 @@ export interface ImportLogger {
 export function createImportLogger(logDir: string): ImportLogger {
   mkdirSync(logDir, { recursive: true });
 
-  const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
-  const logPath = resolve(logDir, `import-${ts}.log`);
+  // This factory serves imports, persistence, merges, and other workspace
+  // operations. Append all operations for a UTC day to one accurately named
+  // file instead of creating a misleading import file for every operation.
+  const date = new Date().toISOString().slice(0, 10);
+  const logPath = resolve(logDir, `workspace-${date}.log`);
   const stream: WriteStream = createWriteStream(logPath, { encoding: 'utf-8', flags: 'a' });
   let streamHealthy = true;
   stream.on('error', (error) => {
     streamHealthy = false;
     console.warn(
-      `[ImportLogger] Failed to write to ${JSON.stringify(logPath)}: ${error instanceof Error ? error.message : String(error)}`,
+      `[WorkspaceLogger] Failed to write to ${JSON.stringify(logPath)}: ${error instanceof Error ? error.message : String(error)}`,
     );
   });
   pruneWorkspaceLogDirectory(logDir, logPath);
 
   function write(level: Level, msg: string, ctx?: Record<string, unknown>): void {
+    // The daily workspace log is an operational incident log, not a trace.
+    // Domain-specific diagnostic loggers retain DEBUG when detailed tracing is
+    // explicitly needed, but routine workspace operations start at INFO.
+    if (level === 'DEBUG') return;
+
     const timestamp = new Date().toISOString();
     const ctxStr = ctx && Object.keys(ctx).length > 0
       ? '  ' + Object.entries(ctx).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')
       : '';
-    const line = `[${timestamp}] [${level.padEnd(5)}] [Import] ${msg}${ctxStr}`;
+    const line = `[${timestamp}] [${level.padEnd(5)}] [Workspace] ${msg}${ctxStr}`;
     if (streamHealthy) {
       try {
         stream.write(line + '\n');
@@ -135,10 +143,9 @@ export function createImportLogger(logDir: string): ImportLogger {
     if (level === 'ERROR') console.error(line);
     else if (level === 'WARN') console.warn(line);
     else if (level === 'INFO') console.log(line);
-    // DEBUG: file only
   }
 
-  write('INFO', 'Import logger started', { logFile: logPath });
+  write('INFO', 'Workspace operation logger started', { logFile: logPath });
 
   return {
     info:  (msg, ctx) => write('INFO',  msg, ctx),

@@ -20,7 +20,7 @@ description: >-
   direct malfunction propagation. Does not model the full Fault → Error → FailureMode → Effect chain; 
   instead the focus is just on Malfunction → propagates_to Malfunction.
   can be extended with   additional concepts (e.g. Cause, Effect, FTA events) if needed.
-version: "4.0.5"
+version: "4.0.6"
 
 prefixes:
   linkml: https://w3id.org/linkml/

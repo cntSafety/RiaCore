@@ -93,7 +93,9 @@ import { DeleteWithPreview } from './DeleteWithPreview';
 import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
 import { ReviewInstructionsModal } from './ReviewInstructionsModal';
+import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
+import { useSafetyMetamodel } from '../hooks/safetyMetamodelContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared prop interface
@@ -225,6 +227,11 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
   const updateRiskRating = useUpdateRiskRating(fmNodeId, triggerAutoSave);
   const deleteRiskRating = useDeleteRiskRating(fmNodeId, triggerAutoSave);
   const profile = useSafetyProfileMetadata();
+  // SOTIF reduces the risk rating to a free-text residual-risk argument: no
+  // Severity/Occurrence/Detection and no RPN (an ordinal score is not a SOTIF
+  // acceptance argument). Keyed off the active metamodel so the same section
+  // component serves both worlds.
+  const isSotif = useSafetyMetamodel() === 'SOTIF_ANALYSIS';
 
   const [severity, setSeverity] = useState('');
   const [occurrence, setOccurrence] = useState('');
@@ -252,12 +259,18 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
 
   const handleCreate = async () => {
     try {
-      await createRiskRating.mutateAsync({
-        failureModeNodeId: fmNodeId,
-        severity: profile.riskDefaults.severity,
-        occurrence: profile.riskDefaults.occurrence,
-        detection: profile.riskDefaults.detection,
-      });
+      // SOTIF: create a note-only risk rating — no Severity/Occurrence/Detection,
+      // so no S/O/D or RPN is persisted or exported.
+      await createRiskRating.mutateAsync(
+        isSotif
+          ? { failureModeNodeId: fmNodeId }
+          : {
+              failureModeNodeId: fmNodeId,
+              severity: profile.riskDefaults.severity,
+              occurrence: profile.riskDefaults.occurrence,
+              detection: profile.riskDefaults.detection,
+            },
+      );
     } catch (err: unknown) {
       message.error(String((err as Error)?.message ?? 'Failed to create risk rating'));
     }
@@ -281,12 +294,46 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
         onClick={() => void handleCreate()}
         style={{ fontSize: 11, height: 22 }}
       >
-        Add Risk Rating
+        {isSotif ? 'Add Risk Rating Note' : 'Add Risk Rating'}
       </Button>
     );
   }
 
   const gridLabelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 500, color: rrt.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' };
+
+  // SOTIF: note-only view — the residual-risk argument that points at the
+  // scenario-based validation evidence. No Severity/Occurrence/Detection/RPN.
+  if (isSotif) {
+    return (
+      <>
+        <Card size="small" styles={{ body: { padding: 14 } }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            <div style={gridLabelStyle}>Risk Rating Note — residual-risk argument</div>
+            <Input.TextArea
+              size="small"
+              autoSize={{ minRows: 4 }}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onBlur={() => saveField({ risk_rating_note: note })}
+              placeholder="Summarize why the residual risk is sufficiently reduced and point to the validation evidence (scenario catalog, simulation / real-world results, runtime measures)…"
+              style={{ fontSize: 13 }}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 11, marginTop: 8 }}>
+              For SOTIF, Severity / Occurrence / Detection and the RPN are not used — an ordinal score is not a SOTIF acceptance argument. Only this free-text argument is kept.
+            </Typography.Text>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
+              <SavedBadge visible={isSaved} />
+              <DeleteWithPreview nodeId={riskRating.node_id} onConfirm={() => deleteRiskRating.mutateAsync(riskRating.node_id)}>
+                {(openPreview) => (
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={openPreview}>Delete</Button>
+                )}
+              </DeleteWithPreview>
+            </div>
+          </div>
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
@@ -360,6 +407,12 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
           <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
             <Space size={8}>
               <Tag color="purple" style={{ fontSize: 12, margin: 0 }}>RPN {String(riskRating.attributes?.risk_priority_number ?? 'N/A')}</Tag>
+              <ActionPriorityTag
+                actionPriority={profile.actionPriority}
+                severity={severity}
+                occurrence={occurrence}
+                detection={detection}
+              />
               <SavedBadge visible={isSaved} />
             </Space>
             <Space size={8}>
@@ -738,7 +791,7 @@ export function RequirementsSection({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* Link existing row */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
-        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directRequirementIds} />
+        <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directRequirementIds} malfunctionNamespace={namespace} />
         <Popover
           open={linkingExisting}
           onOpenChange={(v) => { setLinkingExisting(v); if (!v) setSelectedRequirementId(undefined); }}

@@ -15,10 +15,10 @@
     "@riacore/importer-sdk": "workspace:*",
     "@riacore/sysml-language": "workspace:*",
     "langium": "1.2.1",
-    "yaml": "^2.4.5"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3"
   }
 }

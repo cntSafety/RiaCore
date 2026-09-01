@@ -12,8 +12,8 @@
     "@riacore/app-contracts": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.10.1",
-    "typescript": "^5.4.0",
-    "vitest": "^3.0.0"
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

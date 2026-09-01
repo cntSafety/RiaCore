@@ -53,6 +53,20 @@ interface ShowInTreeTriggerProps {
    */
   onShowDetails?: () => void;
   /**
+   * Extra menu entries appended after the navigation ones, with their ids
+   * reported back through {@link onExtraItem}.
+   *
+   * This is how the model view offers its expansion actions on an element tile
+   * (spec-view.md Phase 5.3) without every caller of this component growing a
+   * prop for them. Ids are namespaced by the caller; the ids this component
+   * owns (`showDetails`, `showInTree`, `showReferenceInTree`) are reserved and
+   * an extra item claiming one is ignored, so a caller cannot silently shadow
+   * navigation.
+   */
+  extraItems?: { id: string; label: string }[];
+  /** Invoked with the selected {@link extraItems} id. */
+  onExtraItem?: (id: string) => void;
+  /**
    * The authored safety namespace. Included in cross-window dispatch payloads so
    * the spawn window knows which namespace to use for SafetyEditor mutations.
    */
@@ -83,6 +97,8 @@ export function ShowInTreeTrigger({
   onNavigate,
   onNavigateReference,
   onShowDetails,
+  extraItems,
+  onExtraItem,
   safetyNamespace,
   children,
   wrapperStyle,
@@ -180,6 +196,11 @@ export function ShowInTreeTrigger({
     if (referenceTarget !== undefined) {
       items.push({ id: 'showReferenceInTree', label: `Show Reference in Tree ${formatShortcutHint(['CmdOrCtrl', 'Shift'], 'T')}` });
     }
+    // Reserved ids stay with navigation: an extra item claiming one would
+    // otherwise take over a menu entry the user reads as "Show in Tree".
+    const reserved = new Set(items.map((item) => item.id));
+    const extras = (extraItems ?? []).filter((item) => !reserved.has(item.id));
+    items.push(...extras);
 
     navigatingRef.current = true;
     try {
@@ -190,6 +211,8 @@ export function ShowInTreeTrigger({
         await dispatchNavigation('home');
       } else if (selectedId === 'showReferenceInTree' && referenceTarget !== undefined) {
         await dispatchNavigation('reference');
+      } else if (selectedId !== null && extras.some((item) => item.id === selectedId)) {
+        onExtraItem?.(selectedId);
       }
     } finally {
       navigatingRef.current = false;

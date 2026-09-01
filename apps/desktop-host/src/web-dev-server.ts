@@ -36,12 +36,15 @@ import {
   createImporterRegistry,
   createInstanceService,
   createLoadGate,
+  createMappingRegistry,
   createNamespaceService,
   createPersistorService,
   createProfileRegistry,
   createProvisioningService,
   createSafetyCommands,
+  createViewService,
   createWorkspaceService,
+  registerBuiltInMappings,
 } from '@riacore/app-core';
 import type { IpcChannelMap, LlmStreamEvent, LoadProgressPushEvent, RendererLogEntry } from '@riacore/app-contracts';
 import type { ServiceDependencies } from '@riacore/app-core';
@@ -115,6 +118,9 @@ function createRuntime(eventSink: (type: string, payload: unknown) => void) {
   const safetyCommands = createSafetyCommands(instanceService, dbModule);
   const connectionService = createConnectionService(dbModule, logger);
   const gitService = createGitService();
+  const mappingRegistry = createMappingRegistry();
+  registerBuiltInMappings(mappingRegistry);
+  const viewService = createViewService(mappingRegistry, dbModule, logger);
   const dispatcher = createCommandDispatcher();
 
   const deps: ServiceDependencies = {
@@ -130,6 +136,8 @@ function createRuntime(eventSink: (type: string, payload: unknown) => void) {
     safetyCommands,
     persistorService: undefined,
     gitService,
+    mappingRegistry,
+    viewService,
     createLogger: (workingDir: string) => createImportLogger(path.join(workingDir, 'logs')),
     llmStreamSink: {
       send(_channel: string, payload: unknown): void {

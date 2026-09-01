@@ -27,6 +27,7 @@
 import * as path from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import type { Result, ImportConfigData } from '@riacore/app-contracts';
+import { seedDefaultViews } from '../views/view-service.js';
 import type {
   RunImportParams,
   ImportRunSummary,
@@ -457,12 +458,11 @@ export function createImporterOrchestrationService(
           }
         }
 
-        // Log parsed file list to the import log for traceability
+        // Log only the count. Full source paths can be numerous and may expose
+        // project layout without adding useful incident-diagnosis signal.
         const parsedFiles = (result as { parsedFiles?: string[] }).parsedFiles;
         if (parsedFiles && parsedFiles.length > 0) {
-          logger.info(`Parsed ${parsedFiles.length} source file(s)`, {
-            files: parsedFiles,
-          });
+          logger.info(`Parsed ${parsedFiles.length} source file(s)`);
         }
 
         // Log skipped element types
@@ -507,12 +507,17 @@ export function createImporterOrchestrationService(
           };
           impactReportMap.set(session.runId, impactReport);
 
-          // Log impact summary
+          // Keep the log useful without serializing the complete impact report,
+          // which may contain model attributes and a large number of edges.
           const hasImpact = impactReport.orphaned.length > 0 || impactReport.modified.length > 0;
           if (hasImpact) {
             logger.info(
               `Boundary impact: ${impactReport.orphaned.length} orphaned, ${impactReport.modified.length} modified, ${impactReport.stableCount} stable`,
-              { impactReport },
+              {
+                orphanedCount: impactReport.orphaned.length,
+                modifiedCount: impactReport.modified.length,
+                stableCount: impactReport.stableCount,
+              },
             );
           } else {
             logger.info('No cross-namespace boundary impact detected', {
@@ -526,6 +531,13 @@ export function createImporterOrchestrationService(
           status: 'completed',
           stats: result.stats,
         });
+
+        // The import just created (or replaced) an imported namespace, so give
+        // it a default CommonModel view if it has none. Here rather than in the
+        // import channel handler because the CLI calls `runImport` directly and
+        // never goes through the dispatcher; idempotent, so it is a no-op on a
+        // re-import. Best-effort — a completed import is not failed by this.
+        await seedDefaultViews(dbModule, logger, 'import');
 
         return { ok: true, data: summary };
       } catch (err) {

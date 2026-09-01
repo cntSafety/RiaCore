@@ -168,7 +168,7 @@ export function MalfunctionTableView({
   );
 
   // ── Data fetching ─────────────────────────────────────────────────────────
-  const { data, isLoading, isError, error } = usePropagationsForComponent(scopeNodeId);
+  const { data, isLoading, isError, error } = usePropagationsForComponent(scopeNodeId, namespace);
 
   // Only internal nodes are shown as rows; boundary nodes are excluded (they are external).
   const rows = useMemo(() => toRows(data?.internalNodes ?? [], data?.structuralNodes ?? []), [data]);

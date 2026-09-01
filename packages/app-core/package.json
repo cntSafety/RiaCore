@@ -9,10 +9,11 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^4.0.111",
-    "@ai-sdk/anthropic": "^3.0.81",
-    "@ai-sdk/google-vertex": "^4.0.140",
-    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/amazon-bedrock": "^5.0.57",
+    "@ai-sdk/anthropic": "^4.0.39",
+    "@ai-sdk/google-vertex": "^5.0.55",
+    "@ai-sdk/openai": "^4.0.42",
+    "@ladybugdb/core": "^0.19.1",
     "@riacore/app-contracts": "workspace:*",
     "@riacore/git-service": "workspace:*",
     "@riacore/importer-arxml": "workspace:*",
@@ -20,16 +21,16 @@
     "@riacore/importer-sn": "workspace:*",
     "@riacore/importer-sysml-v2": "workspace:*",
     "@riacore/importer-sysml-v2-textual": "workspace:*",
-    "ai": "^6.0.193",
+    "ai": "^7.0.66",
     "exceljs": "^4.4.0",
-    "@ladybugdb/core": "^0.17.1",
-    "yaml": "^2.7.0",
-    "zod": "^3.23.0"
+    "@ladybugdb/core": "^0.19.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^20",
-    "fast-check": "^3.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^3.0.0"
+    "@types/node": "^26.2.0",
+    "fast-check": "^4.9.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

@@ -17,15 +17,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { App, Button, Dropdown, Select, Segmented, Space, Tag, Tooltip, Typography, theme, type MenuProps } from 'antd';
-import { ApartmentOutlined, CopyOutlined, EditOutlined, InfoCircleOutlined, MoreOutlined, NodeIndexOutlined, PlusOutlined, TableOutlined, TagOutlined, NodeCollapseOutlined, NodeExpandOutlined, SnippetsOutlined } from '@ant-design/icons';
+import { App, Button, Dropdown, Select, Space, Tag, Tooltip, Typography, theme, type MenuProps } from 'antd';
+import { ApartmentOutlined, CopyOutlined, EditOutlined, MoreOutlined, NodeIndexOutlined, PlusOutlined, TagOutlined, NodeCollapseOutlined, NodeExpandOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { createElement, useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import type { ConceptInstanceData } from '@riacore/app-contracts';
 import type { SelectedTreeElement } from '../types';
+import type { TabDefinition } from '../config/elementTabs';
 import { getNodeDecoration } from '../config/nodeTypeConfig';
 import { useWorkspaceStore } from '../../../../../store/workspaceStore';
 import { useQueryClient } from '@tanstack/react-query';
 import { TagChip } from './TagChip';
+import { ElementLensSelector } from './ElementLensSelector';
 
 export interface ElementHeaderProps {
   /** The selected tree element metadata. */
@@ -42,12 +44,17 @@ export interface ElementHeaderProps {
   tags: ConceptInstanceData[];
   /** All available tags for the "Add tag" picker. */
   allTags: ConceptInstanceData[];
-  /** Whether this element supports diagram view. */
-  isDiagramConcept: boolean;
-  /** Current lens value — only relevant when isDiagramConcept is true. */
-  lensValue: 'diagram' | 'propagation' | 'details' | 'table';
-  /** Callback when lens toggle changes. */
-  onLensChange: (value: 'diagram' | 'propagation' | 'details' | 'table') => void;
+  /**
+   * Options for the view selector, in display order — the
+   * Model/Propagation/Malfunctions/Notes/Details lenses for a model element,
+   * or the Overview/Risk Rating/… tabs for a malfunction. Both use the same
+   * control. Omit (or pass an empty array) to hide it entirely.
+   */
+  lensOptions?: TabDefinition[];
+  /** Current value of the lens selector. Required when `lensOptions` is set. */
+  lensValue?: string;
+  /** Callback when the lens selector changes. Required when `lensOptions` is set. */
+  onLensChange?: (value: string) => void;
   /** Tag mutation callbacks. */
   onAddTag: (tagNodeId: number) => Promise<void>;
   onRemoveTag: (tagNodeId: number) => Promise<void>;
@@ -108,6 +115,11 @@ export interface ElementHeaderProps {
   onDeleteTag?: () => void;
   /** Delete this note (only for safety_note concept). */
   onDeleteNote?: () => void;
+  /**
+   * Generic "delete this concept instance" action with a custom label (e.g. a
+   * SOTIF functional_insufficiency / triggering_condition). Opens impact preview.
+   */
+  onDeleteConcept?: { label: string; onDelete: () => void };
   /** Navigate to the note's reference child position in the tree (only for safety_note concept). */
   onShowNoteReferenceInTree?: () => void;
   /**
@@ -139,7 +151,7 @@ export function ElementHeader({
   shortName,
   tags,
   allTags,
-  isDiagramConcept,
+  lensOptions,
   lensValue,
   onLensChange,
   onAddTag,
@@ -157,6 +169,7 @@ export function ElementHeader({
   onPasteMalfunction,
   onDeleteTag,
   onDeleteNote,
+  onDeleteConcept,
   onShowNoteReferenceInTree,
   supportsTagging,
   allowAddTag = true,
@@ -400,6 +413,16 @@ export function ElementHeader({
       });
     }
 
+    if (onDeleteConcept) {
+      items.push({ type: 'divider' });
+      items.push({
+        key: 'delete-concept',
+        label: onDeleteConcept.label,
+        danger: true,
+        onClick: onDeleteConcept.onDelete,
+      });
+    }
+
     if (selectedTreeElement.concept === 'safety_note') {
       if (onShowNoteReferenceInTree) {
         items.push({ type: 'divider' });
@@ -482,7 +505,7 @@ export function ElementHeader({
     });
 
     return items;
-  }, [onRename, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, referenceInTreeTarget, selectedTreeElement, displayName, onStartPropagation, onEndPropagation, pendingPropagation, propagationAlreadyExists, token, nodeId, stablePath, uuid, shortName, onCopyMalfunction, onPasteMalfunction, onDeleteTag, onDeleteNote, onShowNoteReferenceInTree]);
+  }, [onRename, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, referenceInTreeTarget, selectedTreeElement, displayName, onStartPropagation, onEndPropagation, pendingPropagation, propagationAlreadyExists, token, nodeId, stablePath, uuid, shortName, onCopyMalfunction, onPasteMalfunction, onDeleteTag, onDeleteNote, onDeleteConcept, onShowNoteReferenceInTree]);
 
   return (
     <div style={{ background: token.colorBgContainer }}>
@@ -492,6 +515,9 @@ export function ElementHeader({
           display: 'flex',
           alignItems: 'center',
           gap: 10,
+          // The selector carries six options with icons and labels; on a narrow
+          // panel it drops to its own line rather than overflowing the header.
+          flexWrap: 'wrap',
           padding: '16px 20px 4px',
         }}
       >
@@ -561,18 +587,11 @@ export function ElementHeader({
           />
         </Dropdown>
 
-        {isDiagramConcept && (
-          <Segmented
-            size="small"
-            value={lensValue}
-            onChange={(v) => onLensChange(v as 'diagram' | 'propagation' | 'details' | 'table')}
-            options={[
-              { value: 'diagram', icon: <ApartmentOutlined />, label: 'Connections' },
-              { value: 'propagation', icon: <NodeIndexOutlined />, label: 'Propagation' },
-              { value: 'table', icon: <TableOutlined />, label: 'Table View' },
-              { value: 'details', icon: <InfoCircleOutlined />, label: 'Notes' },
-            ]}
-            style={{ flexShrink: 0 }}
+        {lensOptions && lensOptions.length > 0 && (
+          <ElementLensSelector
+            options={lensOptions}
+            value={lensValue ?? lensOptions[0].key}
+            onChange={(v) => onLensChange?.(v)}
           />
         )}
       </div>

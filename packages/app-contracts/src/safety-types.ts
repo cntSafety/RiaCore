@@ -58,9 +58,12 @@ export interface CreateMalfunctionParams {
 
 export interface CreateRiskRatingParams {
   failureModeNodeId: number;
-  severity: string;
-  occurrence: string;
-  detection: string;
+  // Severity/Occurrence/Detection are optional: FMEA profiles always supply
+  // them, but SOTIF creates a note-only risk rating (residual-risk argument)
+  // and omits them so no S/O/D/RPN is persisted or exported.
+  severity?: string;
+  occurrence?: string;
+  detection?: string;
   note?: string;
 }
 

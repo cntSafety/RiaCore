@@ -975,7 +975,7 @@ export function PropagationCanvas({
     [namespace, addPropagation, message],
   );
 
-  const handleNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
+  const handleNodeDragStop = useCallback((_event: MouseEvent | TouchEvent, node: Node) => {
     userPositionsRef.current.set(node.id, node.position);
   }, []);
 

@@ -1,0 +1,121 @@
+{
+    "functionalInsufficiencies": [
+        {
+            "key": "sensor-resolution",
+            "name": "Sensor resolution limitation",
+            "description": "The sensor's spatial, temporal or intensity resolution is insufficient to resolve the target under some conditions, so relevant features are not captured even though the sensor conforms to specification."
+        },
+        {
+            "key": "range-fov",
+            "name": "Limited detection range / field of view",
+            "description": "The intended function cannot perceive targets beyond a limited range or outside the field of view, leaving a perception gap at the ODD boundaries."
+        },
+        {
+            "key": "dynamic-range-contrast",
+            "name": "Limited dynamic range / contrast",
+            "description": "Finite dynamic range or contrast discrimination makes the target insufficiently distinguishable from its background (e.g. limited thermal contrast between target and background)."
+        },
+        {
+            "key": "classification-algorithm",
+            "name": "Classification algorithm limitation",
+            "description": "The classification/perception algorithm has intrinsic limitations (e.g. confusable classes, limited generalization) that cause missed or incorrect classification without any implementation fault."
+        },
+        {
+            "key": "tracking-association",
+            "name": "Tracking / data-association limitation",
+            "description": "Object tracking or data association across frames/sensors is limited, causing identity switches, lost tracks, or mis-association under challenging dynamics."
+        },
+        {
+            "key": "incomplete-odd-spec",
+            "name": "Incomplete ODD specification",
+            "description": "The operational design domain is incompletely specified, so conditions the system will encounter are not covered by the intended-function specification."
+        },
+        {
+            "key": "sensor-fusion-integration",
+            "name": "Sensor-fusion integration issue",
+            "description": "The way multiple sensing modalities are fused has limitations (e.g. weighting, timing alignment, conflict resolution) that degrade the fused result relative to the individual channels."
+        },
+        {
+            "key": "latency-timing",
+            "name": "Latency / timing limitation",
+            "description": "End-to-end perception latency or update rate is insufficient for the dynamics of the scenario, so decisions are based on information that is too old."
+        },
+        {
+            "key": "training-data-gap",
+            "name": "Training-data gap (ML)",
+            "description": "A machine-learning component was trained on data that under-represents some situations, so its performance degrades on those situations even though it operates as trained."
+        },
+        {
+            "key": "calibration-robustness",
+            "name": "Calibration robustness limitation",
+            "description": "The intended function is sensitive to in-spec calibration variation, so nominal calibration tolerances still reduce performance under some conditions."
+        }
+    ],
+    "triggeringConditions": [
+        {
+            "key": "heavy-rain",
+            "name": "Heavy rain",
+            "description": "Heavy precipitation attenuates or scatters the sensing signal and adds clutter, reducing perception performance."
+        },
+        {
+            "key": "fog-mist",
+            "name": "Fog / mist",
+            "description": "Fog or mist reduces visibility and signal return, limiting detection range and contrast."
+        },
+        {
+            "key": "snow",
+            "name": "Snow",
+            "description": "Falling or settled snow changes scene appearance and reflectivity and can occlude or clutter the target."
+        },
+        {
+            "key": "low-sun-glare",
+            "name": "Low sun / glare",
+            "description": "Direct low-angle sunlight or glare saturates the sensor or washes out contrast."
+        },
+        {
+            "key": "darkness",
+            "name": "Darkness / low light",
+            "description": "Low ambient light reduces the information available to visible-light sensing and shifts reliance to other modalities."
+        },
+        {
+            "key": "reflective-surface",
+            "name": "Reflective surface (wet road, glass)",
+            "description": "Reflective or specular surfaces produce false returns or mirror-image artefacts that mislead perception."
+        },
+        {
+            "key": "partial-occlusion",
+            "name": "Partial occlusion",
+            "description": "The target is partially hidden by other objects or terrain, so only incomplete features are available."
+        },
+        {
+            "key": "spray",
+            "name": "Spray from vehicles",
+            "description": "Water or dust spray thrown up by vehicles creates transient clutter and attenuation."
+        },
+        {
+            "key": "emi",
+            "name": "Electromagnetic interference",
+            "description": "External electromagnetic interference degrades the signal-to-noise ratio of the sensing chain."
+        },
+        {
+            "key": "dust-smoke",
+            "name": "Dust / smoke",
+            "description": "Airborne dust or smoke scatters and attenuates the sensing signal and reduces contrast."
+        },
+        {
+            "key": "thermal-crossover",
+            "name": "Thermal crossover (target approx. background)",
+            "description": "The target's temperature approaches the background temperature, so the thermal contrast available to an IR sensor is very low."
+        },
+        {
+            "key": "cluttered-background",
+            "name": "Cluttered background",
+            "description": "A visually or thermally cluttered background makes the target hard to separate from surrounding structure."
+        },
+        {
+            "key": "high-target-speed",
+            "name": "High target speed",
+            "description": "High relative speed of the target reduces the number of observations and stresses tracking and latency budgets."
+        }
+    ]
+}

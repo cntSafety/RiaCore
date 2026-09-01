@@ -44,6 +44,31 @@ html, body {
   user-select: text;
 }
 
+/* 3b. Canvas tiles are never text-selectable.
+   A Namespace_Connection is drawn by pressing a handle inside a tile and
+   dragging onto another tile; Chromium anchors a text selection in the tile
+   body unless selection is off for the whole node subtree. React Flow ships
+   `.react-flow__node { user-select: none }`, but its stylesheet's position in
+   the cascade is decided by the bundler: the dev server injects it after
+   global.css (so it wins every tie), while the packaged bundle emits it as its
+   own chunk stylesheet linked BEFORE the app's (so it loses every tie). Own
+   the rule here so the behaviour does not depend on the build. */
+.react-flow .react-flow__node,
+.react-flow .react-flow__node * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* …except real text-entry controls, should a node ever host one. */
+.react-flow .react-flow__node input,
+.react-flow .react-flow__node textarea,
+.react-flow .react-flow__node [contenteditable=""],
+.react-flow .react-flow__node [contenteditable="true"],
+.react-flow .react-flow__node [contenteditable="plaintext-only"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* 4. No pointer cursor on selectable rows (native list feel) */
 .ant-tree-node-content-wrapper,
 .ant-table-row {

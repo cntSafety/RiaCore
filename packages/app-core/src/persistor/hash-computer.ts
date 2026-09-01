@@ -57,9 +57,8 @@ export interface NamespaceHashInput {
   /** Pre-loaded from RIA_META_EdgeAttribute (is_key attrs per relationship type) */
   edgeKeyAttrs?: EdgeKeyAttrMap;
   /**
-   * Optional debug logger. When provided, logs per-section hashes and the
-   * first few serialized records from each section so mismatches can be
-   * diagnosed from the import log without rerunning.
+   * Optional diagnostic callback. When provided, emits per-section counts,
+   * hashes, and identity-attribute usage without serializing model records.
    */
   debugLog?: (msg: string) => void;
 }
@@ -130,11 +129,11 @@ function sortRelInstancesForHash(
  * Compute a SHA-256 content hash over the canonical serialized data for a namespace.
  *
  * When `debugLog` is provided, logs:
- *   - Per-section SHA-256 hashes (concepts, relationships, cross-ns edges)
- *   - First 3 serialized records from each section
- *   - Identity attribute used per concept type
+ *   - Per-section SHA-256 hashes and record counts
+ *   - Identity attribute usage summary
  *
- * This makes hash mismatches diagnosable from the import log without rerunning.
+ * This makes hash mismatches diagnosable without writing model records or
+ * project content to the workspace log.
  */
 export function computeNamespaceHash(namespaceData: NamespaceHashInput): string {
   const nodeKeyAttrs = namespaceData.nodeKeyAttrs ?? new Map();
@@ -151,9 +150,14 @@ export function computeNamespaceHash(namespaceData: NamespaceHashInput): string 
   }
 
   if (log) {
-    const identityByType: Record<string, string> = {};
-    for (const [t, attrs] of nodeKeyAttrs) identityByType[t] = attrs[0] ?? '(none)';
-    log(`hash:concepts identity_attrs=${JSON.stringify(identityByType)}`);
+    const identityAttrCounts: Record<string, number> = {};
+    for (const attrs of nodeKeyAttrs.values()) {
+      const attribute = attrs[0] ?? '(none)';
+      identityAttrCounts[attribute] = (identityAttrCounts[attribute] ?? 0) + 1;
+    }
+    log(
+      `hash:concepts identity_attr_counts=${JSON.stringify(identityAttrCounts)} concept_types=${nodeKeyAttrs.size}`,
+    );
   }
 
   const sortedConceptTypes = [...conceptsByType.keys()].sort();
@@ -171,9 +175,6 @@ export function computeNamespaceHash(namespaceData: NamespaceHashInput): string 
   if (log) {
     const sectionHash = createHash("sha256").update(conceptBytes).digest("hex");
     log(`hash:concepts count=${serializedConcepts.length} section_sha256=${sectionHash}`);
-    for (let i = 0; i < Math.min(3, serializedConcepts.length); i++) {
-      log(`hash:concepts[${i}] ${serializedConcepts[i]}`);
-    }
   }
 
   // ── Relationships ─────────────────────────────────────────────────────────
@@ -200,9 +201,6 @@ export function computeNamespaceHash(namespaceData: NamespaceHashInput): string 
   if (log) {
     const sectionHash = createHash("sha256").update(relationshipBytes).digest("hex");
     log(`hash:relationships count=${serializedRels.length} section_sha256=${sectionHash}`);
-    for (let i = 0; i < Math.min(3, serializedRels.length); i++) {
-      log(`hash:relationships[${i}] ${serializedRels[i]}`);
-    }
   }
 
   // ── Cross-NS edges ────────────────────────────────────────────────────────
@@ -216,9 +214,6 @@ export function computeNamespaceHash(namespaceData: NamespaceHashInput): string 
   if (log) {
     const sectionHash = createHash("sha256").update(crossNsBytes).digest("hex");
     log(`hash:cross_ns count=${serializedCrossNs.length} section_sha256=${sectionHash}`);
-    for (let i = 0; i < Math.min(3, serializedCrossNs.length); i++) {
-      log(`hash:cross_ns[${i}] ${serializedCrossNs[i]}`);
-    }
   }
 
   // ── Final hash ────────────────────────────────────────────────────────────

@@ -41,6 +41,8 @@ const CHANNEL_OVERRIDES: Record<string, string> = {
   'namespaceConnections.countDependents': 'namespaceConnections:countDependents',
   'canvasLayout.getLayout': 'canvasLayout:getLayout',
   'canvasLayout.setRecords': 'canvasLayout:setRecords',
+  'canvasLayout.getViewLayout': 'canvasLayout:getViewLayout',
+  'canvasLayout.setViewLayout': 'canvasLayout:setViewLayout',
 };
 
 const PAYLOAD_BUILDERS: Record<string, PayloadBuilder> = {
@@ -53,6 +55,8 @@ const PAYLOAD_BUILDERS: Record<string, PayloadBuilder> = {
   'namespaces.previewDeleteImpact': ([namespace]) => ({ namespace }),
   'namespaces.delete': ([namespace]) => ({ namespace }),
   'canvasLayout.setRecords': ([records]) => ({ records }),
+  'canvasLayout.getViewLayout': ([viewName, sources]) => ({ viewName, sources }),
+  'canvasLayout.setViewLayout': ([viewName, records]) => ({ viewName, records }),
 };
 
 const RECENT_KEY = 'riacore.webDev.recentWorkspaces';
@@ -386,6 +390,7 @@ function createBrowserBridge(): RiaCoreBridge {
     profiles: createInvoker('profiles') as RiaCoreBridge['profiles'],
     metamodel: createInvoker('metamodel') as RiaCoreBridge['metamodel'],
     namespaceConnections: createInvoker('namespaceConnections') as RiaCoreBridge['namespaceConnections'],
+    crossNsLinkSettings: createInvoker('crossNsLinkSettings') as RiaCoreBridge['crossNsLinkSettings'],
     canvasLayout: createInvoker('canvasLayout') as RiaCoreBridge['canvasLayout'],
     namespaces: createInvoker('namespaces') as RiaCoreBridge['namespaces'],
     safety: createInvoker('safety') as RiaCoreBridge['safety'],
@@ -445,6 +450,8 @@ function createBrowserBridge(): RiaCoreBridge {
         return () => cacheListeners.delete(handler);
       },
     },
+    views: createInvoker('views') as unknown as RiaCoreBridge['views'],
+    presentation: createInvoker('presentation') as unknown as RiaCoreBridge['presentation'],
     diff: createInvoker('diff') as RiaCoreBridge['diff'],
     git: createInvoker('git') as RiaCoreBridge['git'],
     llm: createSection<RiaCoreBridge['llm']>('llm', {
