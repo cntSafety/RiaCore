@@ -26,6 +26,10 @@
  *   - side='left':  [square] [name] [warn]
  *   - side='right': [warn] [name] [square]
  *
+ * `side` names the border the pin sits against, and the square is always the
+ * element closest to it, because the square is where a connector terminates. The
+ * caller decides which border that is — see `pinSide` in `ModelTileNode`.
+ *
  * Right-clicking the port name/square shows "Show in Tree" for the port.
  * Right-clicking the malfunction warning icon shows navigation to the
  * malfunction(s) attached to this port.
@@ -104,6 +108,7 @@ export function PortPin({ id, name, dir, warn, asilColor, side, refCb, hovered, 
 
   const labelEl = (
     <span
+      data-port-label={id}
       style={{
         fontSize: 10.5,
         color: token.colorTextSecondary,
@@ -121,7 +126,16 @@ export function PortPin({ id, name, dir, warn, asilColor, side, refCb, hovered, 
     </Tooltip>
   ) : labelEl;
 
-  // Port content (square + label) wrapped with ShowInTreeTrigger for port navigation
+  // Port content (square + label) wrapped with ShowInTreeTrigger for port navigation.
+  //
+  // `row-reverse` is what makes `side` mean anything for the square. The order is
+  // declared once here, square first, and the wrapper flips it — so the square is
+  // the element nearest whichever border the pin sits against. Before this, `side`
+  // only moved the warning icon and the square stayed on the left in every case,
+  // which put it at the far end of the row from the connector on any right-hand
+  // pin: a frame's port name outside its west border was drawn with its own
+  // delegation line struck through it, because the wire started at the border and
+  // the square was 90px away on the other side of the text.
   const portContent = (
     <>
       {square}
@@ -129,17 +143,24 @@ export function PortPin({ id, name, dir, warn, asilColor, side, refCb, hovered, 
     </>
   );
 
+  const contentStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    flexDirection: side === 'right' ? 'row-reverse' : 'row',
+  };
+
   const portWithNav = portTarget && onNavigateToNode ? (
     <ShowInTreeTrigger
       homeTarget={portTarget}
       onNavigate={onNavigateToNode}
-      wrapperStyle={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      wrapperStyle={contentStyle}
       hideKebab
     >
       {portContent}
     </ShowInTreeTrigger>
   ) : (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+    <span style={contentStyle}>
       {portContent}
     </span>
   );

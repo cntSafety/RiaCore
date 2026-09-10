@@ -1,5 +1,1 @@
-## What's Changed - Highlights
-* SOTIF Analysis
-* Collection of fixes
-* Performance Improvement
-* Generic Model view
+Improved SysML v2 rendering and write-ahead log (WAL) recovery for increased robustness.

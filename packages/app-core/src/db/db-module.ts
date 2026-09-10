@@ -112,9 +112,69 @@ const CLOSE_LOCK_TIMEOUT_MS = 5000;
  */
 const DEFERRED_CLOSE_TIMEOUT_MS = 120_000;
 
+/**
+ * How many read statements may execute against the native handle at once.
+ *
+ * `Db_Lock` shares the lock among unlimited readers, which is right for
+ * correctness — reads do not conflict — but it puts no ceiling on *memory*.
+ * Buffer-pool demand is (concurrently executing statements) x (peak per
+ * statement), and neither factor was bounded: `useModelView` fans out one
+ * neighbourhood walk per expansion with `Promise.all`, so a diagram with k
+ * expansions issues ~2k evaluations at once. When the sum exceeds the pool the
+ * engine does not queue or spill, it fails the statement outright with
+ * "Buffer manager exception: Unable to allocate memory! The buffer pool is full
+ * and no memory could be freed!" — and which statement dies is arbitrary,
+ * because it is whichever one next asked for a page.
+ *
+ * Measured on the reference model under the 512 MB cap the integration tests
+ * impose: four concurrent evaluations failed three of four at ~415 ms, two
+ * concurrent passed, and the pool recovered completely afterwards — so this is a
+ * concurrency budget, not a leak. See
+ * docs/particular/SysMLViewBufferPoolExhaustion.md.
+ *
+ * Four is chosen to admit the concurrency the UI actually reaches (the model
+ * view's seed runs two neighbourhood walks x two directed traversals) while
+ * keeping peak demand bounded no matter how many expansions a diagram carries.
+ * It is a queue, not a rejection: exceeding it costs latency, never an error.
+ * Writes are unaffected — they are already exclusive.
+ */
+const MAX_CONCURRENT_READS = 4;
+
 export interface DbModuleOptions {
   /** Override {@link CLOSE_LOCK_TIMEOUT_MS}. Intended for tests. */
   closeLockTimeoutMs?: number;
+  /** Override {@link MAX_CONCURRENT_READS}. Intended for tests. */
+  maxConcurrentReads?: number;
+}
+
+/**
+ * A plain counting semaphore. Admits up to `limit` holders and queues the rest
+ * in arrival order.
+ *
+ * Deliberately separate from `Db_Lock`: that lock exists to keep writes from
+ * overlapping reads (a concurrent `CHECKPOINT` faulted the worker with
+ * `0xC0000005`) and must stay a readers/writer lock to do it. This bounds how
+ * much memory concurrent *reads* can ask the buffer manager for, which is an
+ * orthogonal concern with an orthogonal failure mode. Folding the two together
+ * would mean either capping readers in the lock — where the cap has nothing to
+ * do with the exclusion it implements — or making this aware of write exclusion
+ * it does not need.
+ */
+function createSemaphore(limit: number) {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return {
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+      if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+      active += 1;
+      try {
+        return await fn();
+      } finally {
+        active -= 1;
+        waiting.shift()?.();
+      }
+    },
+  };
 }
 
 export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions): IDbModule {
@@ -128,6 +188,8 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
   // for writes / CHECKPOINT / transactions. See db-lock.ts for the rationale
   // (concurrent read + CHECKPOINT faulted the worker with 0xC0000005).
   const lock = createDbLock();
+  // Bounds buffer-pool demand from concurrent reads. See MAX_CONCURRENT_READS.
+  const readSlots = createSemaphore(options?.maxConcurrentReads ?? MAX_CONCURRENT_READS);
 
   function assertGeneration(captured: number): void {
     if (captured !== generation) {
@@ -421,7 +483,12 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
         }
       };
 
-      return isWrite ? lock.write(run) : lock.read(run);
+      // The semaphore is taken INSIDE the lock, never around it: a read holding
+      // a slot while queued for the lock would let a pending write (which needs
+      // every reader to drain) wait on readers that are themselves waiting on
+      // the write. Acquiring the slot only once the read lock is held keeps the
+      // two orderings independent and the whole thing deadlock-free.
+      return isWrite ? lock.write(run) : lock.read(() => readSlots.run(run));
     },
 
     async checkpoint(): Promise<void> {

@@ -68,8 +68,22 @@ export class UtilityProcessManager {
   private child: ChildProcess | null = null;
   private pending: Map<string, PendingRequest> = new Map();
   private queue: QueuedRequest[] = [];
+  /**
+   * Consecutive crashes in the current crash loop. Reset only after the worker
+   * has stayed up for `stableUptime` (see `stableResetTimer`), never on the
+   * mere fact of a successful respawn — a crash loop *is* a sequence of
+   * successful respawns, so resetting on `ready` would keep this pinned at 1
+   * and make the `maxRetries` cap below unreachable.
+   */
   private crashCount = 0;
+  /**
+   * Pending "the worker has been healthy long enough, forget the crash streak"
+   * timer. Cleared whenever the worker exits, so a crash that lands inside the
+   * window counts towards the streak.
+   */
+  private stableResetTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly maxRetries: number;
+  private readonly stableUptime: number;
   private readonly shutdownTimeout: number;
   /**
    * Maximum milliseconds to wait for the worker "ready" handshake.
@@ -88,8 +102,13 @@ export class UtilityProcessManager {
 
   private readonly appVersion: string;
 
-  constructor(opts?: { maxRetries?: number; shutdownTimeout?: number; startupTimeout?: number; appVersion?: string }) {
+  constructor(opts?: { maxRetries?: number; shutdownTimeout?: number; startupTimeout?: number; stableUptime?: number; appVersion?: string }) {
     this.maxRetries = opts?.maxRetries ?? 3;
+    // How long the worker must stay up before its crash streak is forgiven.
+    // Long enough that a tight crash loop (respawn takes ~1-2 s) accumulates
+    // towards maxRetries, short enough that two unrelated crashes an hour apart
+    // are not treated as a loop.
+    this.stableUptime = opts?.stableUptime ?? 60_000;
     this.shutdownTimeout = opts?.shutdownTimeout ?? 5_000;
     this.appVersion = opts?.appVersion ?? '0.0.0';
     // 60 s covers slow notebooks and first-launch antivirus scans in both dev
@@ -153,7 +172,7 @@ export class UtilityProcessManager {
           cleanup();
           this.installMessageListener(child);
           this.installExitListener(child);
-          this.crashCount = 0;
+          this.armStableReset();
           this.logger.info('Worker process ready');
           resolve();
         } else if (data.type === 'error') {
@@ -191,6 +210,35 @@ export class UtilityProcessManager {
       child.on('message', onMessage);
       child.on('exit', onExit);
     });
+  }
+
+  /**
+   * Start the clock on forgiving the current crash streak. Survive
+   * `stableUptime` and the worker is considered recovered rather than looping.
+   *
+   * `unref()` so a pending forgiveness timer never holds the process alive.
+   */
+  private armStableReset(): void {
+    this.clearStableReset();
+    const timer = setTimeout(() => {
+      if (this.crashCount > 0) {
+        this.logger.info('Worker process stable; clearing crash streak', {
+          clearedCrashCount: this.crashCount,
+          stableUptime: this.stableUptime,
+        });
+      }
+      this.crashCount = 0;
+      this.stableResetTimer = null;
+    }, this.stableUptime);
+    timer.unref?.();
+    this.stableResetTimer = timer;
+  }
+
+  private clearStableReset(): void {
+    if (this.stableResetTimer) {
+      clearTimeout(this.stableResetTimer);
+      this.stableResetTimer = null;
+    }
   }
 
   private resolveNodeExecPath(): string {
@@ -277,6 +325,11 @@ export class UtilityProcessManager {
    */
   private installExitListener(child: ChildProcess): void {
     child.on('exit', (code: number | null, signal: string | null) => {
+      // Whatever uptime this instance accumulated no longer counts — it just
+      // died. Cancelling here is what makes crashes inside the stability window
+      // accumulate into a streak.
+      this.clearStableReset();
+
       if (this.isShuttingDown) return;
 
       this.logger.error('Worker process exited unexpectedly', {
@@ -306,7 +359,10 @@ export class UtilityProcessManager {
 
       if (this.crashCount <= this.maxRetries) {
         this.isRestarting = true;
-        this.logger.warn('Restarting worker process after crash', { crashCount: this.crashCount });
+        this.logger.warn('Restarting worker process after crash', {
+          crashCount: this.crashCount,
+          maxRetries: this.maxRetries,
+        });
         this.start()
           .then(() => {
             this.isRestarting = false;
@@ -480,6 +536,7 @@ export class UtilityProcessManager {
     if (!this.child) return;
 
     this.isShuttingDown = true;
+    this.clearStableReset();
     this.logger.info('Sending shutdown signal to worker process');
 
     const child = this.child;

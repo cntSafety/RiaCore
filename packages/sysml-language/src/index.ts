@@ -39,6 +39,7 @@ export type {
   PartUsage, PortUsage, ItemUsage, AttributeUsage, ActionUsage,
   StateUsage, ExhibitStateUsage, ConnectionUsage, InterfaceUsage,
   FlowConnectionUsage, RequirementUsage,
+  Connector, ItemFlow, ItemFlowEnd,
   Definition, Usage, Feature, Type, Classifier,
 } from './generated/ast.js';
 
@@ -52,6 +53,11 @@ export {
   isPartUsage, isPortUsage, isItemUsage, isAttributeUsage, isActionUsage,
   isStateUsage, isExhibitStateUsage, isConnectionUsage, isInterfaceUsage,
   isFlowConnectionUsage, isRequirementUsage,
+  // Connector-shaped usages and the flow-specific end node. `isConnector`
+  // matches every usage that carries `ends` — connections, interfaces,
+  // allocations, flows, successions, bindings — which is what lets the importer
+  // read endpoint paths without enumerating AST `$type` literals.
+  isConnector, isItemFlow, isItemFlowEnd,
   isOwningMembership, isElement, isNamespace, isDefinition, isUsage,
   isFeature, isType, isClassifier,
 } from './generated/ast.js';

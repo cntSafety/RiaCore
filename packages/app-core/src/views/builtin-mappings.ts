@@ -72,6 +72,23 @@ export const SPHINX_NEEDS_EDGE_QUERY_ID = 'sphinx_needs.common_model.edges';
  */
 export const SPHINX_NEEDS_MAX_TRAVERSAL_DEPTH = 3;
 
+/**
+ * The SysML v2 catalog queries test `concept IN $connectionConcepts` rather than
+ * naming `connection_usage` outright, and this is what binds that parameter:
+ * `connection_usage` plus every subtype of it the source namespace's metamodel
+ * declares (see `MappingDescriptor.conceptGroups`).
+ *
+ * SysML has four such subtypes across the two importers — `interface_usage`,
+ * `allocation_usage`, and `flow_usage` / `flow_connection_usage` — and each was
+ * previously absent from the projection simply because the Cypher spelled out
+ * one name. A `flow` declaration therefore imported as a node with endpoints and
+ * still drew nothing. Resolving the set from the metamodel means the next
+ * subtype anyone adds is projected without a Cypher edit.
+ */
+export const SYSML_V2_CONCEPT_GROUPS = {
+  connectionConcepts: 'connection_usage',
+} as const;
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -114,12 +131,20 @@ export function shapeArxmlAttributes(row: RawRepresentativeRow): ShapedRepresent
  * point flagged in spec-view.md: "Port direction must be derived per source
  * metamodel").
  *
- * Qualified connection endpoints (usage.port) are projected in the query
- * catalog, not in this shaper. Their representative ID is the lowest imported
- * endpoint Feature node_id for that usage/port pair; their attributes and
- * source reference come from the declared port. Multiple connections therefore
- * share a port, while two usages of the same definition remain distinct.
- * A directly owned port keeps its original ID. Nothing is written to the model.
+ * Qualified endpoints are projected in the query catalog, not in this shaper.
+ * Their representative ID is the lowest imported endpoint Feature node_id for
+ * that owner/pin pair; their attributes and source reference come from the
+ * declared pin. Several connections therefore share a pin, while two usages of
+ * the same definition remain distinct. A directly owned pin keeps its original
+ * ID. Nothing is written to the model.
+ *
+ * That covers two kinds of endpoint, because the catalog resolves both through
+ * one rule. A connection end (`battery.dcPowerPort`) names a port. A flow end
+ * (`convertDcToThreePhase.dcPower`) names a *feature inside* its container — an
+ * action definition's parameter or a port definition's item — so the pin is that
+ * feature, and it reaches this shaper as a `Port` like any other. Which is why
+ * the direction lookup above matters more than it looks: a parameter's `in`/`out`
+ * is the only thing that makes a flow render with a direction at all.
  */
 export function shapeSysmlV2Attributes(row: RawRepresentativeRow): ShapedRepresentative {
   const name = asString(row.rawAttributes.declared_name) || asString(row.rawAttributes.name);
@@ -188,6 +213,7 @@ export function registerBuiltInMappings(registry: IMappingRegistry): void {
     targetMetamodel: COMMON_MODEL_METAMODEL,
     queryIdByMode: SYSML_V2_QUERY_IDS,
     edgeQueryId: SYSML_V2_EDGE_QUERY_ID,
+    conceptGroups: { ...SYSML_V2_CONCEPT_GROUPS },
     shapeAttributes: shapeSysmlV2Attributes,
   });
   registry.register({

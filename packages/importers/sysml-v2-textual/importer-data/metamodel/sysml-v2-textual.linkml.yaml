@@ -5,7 +5,7 @@ description: >-
   Type hierarchy follows the OMG SysML v2 and KerML specifications.
   Abstract classes (abstract: true) serve as hierarchy nodes only;
   concrete classes correspond to element types extracted from the Langium AST.
-version: 0.1.0
+version: 0.2.0
 
 classes:
   sysml_element:
@@ -30,6 +30,30 @@ classes:
         description: Slash-separated qualified-name path used as stable identity key
       is_abstract:
         range: boolean
+      is_composite:
+        range: boolean
+      is_ordered:
+        range: boolean
+      is_unique:
+        range: boolean
+      is_end:
+        range: boolean
+      is_individual:
+        range: boolean
+      is_variation:
+        range: boolean
+      is_reference:
+        range: boolean
+      is_derived:
+        range: boolean
+      is_readonly:
+        range: boolean
+      is_portion:
+        range: boolean
+      is_conjugated:
+        range: boolean
+      direction:
+        range: string
       source_file:
         range: string
         description: Absolute path to the .sysml file that defined this element
@@ -71,6 +95,22 @@ classes:
     abstract: true
     is_a: type_base
     description: Abstract base for all KerML Classifiers
+
+  # Anonymous endpoint expressions emitted by textual connectors. These match
+  # the JSON importer's feature-chain representation and remain hidden in the
+  # source tree while supplying contextual ports to CommonModel.
+
+  feature:
+    is_a: type_base
+    description: Generic KerML feature used for a qualified connector endpoint
+    rendering:
+      hidden: true
+
+  feature_chaining:
+    is_a: sysml_element
+    description: One segment of a qualified feature chain
+    rendering:
+      hidden: true
 
   # ── Definition layer ───────────────────────────────────────────────────────
 
@@ -190,6 +230,12 @@ classes:
       icon: DatabaseOutlined
       color: '#13c2c2'
 
+  reference_usage:
+    is_a: usage
+    description: Non-owning connector-end reference
+    rendering:
+      hidden: true
+
   item_usage:
     is_a: usage
     description: Usage of an item definition
@@ -232,6 +278,13 @@ classes:
   action_usage:
     is_a: usage
     description: Usage of an action definition
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#2f54eb'
+
+  perform_action_usage:
+    is_a: action_usage
+    description: Invocation of an action definition
     rendering:
       icon: ThunderboltOutlined
       color: '#2f54eb'
@@ -302,3 +355,23 @@ slots:
     domain: sysml_element
     range: sysml_element
     description: Definition specialization (subtype → supertype)
+  specializes:
+    domain: sysml_element
+    range: sysml_element
+    description: Generalization or reference-subsetting relationship
+  chains_feature:
+    domain: sysml_element
+    range: sysml_element
+    description: FeatureChaining navigation segment
+  references_source:
+    domain: sysml_element
+    range: sysml_element
+    description: Explicit source endpoint or source-side expression
+  references_target:
+    domain: sysml_element
+    range: sysml_element
+    description: Explicit target endpoint or target-side expression
+  connects:
+    domain: sysml_element
+    range: sysml_element
+    description: Connector end membership

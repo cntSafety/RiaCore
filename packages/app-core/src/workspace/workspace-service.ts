@@ -30,6 +30,7 @@ import { computeNamespaceHashFromFiles } from '../persistor/persistor.js';
 import { migrateLegacyConnections } from './connection-migration.js';
 import { createLayoutService } from '../namespaces/layout-service.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
+import { detectUnreplayableWal, walPathFor } from '../db/wal-recovery.js';
 import { runAllCleanups } from '../infra/cleanup-service.js';
 import { DEFAULT_CHECKS } from './default-checks.js';
 import { createBuiltInMetamodelRegistry } from '../profiles/builtin-metamodel-registry.js';
@@ -829,6 +830,28 @@ export function createWorkspaceService(
 
       logger?.info?.('Workspace lifecycle detection', { workingDir: config.workingDir, dbExists, riaDataValid });
 
+      // A write-ahead log with no database beside it is orphaned — whatever it
+      // described is gone. Cases A and B create a fresh database at this exact
+      // path, and leaving the old WAL there invites a replay against a database
+      // it has nothing to do with. Remove it before either case opens.
+      if (!dbExists) {
+        const orphanedWal = walPathFor(dbPath);
+        if (fs.existsSync(orphanedWal)) {
+          logger?.warn?.('Removing orphaned write-ahead log left without a database file', {
+            workingDir: config.workingDir,
+            walPath: orphanedWal,
+          });
+          try {
+            await fs.promises.rm(orphanedWal, { force: true });
+          } catch (err) {
+            logger?.warn?.('Failed to remove orphaned write-ahead log', {
+              walPath: orphanedWal,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+
       // ── Case A: no DB, no ria-data → CREATE ──────────────────────────────────
       if (!dbExists && !riaDataValid) {
         logger?.info?.('Lifecycle Case A: creating new workspace', { workingDir: config.workingDir });
@@ -971,6 +994,28 @@ export function createWorkspaceService(
       if (dbExists && !riaDataValid) {
         logger?.info?.('Lifecycle Case C: saving to ria-data', { workingDir: config.workingDir });
 
+        // Same unclean-shutdown hazard as Case D, but with no snapshot to rebuild
+        // from, so there is nothing to recover to and the WAL must not be thrown
+        // away — it may hold the only copy of the newest data. All the probe buys
+        // here is a survivable, actionable failure instead of a dead worker.
+        const unreplayableWal = await detectUnreplayableWal(dbPath, logger);
+        if (unreplayableWal) {
+          logger?.error?.('Case C: unreplayable write-ahead log and no ria-data snapshot to rebuild from', {
+            workingDir: config.workingDir,
+            dbPath,
+            walPath: walPathFor(dbPath),
+            probeExitCode: unreplayableWal.code,
+            probeSignal: unreplayableWal.signal,
+          });
+          return {
+            ok: false,
+            error:
+              `The previous session did not shut down cleanly and the write-ahead log at '${walPathFor(dbPath)}' cannot be replayed. ` +
+              `This workspace has no ria-data snapshot to rebuild from, so nothing has been deleted. ` +
+              `Deleting the write-ahead log file will let the database open again, discarding any changes made after the last checkpoint.`,
+          };
+        }
+
         const openResult = await openDb(dbPath, config.workingDir);
 
         // ── Staleness branch (Requirement 1.1, 1.4, 3.1, 3.2) ──────────────
@@ -1046,6 +1091,51 @@ export function createWorkspaceService(
 
       // ── Case D: both DB and ria-data → CONSISTENCY CHECK ────────────────────
       logger?.info?.('Lifecycle Case D: consistency check', { workingDir: config.workingDir });
+
+      // A write-ahead log left by an unclean shutdown is replayed by the open
+      // below. Replay usually succeeds, and when it fails it usually throws —
+      // both of which the staleness branch already handles. But it can also
+      // abort the process outright, which no `catch` here can intercept: the
+      // worker dies mid-open and the workspace becomes permanently unopenable
+      // even though the snapshot next to it is complete. Probe the replay
+      // out-of-process first so that outcome is survivable, then treat it like
+      // any other unusable DB and rebuild from ria-data.
+      const unreplayableWal = await detectUnreplayableWal(dbPath, logger);
+      if (unreplayableWal) {
+        const warning =
+          `The previous session did not shut down cleanly and its write-ahead log cannot be replayed. ` +
+          `The database was rebuilt from the ria-data snapshot; changes made after the last save may be missing.`;
+        logger?.warn?.('Case D: unreplayable write-ahead log — rebuilding from ria-data snapshot', {
+          workingDir: config.workingDir,
+          dbPath,
+          walPath: walPathFor(dbPath),
+          probeExitCode: unreplayableWal.code,
+          probeSignal: unreplayableWal.signal,
+        });
+        // performFreshLoad deletes the db file *and* the WAL before reopening, so
+        // the replay is never attempted again. Publish the loading state first so
+        // getStatus() is meaningful for the duration of the rebuild.
+        state = { config, dbPath, dbStatus: dbModule.getStatus(), isOpen: true, lifecycleAction: 'loading_from_ria_data' };
+        commitStatus();
+        await performFreshLoad(config, dbPath);
+        state.dbStatus = dbModule.getStatus();
+        if (state.lifecycleAction === 'opened_loaded_from_ria_data') {
+          state.lifecycleWarning = warning;
+          await ensureNamespaceWiring();
+          await ensureBuiltInMetamodelsRegistered();
+        }
+        commitStatus();
+        return {
+          ok: true,
+          data: {
+            workingDir: config.workingDir,
+            dbPath,
+            dbStatus: state.dbStatus,
+            lifecycleAction: state.lifecycleAction,
+            lifecycleWarning: state.lifecycleWarning,
+          },
+        };
+      }
 
       const openResult = await openDb(dbPath, config.workingDir);
 

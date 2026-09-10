@@ -42,7 +42,7 @@ import type { IMappingRegistry, MappingDescriptor } from './mapping-registry.js'
 import { DEFAULT_MAX_TRAVERSAL_DEPTH, createMappingRegistry } from './mapping-registry.js';
 import { registerBuiltInMappings } from './builtin-mappings.js';
 import { COMMON_MODEL_METAMODEL, isPermittedOwnership } from './common-model-rules.js';
-import { loadCatalog, resolveQuery, WRITE_STATEMENT_PATTERN, type ResolvedQuery } from './query-catalog.js';
+import { loadCatalog, resolveQuery, resolveQuerySeries, WRITE_STATEMENT_PATTERN, type ResolvedQuery } from './query-catalog.js';
 import { createOrReplaceNamespace } from '../importers/import-write-service.js';
 import { batchInsertNodes, createInstanceRelEdges, createCrossNsInstanceRelEdges } from '../persistor/persistor-helpers.js';
 
@@ -259,6 +259,19 @@ export function createViewService(
     | { error: string; kind: 'source_missing' | 'unavailable' | 'ambiguous' };
   const MAPPING_UNAVAILABLE = Symbol('mapping-unavailable');
 
+  /**
+   * What an evaluation resolved its definition to, plus any work already done
+   * that a later step would otherwise repeat.
+   */
+  type EvaluationTarget = {
+    view: ViewDefinition;
+    /**
+     * Source namespace -> its metamodel, present only for an ad-hoc definition
+     * (whose validation reads exactly these rows). Absent for a saved view.
+     */
+    namespaceMetamodels?: Map<string, string>;
+  };
+
   async function namespaceOrViewNameTaken(name: string): Promise<boolean> {
     const rows = await dbModule.runQuery(
       `OPTIONAL MATCH (v:RIA_UNIV_View) WHERE v.name = $name
@@ -331,6 +344,88 @@ export function createViewService(
       else existingMetamodels.add(String(row.name));
     }
     return { namespaceMetamodels, existingMetamodels };
+  }
+
+  /**
+   * Resolve a mapping's {@link MappingDescriptor.conceptGroups} into query
+   * parameters: each base concept becomes the set containing itself plus every
+   * transitive subtype of it, as declared by the metamodels of the view's own
+   * source namespaces.
+   *
+   * This is what lets a catalog query test `ci.concept IN $connectionConcepts`
+   * rather than spell out `'connection_usage', 'interface_usage',
+   * 'flow_connection_usage', ...`. The literal list is the bug: a metamodel that
+   * declares a new subtype — SysML v2's flow and allocation connections are
+   * exactly this case — is silently dropped from the projection, and nothing
+   * reports it, because a concept the query never names simply produces no rows.
+   *
+   * The closure is walked here rather than in Cypher on purpose. The edges are
+   * `RIA_META_CONCEPT_SUBTYPEOF` between `RIA_META_Concept` nodes, so a
+   * recursive pattern would express it, but every catalog query is a long chain
+   * of `UNION ALL` branches that cannot share a `WITH`: the resolution would be
+   * repeated per branch, joining the meta layer against every projected row.
+   * One flat read of the metamodel's subtype edges plus a walk over a handful of
+   * names costs a single query for the whole evaluation instead.
+   *
+   * Scoped to the source namespaces' metamodels because concept names are
+   * metamodel-local: two metamodels may both declare `connection_usage` without
+   * agreeing on what specialises it.
+   */
+  async function resolveConceptGroups(
+    conceptGroups: Record<string, string> | undefined,
+    sources: string[],
+    /**
+     * The source namespaces' metamodels, when the caller has already resolved
+     * them. `resolveEvaluationTarget` reads exactly these rows to validate an
+     * ad-hoc definition, so re-reading them here cost every evaluation a second
+     * round trip for an answer it was already holding.
+     */
+    knownNamespaceMetamodels?: Map<string, string>,
+  ): Promise<Record<string, string[]>> {
+    const groups = Object.entries(conceptGroups ?? {});
+    if (groups.length === 0 || sources.length === 0) return {};
+
+    const namespaceMetamodels = knownNamespaceMetamodels
+      ?? (await resolveNames(sources, [])).namespaceMetamodels;
+    const metamodels = [...new Set([...namespaceMetamodels.values()].filter((mm) => mm.length > 0))];
+    // A base concept always resolves to at least itself, so an unknown
+    // metamodel degrades to the literal behaviour instead of matching nothing.
+    if (metamodels.length === 0) {
+      return Object.fromEntries(groups.map(([parameter, base]) => [parameter, [base]]));
+    }
+
+    const rows = await dbModule.runQuery(
+      `MATCH (child:RIA_META_Concept)-[:RIA_META_CONCEPT_SUBTYPEOF]->(parent:RIA_META_Concept)
+       WHERE child.metamodel IN $metamodels AND parent.metamodel = child.metamodel
+       RETURN DISTINCT parent.name AS parent, child.name AS child`,
+      { metamodels },
+    );
+    const childrenByParent = new Map<string, string[]>();
+    for (const row of rows) {
+      const parent = String(row.parent ?? '');
+      const child = String(row.child ?? '');
+      if (!parent || !child) continue;
+      const existing = childrenByParent.get(parent);
+      if (existing) existing.push(child);
+      else childrenByParent.set(parent, [child]);
+    }
+
+    const resolved: Record<string, string[]> = {};
+    for (const [parameter, base] of groups) {
+      // Breadth-first over the subtype edges. `seen` also terminates a cyclic
+      // hierarchy, which is malformed rather than impossible.
+      const seen = new Set<string>([base]);
+      const queue = [base];
+      while (queue.length > 0) {
+        for (const child of childrenByParent.get(queue.shift()!) ?? []) {
+          if (seen.has(child)) continue;
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+      resolved[parameter] = [...seen];
+    }
+    return resolved;
   }
 
   /**
@@ -496,7 +591,7 @@ export function createViewService(
    */
   async function resolveEvaluationTarget(
     params: EvaluateViewParams,
-  ): Promise<ViewDefinition | string | typeof MAPPING_UNAVAILABLE> {
+  ): Promise<EvaluationTarget | string | typeof MAPPING_UNAVAILABLE> {
     if (params.definition !== undefined) {
       if (params.view !== undefined) {
         return `Evaluate accepts either a view name or an ad-hoc definition, not both`;
@@ -545,11 +640,16 @@ export function createViewService(
       if (parameterError) return parameterError;
 
       return {
-        // An ad-hoc definition is never persisted and never named. The empty
-        // name is inert here: nothing below reads it except diagnostics.
-        name: '',
-        description: '',
-        metamodel, mapping, parameters, sources, categorizedBy,
+        view: {
+          // An ad-hoc definition is never persisted and never named. The empty
+          // name is inert here: nothing below reads it except diagnostics.
+          name: '',
+          description: '',
+          metamodel, mapping, parameters, sources, categorizedBy,
+        },
+        // Handed on so concept-group resolution does not re-read the rows this
+        // validation just read.
+        namespaceMetamodels,
       };
     }
 
@@ -557,7 +657,9 @@ export function createViewService(
     if (!name) return 'Evaluate requires either a view name or an ad-hoc definition';
     const view = await readView(name);
     if (!view) return `View '${name}' not found`;
-    return view;
+    // A saved view's sources were not resolved here, so concept-group resolution
+    // reads them for itself.
+    return { view };
   }
 
   async function validateCreateOrReplace(
@@ -840,7 +942,7 @@ export function createViewService(
           };
         }
         if (typeof target === 'string') return err(target);
-        const view = target;
+        const view = target.view;
 
         const mapping = mappingRegistry.resolve(view.mapping);
         if (!mapping) return err(`Mapping '${view.mapping}' is not resolvable`);
@@ -896,15 +998,22 @@ export function createViewService(
 
         const resolvedQueries: ResolvedQuery[] = [];
         for (const queryId of [...new Set(queryIds)]) {
-          const resolved = resolveQuery(catalog, queryId);
-          if (!resolved) return err(`Catalog entry '${queryId}' (resolved via mapping '${view.mapping}') was not found`);
-          // Defense in depth: never execute a write-shaped statement, even if it
-          // somehow slipped past catalog validation — evaluation acquires no write
-          // lock (docs/coreSpecs/RiaViews.md).
-          if (WRITE_STATEMENT_PATTERN.test(resolved.entry.cypher)) {
-            return err(`Catalog entry '${queryId}' is write-shaped — refusing to evaluate (evaluation must be read-only)`);
+          // One id may name a *series* of entries — see `resolveQuerySeries`.
+          // A projection whose branches would otherwise put several copies of
+          // one expensive resolution in a single statement is split across
+          // continuations, because that copy count is what drives a statement's
+          // buffer-pool peak. Every member contributes rows to this result.
+          const series = resolveQuerySeries(catalog, queryId);
+          if (series.length === 0) return err(`Catalog entry '${queryId}' (resolved via mapping '${view.mapping}') was not found`);
+          for (const resolved of series) {
+            // Defense in depth: never execute a write-shaped statement, even if it
+            // somehow slipped past catalog validation — evaluation acquires no write
+            // lock (docs/coreSpecs/RiaViews.md).
+            if (WRITE_STATEMENT_PATTERN.test(resolved.entry.cypher)) {
+              return err(`Catalog entry '${resolved.entry.id}' is write-shaped — refusing to evaluate (evaluation must be read-only)`);
+            }
+            resolvedQueries.push(resolved);
           }
-          resolvedQueries.push(resolved);
         }
 
         // Traversal depth is clamped to what the mapping's query can actually
@@ -923,6 +1032,11 @@ export function createViewService(
         // never "unbounded by default" (RiaViews.md — traversal bounds
         // requirement).
         const maxResults = params.maxResults ?? DEFAULT_MAX_RESULTS;
+        // Resolved once per evaluation and bound to every query this evaluation
+        // runs, including the edge query below — a concept group that applied to
+        // only some of them would report an edge whose endpoint was never
+        // projected.
+        const conceptGroups = await resolveConceptGroups(mapping.conceptGroups, view.sources, target.namespaceMetamodels);
         const queryParams: Record<string, unknown> = {
           sourceNamespaces: view.sources,
           elementNodeId: params.elementNodeId ?? null,
@@ -932,6 +1046,7 @@ export function createViewService(
           direction: params.direction ?? null,
           depth,
           maxResults,
+          ...conceptGroups,
         };
         // Each view parameter is bound individually as `p_<key>`. Create/update
         // validation rejects unbindable keys and values, but a definition
@@ -1023,8 +1138,13 @@ export function createViewService(
           for (const resolvedQuery of resolvedQueries) {
             // The entry's own `$relationship`/`$direction` guard must see the
             // direction *this* entry was resolved for, not the caller's 'both'.
-            const entryDirection = resolvedQuery.entry.id.endsWith('.incoming') ? 'incoming'
-              : resolvedQuery.entry.id.endsWith('.outgoing') ? 'outgoing'
+            // A numbered continuation (`....outgoing.2`) carries its parent's
+            // direction, so the suffix is stripped before the test — otherwise a
+            // split traversal entry would silently fall back to the caller's
+            // direction and its guard would gate the wrong branch.
+            const entryId = resolvedQuery.entry.id.replace(/\.\d+$/, '');
+            const entryDirection = entryId.endsWith('.incoming') ? 'incoming'
+              : entryId.endsWith('.outgoing') ? 'outgoing'
                 : (params.direction ?? 'outgoing');
 
             // An entry carrying the explicit guard filters correctly however
@@ -1072,7 +1192,12 @@ export function createViewService(
             }
           }
         } else {
-          collectRows(await dbModule.runQuery(resolvedQueries[0].entry.cypher, queryParams));
+          // Every member of the resolved series, not just the first: a split
+          // projection returns the same rows as the unsplit one only if all of
+          // its continuations run.
+          for (const resolvedQuery of resolvedQueries) {
+            collectRows(await dbModule.runQuery(resolvedQuery.entry.cypher, queryParams));
+          }
         }
 
         // The representatives the caller already holds. A traversal returns the
@@ -1095,25 +1220,35 @@ export function createViewService(
         // `element`, `elements`, and `traversal` resolve nodes only; their edges
         // come from the mapping's edge query (spec-view.md Phase 3.1.1). `whole`
         // returns its edges inline and needs no completion.
-        if (params.mode !== 'whole') {
+        //
+        // A caller that reads only `representatives` opts out with
+        // `includeRelationships: false` — edge completion is the dominant cost of
+        // these modes, and computing an edge set the caller discards is the
+        // largest single piece of waste on the model view's load path.
+        if (params.mode !== 'whole' && params.includeRelationships !== false) {
           if (!mapping.edgeQueryId) {
             diagnostics.push(`Mapping '${view.mapping}' declares no edge query, so '${params.mode}' evaluation returns no relationships`);
           } else {
-            const resolvedEdges = resolveQuery(catalog, mapping.edgeQueryId);
-            if (!resolvedEdges) {
+            const edgeSeries = resolveQuerySeries(catalog, mapping.edgeQueryId);
+            const writeShaped = edgeSeries.find((resolved) => WRITE_STATEMENT_PATTERN.test(resolved.entry.cypher));
+            if (edgeSeries.length === 0) {
               diagnostics.push(`Edge catalog entry '${mapping.edgeQueryId}' (resolved via mapping '${view.mapping}') was not found — '${params.mode}' evaluation returns no relationships`);
-            } else if (WRITE_STATEMENT_PATTERN.test(resolvedEdges.entry.cypher)) {
-              diagnostics.push(`Edge catalog entry '${mapping.edgeQueryId}' is write-shaped — refusing to run it (evaluation must be read-only)`);
+            } else if (writeShaped) {
+              diagnostics.push(`Edge catalog entry '${writeShaped.entry.id}' is write-shaped — refusing to run it (evaluation must be read-only)`);
             } else {
               const nodeIds = [...new Set([
                 ...representatives.map((rep) => Number(rep.id)),
                 ...startIds.map(Number),
               ])].filter((nodeId) => Number.isFinite(nodeId));
               if (nodeIds.length > 0) {
-                collectRows(await dbModule.runQuery(resolvedEdges.entry.cypher, {
+                const edgeParams = {
                   nodeIds,
                   sourceNamespaces: view.sources,
-                }));
+                  ...conceptGroups,
+                };
+                for (const resolvedEdges of edgeSeries) {
+                  collectRows(await dbModule.runQuery(resolvedEdges.entry.cypher, edgeParams));
+                }
               }
             }
           }

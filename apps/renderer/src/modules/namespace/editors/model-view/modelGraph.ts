@@ -44,6 +44,7 @@ import {
   CONNECTION_CONCEPT,
   PORT_CONCEPTS,
   isDelegationLink,
+  isFlowLink,
   portDirection,
   resolveMaxAsil,
   type DiagramMalfunctionRef,
@@ -86,6 +87,18 @@ export interface ModelTile {
   qualifiedName: string;
   /** The tile the view is centred on — rendered with emphasis. */
   isFocus: boolean;
+  /**
+   * The tile that owns this one, when both are on the canvas.
+   *
+   * Containment is drawn by *nesting* a tile inside its owner rather than by a
+   * line between them, because a line cannot be told apart from the connections
+   * and flows that share the canvas: a `perform action` inside a part read as a
+   * peer component exchanging data with it. Position says "inside"; only edges
+   * say "talks to".
+   *
+   * Set for one level, from the owner nearest the focus — see `assignParents`.
+   */
+  parentId?: string;
   ports: ModelPort[];
   malfunctions: DiagramMalfunctionRef[];
   maxAsil: string | null;
@@ -95,8 +108,16 @@ export interface ModelTile {
 /** One edge on the canvas. */
 export interface ModelEdge {
   id: string;
-  /** `connection` anchors at port rows; `ownership` anchors at the tiles. */
-  kind: 'connection' | 'ownership';
+  /**
+   * `connection` and `flow` both anchor at port rows; `ownership` anchors at the
+   * tiles. `flow` is separated from `connection` because its direction is
+   * declared rather than incidental — see `isFlowLink`.
+   *
+   * An `ownership` edge is only emitted where nesting could *not* express the
+   * containment — see {@link ModelTile.parentId}. Drawing both would say the same
+   * thing twice, in the one visual channel that is already carrying flows.
+   */
+  kind: 'connection' | 'flow' | 'ownership';
   source: string;
   target: string;
   sourceHandle: string;
@@ -174,6 +195,44 @@ function toMalfunctionRefs(malfunctions: MalfunctionInfo[]): DiagramMalfunctionR
   return malfunctions.map((m) => ({ nodeId: m.nodeId, name: m.name, description: m.description }));
 }
 
+/**
+ * The element that owns the focus, which this view deliberately does not draw.
+ *
+ * The focus is what the user opened the view to look at, and `assignParents`
+ * refuses to nest it so that it stays the outermost frame. That leaves its owner
+ * with nowhere sensible to go: it cannot contain the focus, so it lands beside it
+ * as another root tile — and because the focus's *siblings* are owned by it and
+ * do nest, it arrives as a full frame of equal standing packed with elements the
+ * user did not ask about. Reported twice on this model: opening `CC_Task1s` and
+ * then `CC_Task100ms` both drew `ClstrCtrl` as a partner subsystem that the focus
+ * appeared to communicate with.
+ *
+ * Nothing is lost by dropping it. Its *ports* are what actually reach the focus —
+ * each one delegating a signal in from the enclosing system — and those become
+ * standalone tiles instead of rows, so every connection keeps both ends and still
+ * says where the signal comes from. What disappears is the box that implied a peer
+ * relationship. The siblings, no longer having a parent on the canvas, are drawn
+ * as the peers they are.
+ *
+ * Only the *first* owner is hidden, matching the one `assignParents` would have
+ * used. A second element claiming to own the focus is a real ambiguity in the
+ * source model and stays visible rather than being quietly swallowed.
+ */
+function ownerOfFocus(
+  relationships: RepresentativeRelationship[],
+  focusId: string,
+  byId: Map<string, Representative>,
+): string | undefined {
+  for (const rel of relationships) {
+    if (rel.relationship !== 'Ownership') continue;
+    if (rel.targetRepresentativeId !== focusId) continue;
+    const owner = rel.sourceRepresentativeId;
+    if (owner === focusId || !byId.has(owner)) continue;
+    return owner;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // buildModelGraph
 // ---------------------------------------------------------------------------
@@ -236,9 +295,17 @@ export function buildModelGraph(
     };
   };
 
+  // ── The focus's own owner is not drawn ────────────────────────────────────
+  const hiddenOwnerId = ownerOfFocus(result.relationships, focusId, byId);
+
   for (const rep of result.representatives) {
     if (rep.concept === CONNECTION_CONCEPT) continue;          // an edge, not a tile
-    if (PORT_CONCEPTS.has(rep.concept) && ownerOfPort.has(rep.id)) continue; // a row
+    if (rep.id === hiddenOwnerId) continue;                    // see `ownerOfFocus`
+    // A port is a row on its exposing element rather than a tile — unless that
+    // element is the one being hidden, in which case the port becomes a tile of
+    // its own further down, so the signal it carries into the focus survives.
+    const portOwner = PORT_CONCEPTS.has(rep.concept) ? ownerOfPort.get(rep.id) : undefined;
+    if (portOwner !== undefined && portOwner !== hiddenOwnerId) continue;
     tiles.set(rep.id, makeTile(rep));
   }
 
@@ -294,24 +361,41 @@ export function buildModelGraph(
     sourcePort.connected = true;
     targetPort.connected = true;
 
+    const connectorKind = attr(rep, 'kind');
     edges.push({
+      // The id stays `conn-` prefixed for every connector kind: it keys the
+      // ELK layout sections, and a flow is still a connection representative.
       id: `conn-${rep.id}`,
-      kind: 'connection',
+      kind: isFlowLink(connectorKind) ? 'flow' : 'connection',
       source: sourceTile,
       target: targetTile,
       sourceHandle: portSourceHandle(sourcePortId),
       targetHandle: portTargetHandle(targetPortId),
-      dashed: isDelegationLink(attr(rep, 'kind')),
+      dashed: isDelegationLink(connectorKind),
       warn: sourcePort.warn || targetPort.warn,
     });
   }
 
+  // ── Containment ───────────────────────────────────────────────────────────
+  // Nesting first: it decides which ownership relationships still need an edge.
+  const nested = assignParents(tiles, result.relationships, focusId);
+
   // ── Ownership edges ───────────────────────────────────────────────────────
   // Only between two tiles: `Ownership` never targets a Port, and a Connection
-  // is not an Element, so nothing here can point at a row.
+  // is not an Element, so nothing here can point at a row. And only where the
+  // owned tile is not nested inside the owner already.
   for (const rel of result.relationships) {
     if (rel.relationship !== 'Ownership') continue;
     if (!tiles.has(rel.sourceRepresentativeId) || !tiles.has(rel.targetRepresentativeId)) continue;
+    if (nested.get(rel.targetRepresentativeId) === rel.sourceRepresentativeId) continue;
+    // Never draw anything reaching *into* the focus to say it is owned.
+    //
+    // `ownerOfFocus` already removes the owner this would normally come from, so
+    // what is left here is the runner-up: a second element that also claims to
+    // own the focus. That tile stays visible, because the ambiguity is real — but
+    // the line would still land in the channel that means "these two exchange
+    // data", which is the misreading both rules exist to prevent.
+    if (rel.targetRepresentativeId === focusId) continue;
     edges.push({
       id: `own-${rel.sourceRepresentativeId}-${rel.targetRepresentativeId}`,
       kind: 'ownership',
@@ -337,7 +421,86 @@ export function buildModelGraph(
     tile.warn = tile.warn || tile.ports.some((p) => p.warn);
   }
 
+  // Children fold into their frame *after* every tile has its own total, so a
+  // frame reports the worst thing anywhere inside it. A reader who has collapsed
+  // the internals must still see that something in there is rated D.
+  //
+  // Deepest-first, so a chain of frames accumulates rather than each one seeing
+  // only its direct children's un-aggregated figures.
+  for (const tile of [...tiles.values()].sort((a, b) => depthOf(b, tiles) - depthOf(a, tiles))) {
+    const parent = tile.parentId === undefined ? undefined : tiles.get(tile.parentId);
+    if (!parent) continue;
+    if (tile.maxAsil !== null
+      && (parent.maxAsil === null || asilLevel(tile.maxAsil) > asilLevel(parent.maxAsil))) {
+      parent.maxAsil = tile.maxAsil;
+    }
+    parent.warn = parent.warn || tile.warn;
+  }
+
   return { tiles: [...tiles.values()], edges };
+}
+
+/** How many frames a tile sits inside. Bounded by the parent chain being acyclic. */
+function depthOf(tile: ModelTile, tiles: Map<string, ModelTile>): number {
+  let depth = 0;
+  let current = tile.parentId;
+  const seen = new Set<string>([tile.id]);
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    depth += 1;
+    current = tiles.get(current)?.parentId;
+  }
+  return depth;
+}
+
+/**
+ * Nest each tile inside the tile that owns it, and report what was nested.
+ *
+ * One level only, which is the depth that answers the question the view is asked:
+ * *what is this element made of?* Nesting the whole ownership chain would redraw
+ * the containment tree, and a canvas is a poor tree.
+ *
+ * "One level" is defined structurally rather than by walking down from the focus,
+ * so the result cannot depend on the order relationships happen to arrive in: a
+ * tile becomes a **frame** when nothing on the canvas owns it, and a tile
+ * **nests** when its owner is such a frame. An owner that is itself nested never
+ * becomes a frame, which caps the depth at one by construction.
+ *
+ * Two further rules keep the result well-formed:
+ *
+ * - a tile takes at most one parent, so the result is a forest and never a
+ *   diamond, however many `Ownership` rows name it;
+ * - the focus is never given a parent. It is the thing being looked at, so it
+ *   stays the outermost frame even when its own owner is on the canvas —
+ *   otherwise selecting a part would nest it inside its enclosing composition and
+ *   shrink it to a box in the corner.
+ */
+function assignParents(
+  tiles: Map<string, ModelTile>,
+  relationships: RepresentativeRelationship[],
+  focusId: string,
+): Map<string, string> {
+  // First owner wins, so a tile named by several Ownership rows still gets one
+  // parent. The focus is excluded up front rather than unpicked afterwards.
+  const ownerOf = new Map<string, string>();
+  for (const rel of relationships) {
+    if (rel.relationship !== 'Ownership') continue;
+    const owner = rel.sourceRepresentativeId;
+    const owned = rel.targetRepresentativeId;
+    if (owned === focusId || owned === owner) continue;
+    if (!tiles.has(owner) || !tiles.has(owned)) continue;
+    if (ownerOf.has(owned)) continue;
+    ownerOf.set(owned, owner);
+  }
+
+  const nested = new Map<string, string>();
+  for (const [owned, owner] of ownerOf) {
+    // The owner must be a frame — something nothing else on the canvas owns.
+    if (ownerOf.has(owner)) continue;
+    nested.set(owned, owner);
+    tiles.get(owned)!.parentId = owner;
+  }
+  return nested;
 }
 
 /** Local copy of the ASIL ordering used for the per-tile aggregation above. */

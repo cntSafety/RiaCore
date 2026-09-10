@@ -99,6 +99,25 @@ export function isDelegationLink(connectorType: string): boolean {
 }
 
 /**
+ * Whether a link is a flow — an item passing between two points — rather than a
+ * static connection between them.
+ *
+ * Worth distinguishing because a flow's direction is *declared*: SysML's
+ * `flow ... from X to Y` fixes which end is the source, whereas a plain
+ * connector's ends are ordered by the projection and carry no such meaning. An
+ * arrow on a flow says something true; on a connection it would be decoration.
+ *
+ * Matched as a substring of `kind` for the same reason as
+ * {@link isDelegationLink}: the source discriminator is a metamodel concept name
+ * — `flow_usage` in the JSON importer, `flow_connection_usage` in the textual one,
+ * and whatever a succession flow is called next — so an unrecognized kind renders
+ * as an ordinary connection instead of failing.
+ */
+export function isFlowLink(connectorType: string): boolean {
+  return /flow/i.test(connectorType);
+}
+
+/**
  * Whether a representative can anchor the model view.
  *
  * Anything the presentation catalog describes, except a `Connection` — which is

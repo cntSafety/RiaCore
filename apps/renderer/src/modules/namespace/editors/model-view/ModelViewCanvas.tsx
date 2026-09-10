@@ -53,6 +53,23 @@
  * only sensible rule once expansion exists — an expansion adds tiles, and
  * re-flowing the whole canvas underneath the user each time would make the
  * arrangement they had just built unusable.
+ *
+ * ## Containment
+ *
+ * A tile with a `parentId` is a React Flow child node: positioned relative to
+ * the frame that contains it, dragged only within it (`extent: 'parent'`), and
+ * carried along when the frame moves. Containment is thereby a property of the
+ * layout rather than a line on it, which is the point — a line between two tiles
+ * on this canvas already means "these exchange data".
+ *
+ * Two consequences run through the code below. Positions are **frame-relative**
+ * everywhere they are stored (`auto`, `pinned`, and React Flow's own), because
+ * that is the coordinate React Flow renders from; routing resolves them to
+ * canvas space through `resolveAbsolutePositions`, because a route may run
+ * between two different frames. And a frame's *size* is layout output rather
+ * than a constant — ELK grew it around its children — so it is carried in the
+ * `sizes` ref and applied as a node style, while every other tile is left to
+ * measure itself.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -78,17 +95,28 @@ import { useModelView, type ModelExpansion } from '../../../../hooks/useModelVie
 import { ModelTileNode, TILE_WIDTH, tileHeight, type ModelTileNodeData } from './ModelTileNode';
 import {
   EDGE_ENDPOINT_STUB,
+  anchorSide,
+  childrenByParent,
   computeModelLayout,
+  isDelegation,
   portIdFromHandle,
-  portOffset,
+  portRowOffsets,
   resolvePortOrder,
   structureSignature,
+  type TileSide,
 } from './modelElkInput';
-import { RoutedModelEdge, type RoutedModelEdgeData } from './RoutedModelEdge';
+import { RoutedModelEdge, type EdgeEmphasis, type RoutedModelEdgeData } from './RoutedModelEdge';
 import type { ModelGraph, ModelTile } from './modelGraph';
 
 const NODE_TYPES = { modelTile: ModelTileNode };
 const EDGE_TYPES = { routed: RoutedModelEdge };
+
+/**
+ * Stroke for a flow edge. Taken from the colour the SysML v2 metamodel itself
+ * assigns to flow connections (`rendering.color` in `sysml-v2.linkml.yaml`), so
+ * a flow reads the same here as its icon does in the tree.
+ */
+const FLOW_STROKE = '#08979c';
 
 type Position = { x: number; y: number };
 
@@ -104,23 +132,62 @@ const REROUTE_DEBOUNCE_MS = 24;
  * The live coordinate of an edge endpoint, in flow space, derived purely from
  * the tile's current position and the port's rendered row — never from ELK.
  *
- * Connection edges anchor at a port row: the source end on the tile's right
- * edge (`x = pos.x + TILE_WIDTH`) and the target end on its left (`x = pos.x`),
- * both at the vertical centre of the port's resolved row (`portOffset`).
- * Ownership edges carry no port (their handles are tile-level), so they anchor
- * at the same left/right edge but at the tile's vertical centre.
+ * Connection edges anchor at a port row, on the border `side` names, `offsetY`
+ * down from the tile's top. Ownership edges carry no port (their handles are
+ * tile-level), so they pass no offset and anchor at the tile's vertical centre.
+ *
+ * Both the side and the offset are passed in rather than derived here, because
+ * both depend on things only the caller knows: a delegation does not follow the
+ * source-right/target-left rule (`anchorSide`), and a frame centres its port
+ * columns on its own measured height (`portRowOffsets`). One place decides each.
+ *
+ * `pos` must be a **canvas** position, and `size` the box the tile actually
+ * occupies. Neither is `TILE_WIDTH` by `tileHeight` for a frame: ELK grew it
+ * around its children, so its right border and its centre are both somewhere
+ * else. Defaulting `size` keeps every ordinary tile a one-argument call.
  */
 export function portCoordinate(
   pos: Position,
   tile: ModelTile,
-  portId: string | undefined,
-  role: 'source' | 'target',
+  offsetY: number | undefined,
+  side: TileSide,
+  size?: { width: number; height: number },
 ): ElkPoint {
-  const x = role === 'source' ? pos.x + TILE_WIDTH : pos.x;
-  if (portId === undefined) return { x, y: pos.y + tileHeight(tile) / 2 };
-  const rowIndex = tile.ports.findIndex((port) => port.id === portId);
-  const offset = rowIndex >= 0 ? portOffset(rowIndex) : tileHeight(tile) / 2;
-  return { x, y: pos.y + offset };
+  const width = size?.width ?? TILE_WIDTH;
+  const height = size?.height ?? tileHeight(tile);
+  const x = side === 'east' ? pos.x + width : pos.x;
+  return { x, y: pos.y + (offsetY ?? height / 2) };
+}
+
+/**
+ * Resolve each tile's canvas position from the positions React Flow holds.
+ *
+ * React Flow stores a nested node's position relative to the frame containing
+ * it, which is the right thing for rendering and the wrong thing for routing: a
+ * route is drawn in canvas space and may run between two different frames. The
+ * containment is one level deep, but the walk is general and guards against a
+ * cycle rather than trusting that.
+ */
+export function resolveAbsolutePositions(
+  graph: ModelGraph,
+  positions: Map<string, Position>,
+): Map<string, Position> {
+  const parentOf = new Map(graph.tiles.map((tile) => [tile.id, tile.parentId]));
+  const resolved = new Map<string, Position>();
+  for (const [id, position] of positions) {
+    let x = position.x;
+    let y = position.y;
+    const seen = new Set<string>([id]);
+    for (let parent = parentOf.get(id); parent !== undefined && !seen.has(parent); parent = parentOf.get(parent)) {
+      seen.add(parent);
+      const offset = positions.get(parent);
+      if (!offset) break;
+      x += offset.x;
+      y += offset.y;
+    }
+    resolved.set(id, { x, y });
+  }
+  return resolved;
 }
 
 /**
@@ -296,33 +363,125 @@ export function orthogonalSection(srcLive: ElkPoint, tgtLive: ElkPoint): EdgeSec
   ]);
 }
 
-/** Pin ELK routes to the exact rows React Flow renders for the final tile order. */
+/**
+ * How many frames each tile sits inside. Used only to order the node array, so
+ * a frame is always handed to React Flow before anything nested in it.
+ */
+export function nestingDepths(graph: ModelGraph): Map<string, number> {
+  const parentOf = new Map(graph.tiles.map((tile) => [tile.id, tile.parentId]));
+  const depths = new Map<string, number>();
+  for (const tile of graph.tiles) {
+    let depth = 0;
+    const seen = new Set<string>([tile.id]);
+    for (let parent = tile.parentId; parent !== undefined && !seen.has(parent); parent = parentOf.get(parent)) {
+      seen.add(parent);
+      depth += 1;
+    }
+    depths.set(tile.id, depth);
+  }
+  return depths;
+}
+
+/**
+ * The measured box of every tile that is a frame, and of no other tile.
+ *
+ * Only a frame is sized from the outside — its size is what ELK made it, not a
+ * constant — so handing React Flow a style for an ordinary tile would pin it to
+ * a height the DOM is entitled to disagree with.
+ */
+export function frameSizes(
+  graph: ModelGraph,
+  sizes: Map<string, { width: number; height: number }>,
+): Record<string, { width: number; height: number }> {
+  const measured: Record<string, { width: number; height: number }> = {};
+  for (const frameId of childrenByParent(graph.tiles).keys()) {
+    const size = sizes.get(frameId);
+    if (size) measured[frameId] = size;
+  }
+  return measured;
+}
+
+/**
+ * Pin ELK routes to the exact rows React Flow renders for the final tile order.
+ *
+ * `positions` are as React Flow holds them — relative to a tile's frame where it
+ * has one — and are resolved to canvas space here, so callers can pass node
+ * positions straight in. `sizes` supplies the boxes ELK measured, which only
+ * matters for frames; a tile missing from it falls back to the fixed tile box.
+ */
 export function routeSectionsAtPositions(
   graph: ModelGraph,
   positions: Map<string, Position>,
+  sizes: Map<string, { width: number; height: number }>,
   sections: Record<string, EdgeSection>,
+  portOffsets?: Record<string, Record<string, number>>,
 ): Record<string, EdgeSection> {
   const tileById = new Map(graph.tiles.map((tile) => [tile.id, tile]));
+  const canvas = resolveAbsolutePositions(graph, positions);
+  // A frame's port rows are ELK's to place and an ordinary tile's are the row
+  // formula's, so the offsets differ by tile. Computed once per tile rather than
+  // per endpoint.
+  const frames = childrenByParent(graph.tiles);
+  const offsetCache = new Map<string, Map<string, number>>();
+  const offsetsFor = (tile: ModelTile) => {
+    const cached = offsetCache.get(tile.id);
+    if (cached) return cached;
+    const isFrame = frames.has(tile.id);
+    const offsets = portRowOffsets(
+      tile,
+      isFrame ? sizes.get(tile.id)?.height : undefined,
+      isFrame ? portOffsets?.[tile.id] : undefined,
+    );
+    offsetCache.set(tile.id, offsets);
+    return offsets;
+  };
   const routed: Record<string, EdgeSection> = {};
   for (const edge of graph.edges) {
     const sourceTile = tileById.get(edge.source);
     const targetTile = tileById.get(edge.target);
-    const sourcePosition = positions.get(edge.source);
-    const targetPosition = positions.get(edge.target);
+    const sourcePosition = canvas.get(edge.source);
+    const targetPosition = canvas.get(edge.target);
     if (!sourceTile || !targetTile || !sourcePosition || !targetPosition) continue;
+    const sourcePortId = portIdFromHandle(edge.sourceHandle);
+    const targetPortId = portIdFromHandle(edge.targetHandle);
+    // A delegation stays inside its frame, so both of its ends anchor on the
+    // border their port faces instead of leaving right and arriving left.
+    const delegation = isDelegation(edge, tileById);
     const source = portCoordinate(
       sourcePosition,
       sourceTile,
-      portIdFromHandle(edge.sourceHandle),
-      'source',
+      sourcePortId === undefined ? undefined : offsetsFor(sourceTile).get(sourcePortId),
+      anchorSide('source', sourceTile.ports.find((p) => p.id === sourcePortId)?.dir, delegation),
+      sizes.get(edge.source),
     );
     const target = portCoordinate(
       targetPosition,
       targetTile,
-      portIdFromHandle(edge.targetHandle),
-      'target',
+      targetPortId === undefined ? undefined : offsetsFor(targetTile).get(targetPortId),
+      anchorSide('target', targetTile.ports.find((p) => p.id === targetPortId)?.dir, delegation),
+      sizes.get(edge.target),
     );
-    const section = sections[edge.id];
+    // A frame's own port-to-port connection is routed here rather than by ELK.
+    //
+    // ELK treats it as a self-loop, and a self-loop is placed *outside* the node:
+    // its defaults are `selfLoopDistribution: NORTH` and `selfLoopOrdering:
+    // STACKED`, so such a connection is stacked over the top of the frame and runs
+    // right around it. There is no option to route it through the interior, because
+    // to ELK a node is an opaque rectangle even when ELK laid out its contents —
+    // and hierarchical self-loop port placement is a known weak spot besides
+    // (eclipse-elk/elk#552).
+    //
+    // But a frame's interior is exactly where such a connection belongs. It is a
+    // pass-through — a signal entering the container on one side and leaving on the
+    // other — and the frame keeps a wide empty band inside each port border
+    // (`FRAME_PORT_BAND`) with nothing in it. Dropping the baseline hands the edge
+    // to `orthogonalSection`, which runs it from the west anchor to the east one
+    // with a single jog, collapsing to a straight line when the two ports are level.
+    //
+    // Only for a frame. On a leaf tile the interior is full of the tile's own port
+    // rows and ELK's route over the top is the readable one, so its baseline stands.
+    const selfOnFrame = edge.source === edge.target && frames.has(edge.source);
+    const section = selfOnFrame ? undefined : sections[edge.id];
     routed[edge.id] = section
       ? offsetSection(section, source, target)
       : orthogonalSection(source, target);
@@ -394,6 +553,12 @@ function ModelViewCanvasInner({
   /** Where ELK put a tile. */
   const auto = useRef<Record<string, Position>>({});
   /**
+   * How big ELK made each frame. Held for the frames only — see `frameSizes` —
+   * and in a ref because it is layout output the render reads, not state anything
+   * re-renders on: the layout pass that writes it also sets the nodes.
+   */
+  const sizes = useRef<Record<string, { width: number; height: number }>>({});
+  /**
    * The primary ELK auto-pass edge sections, cached per edge id as the baseline
    * the routing-only re-route pass translates. Set whenever ELK settles a new
    * layout; read (never re-run) on drag to rebuild routes client-side.
@@ -406,8 +571,37 @@ function ModelViewCanvasInner({
    * until then, so a tile renders its fallback order on first paint.
    */
   const [elkPortOrder, setElkPortOrder] = useState<Record<string, string[]>>({});
+
+  /**
+   * Where ELK put each frame's own ports, keyed by tile id then port id.
+   *
+   * A frame's pins are drawn here rather than at the centred stack
+   * `portRowOffsets` computes, because ELK places them itself and ignores the
+   * offsets it was handed for them — see `ElkLayoutResult.portOffsets`. Both the
+   * DOM and the route pinning read this, so they cannot disagree.
+   *
+   * State, not a ref: the tile renders from it, so it has to trigger a re-render.
+   * A ref alongside it is what `runReroute` reads, because that runs outside the
+   * render and needs the settled value on every drag tick.
+   */
+  const [elkPortOffsets, setElkPortOffsets] = useState<Record<string, Record<string, number>>>({});
+  const portOffsetsRef = useRef<Record<string, Record<string, number>>>({});
+  const applyPortOffsets = useCallback((next: Record<string, Record<string, number>>) => {
+    portOffsetsRef.current = next;
+    setElkPortOffsets(next);
+  }, []);
   /** ELK-computed edge routes, keyed by edge id, written onto each edge's `data.section`. */
   const [edgeSections, setEdgeSections] = useState<Record<string, EdgeSection>>({});
+
+  /**
+   * The route the user has clicked, to be traced from end to end.
+   *
+   * Held here rather than left to React Flow's own selection because the canvas
+   * deliberately runs with `elementsSelectable={false}` — a selection outline on a
+   * tile competes with the focus emphasis — and because the emphasis has to reach
+   * every *other* edge to mute it, which selection state does not express.
+   */
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   /**
    * The graph with each tile's ports resolved into ELK's computed render order
@@ -463,24 +657,44 @@ function ModelViewCanvasInner({
     }
     setNodes((current) => {
       const positions = new Map(current.map((node) => [node.id, node.position]));
-      return resolvedGraph.tiles.map((tile) => ({
-        id: tile.id,
-        type: 'modelTile',
-        position: positions.get(tile.id) ?? pinned.current[tile.id] ?? auto.current[tile.id] ?? { x: 0, y: 0 },
-        data: {
-          tile,
-          presentation,
-          safetyNamespace,
-          onExpand: handleExpand,
-          onNavigateToNode,
-          onNavigateToReference,
-          onShowDetails,
-        } satisfies ModelTileNodeData,
-        // Dragging is the point; selection is not, and a selected outline on
-        // top of the focus emphasis reads as a second kind of highlight.
-        draggable: true,
-        selectable: false,
-      }));
+      const nestedIn = childrenByParent(resolvedGraph.tiles);
+      const built = resolvedGraph.tiles.map((tile) => {
+        const isFrame = nestedIn.has(tile.id);
+        const size = isFrame ? sizes.current[tile.id] : undefined;
+        return {
+          id: tile.id,
+          type: 'modelTile',
+          position: positions.get(tile.id) ?? pinned.current[tile.id] ?? auto.current[tile.id] ?? { x: 0, y: 0 },
+          // Containment is React Flow's own: a nested tile is positioned relative
+          // to its frame and moves with it, which is the behaviour that makes
+          // "inside" mean inside rather than "drawn on top of, for now".
+          ...(tile.parentId !== undefined ? { parentId: tile.parentId, extent: 'parent' as const } : {}),
+          // Only a frame is sized from the outside. An ordinary tile measures
+          // itself, and handing React Flow a stale height would fight the DOM.
+          ...(size ? { style: { width: size.width, height: size.height } } : {}),
+          data: {
+            tile,
+            isFrame,
+            portOffsets: isFrame ? elkPortOffsets[tile.id] : undefined,
+            presentation,
+            safetyNamespace,
+            onExpand: handleExpand,
+            onNavigateToNode,
+            onNavigateToReference,
+            onShowDetails,
+          } satisfies ModelTileNodeData,
+          // Dragging is the point; selection is not, and a selected outline on
+          // top of the focus emphasis reads as a second kind of highlight.
+          draggable: true,
+          selectable: false,
+        };
+      });
+      // React Flow resolves `parentId` against the nodes it has already seen, so
+      // a child listed before its frame is dropped with a console error rather
+      // than nested (xyflow#4438). Ordering by depth is enough: containment here
+      // is a forest, and a frame is always shallower than what it contains.
+      const depth = nestingDepths(resolvedGraph);
+      return built.sort((a, b) => (depth.get(a.id) ?? 0) - (depth.get(b.id) ?? 0));
     });
     // Every edge is a routed edge: it draws a polyline through ELK's bend points
     // when a section is available, and falls back to a straight path otherwise.
@@ -494,21 +708,84 @@ function ModelViewCanvasInner({
       type: 'routed',
       data: {
         section: edgeSections[edge.id],
-        stroke: edge.kind !== 'ownership' && edge.warn ? '#d4380d' : token.colorTextSecondary,
+        // A malfunction still outranks everything: an edge touching one reads red
+        // whatever kind it is. Otherwise a flow takes the colour the SysML
+        // metamodel itself assigns to flows, so it is legible as a different kind
+        // of thing from a static connection at a glance.
+        stroke: edge.kind === 'ownership' ? token.colorTextSecondary
+          : edge.warn ? '#d4380d'
+            : edge.kind === 'flow' ? FLOW_STROKE
+              : token.colorTextSecondary,
         strokeWidth: edge.kind === 'ownership' ? 2 : 2.5,
         strokeDasharray: edge.dashed ? '6 4' : edge.kind === 'ownership' ? '2 3' : undefined,
       } satisfies RoutedModelEdgeData,
       markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+      // Per-edge, because the canvas turns selection off globally for the tiles.
+      // Without it React Flow leaves the interaction stroke click-through and the
+      // route cannot be picked out at all.
+      selectable: true,
     })));
   }, [resolvedGraph, layoutReady, edgeSections, presentation, safetyNamespace, handleExpand,
     onNavigateToNode, onNavigateToReference, onShowDetails, setNodes, setEdges, token]);
 
-  /** Move every tile the user has not placed by hand. */
+  /**
+   * Apply the emphasis for the selected route.
+   *
+   * A separate pass over the existing edges rather than part of the effect above,
+   * and that is deliberate: that effect rebuilds `data.section` from
+   * `edgeSections`, which is the *layout's* geometry, while a drag writes newer
+   * geometry straight onto the edge through `runReroute`. Rebuilding on every click
+   * would throw the dragged routes away and snap them back. So this only ever
+   * touches `emphasis`, and returns the edge untouched when it already has the
+   * right one, so clicking twice costs nothing.
+   */
+  useEffect(() => {
+    setEdges((prev) => {
+      let changed = false;
+      const next = prev.map((edge) => {
+        const emphasis: EdgeEmphasis | undefined = selectedEdgeId === null
+          ? undefined
+          : edge.id === selectedEdgeId ? 'selected' : 'muted';
+        const data = edge.data as RoutedModelEdgeData;
+        if (data.emphasis === emphasis) return edge;
+        changed = true;
+        return {
+          ...edge,
+          // The selected route is drawn over the ones it runs parallel to, so its
+          // halo is not buried under them.
+          zIndex: emphasis === 'selected' ? 10 : 0,
+          data: { ...data, emphasis },
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [selectedEdgeId, setEdges]);
+
+  // A re-layout can remove the selected edge, and a selection pointing at an edge
+  // that no longer exists mutes the whole canvas with nothing highlighted.
+  useEffect(() => { setSelectedEdgeId(null); }, [structureKey]);
+
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: { id: string }) => {
+    // Clicking the highlighted route again clears it, so the gesture is its own
+    // undo and does not depend on finding empty canvas to click.
+    setSelectedEdgeId((current) => (current === edge.id ? null : edge.id));
+  }, []);
+  const clearSelectedEdge = useCallback(() => setSelectedEdgeId(null), []);
+
+  /**
+   * Move every tile the user has not placed by hand, and resize the frames.
+   *
+   * A frame is resized even when it is pinned: the user dragged where it sits,
+   * not how big it is, and a frame left at its pre-layout size would clip the
+   * children ELK just placed inside it.
+   */
   const applyPositions = useCallback((positions: Record<string, Position>, respectPinned: boolean) => {
     setNodes((current) => current.map((node) => {
-      if (respectPinned && pinned.current[node.id]) return node;
+      const size = sizes.current[node.id];
+      const resized = size ? { ...node, style: { ...node.style, width: size.width, height: size.height } } : node;
+      if (respectPinned && pinned.current[node.id]) return resized;
       const next = positions[node.id];
-      return next ? { ...node, position: next } : node;
+      return next ? { ...resized, position: next } : resized;
     }));
   }, [setNodes]);
 
@@ -530,7 +807,10 @@ function ModelViewCanvasInner({
     // effects route through, rather than a second copy of the loop that has to
     // be kept in step with it by inspection.
     const posById = new Map(getNodes().map((node) => [node.id, node.position]));
-    const nextSections = routeSectionsAtPositions(current, posById, baselineSections.current);
+    const nextSections = routeSectionsAtPositions(
+      current, posById, new Map(Object.entries(sizes.current)), baselineSections.current,
+      portOffsetsRef.current,
+    );
     setEdges((prev) => prev.map((edge) => (
       nextSections[edge.id]
         ? { ...edge, data: { ...(edge.data as RoutedModelEdgeData), section: nextSections[edge.id] } }
@@ -588,7 +868,10 @@ function ModelViewCanvasInner({
       }
 
       const orderedTiles = result.ordered.tiles;
-      const finalSections = routeSectionsAtPositions(result.ordered, result.positions, result.edgeSections);
+      const measured = frameSizes(result.ordered, result.sizes);
+      const finalSections = routeSectionsAtPositions(
+        result.ordered, result.positions, result.sizes, result.edgeSections, result.portOffsets,
+      );
 
       if (rerouteTimer.current) {
         clearTimeout(rerouteTimer.current);
@@ -596,17 +879,25 @@ function ModelViewCanvasInner({
       }
       pinned.current = {};
       auto.current = Object.fromEntries(result.positions);
+      sizes.current = measured;
       baselineSections.current = finalSections;
+      applyPortOffsets(result.portOffsets);
 
       const tileById = new Map(orderedTiles.map((tile) => [tile.id, tile]));
-      setNodes((current) => current.map((node) => ({
-        ...node,
-        position: result.positions.get(node.id) ?? node.position,
-        data: {
-          ...node.data,
-          tile: tileById.get(node.id) ?? (node.data as ModelTileNodeData).tile,
-        },
-      })));
+      setNodes((current) => current.map((node) => {
+        const size = measured[node.id];
+        return {
+          ...node,
+          position: result.positions.get(node.id) ?? node.position,
+          // A frame's box is a layout result, so it lands with the positions —
+          // the node array was built before ELK had measured anything.
+          ...(size ? { style: { ...node.style, width: size.width, height: size.height } } : {}),
+          data: {
+            ...node.data,
+            tile: tileById.get(node.id) ?? (node.data as ModelTileNodeData).tile,
+          },
+        };
+      }));
       setEdges((current) => current.map((edge) => ({
         ...edge,
         data: {
@@ -646,17 +937,23 @@ function ModelViewCanvasInner({
     // the DOM will actually draw. The result carries positions (unchanged
     // consumer), routed edge sections, that port order, and the graph with the
     // order already applied — all consumed below.
-    void computeModelLayout(resolvedGraph).then(({ positions, edgeSections: sections, portOrder, ordered }) => {
+    void computeModelLayout(resolvedGraph).then((
+      { positions, sizes: measuredSizes, edgeSections: sections, portOrder, portOffsets: layoutPortOffsets, ordered },
+    ) => {
       if (cancelled) return;
       auto.current = Object.fromEntries(positions);
+      sizes.current = frameSizes(ordered, measuredSizes);
       applyPositions(auto.current, true);
       setElkPortOrder(portOrder);
+      applyPortOffsets(layoutPortOffsets);
 
       const effectivePositions = new Map(positions);
       for (const [tileId, position] of Object.entries(pinned.current)) {
         effectivePositions.set(tileId, position);
       }
-      const normalizedSections = routeSectionsAtPositions(ordered, effectivePositions, sections);
+      const normalizedSections = routeSectionsAtPositions(
+        ordered, effectivePositions, measuredSizes, sections, layoutPortOffsets,
+      );
       baselineSections.current = normalizedSections;
       setEdgeSections(normalizedSections);
       setSettledStructure(structureKey);
@@ -775,6 +1072,12 @@ function ModelViewCanvasInner({
         onNodesChange={onNodesChange}
         onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
+        // Click a route to trace it end to end; click the canvas, or the route
+        // again, to let go. Clicking a tile clears it too — the user has moved on
+        // to a different question by then.
+        onEdgeClick={handleEdgeClick}
+        onPaneClick={clearSelectedEdge}
+        onNodeClick={clearSelectedEdge}
         nodesConnectable={false}
         elementsSelectable={false}
         proOptions={{ hideAttribution: true }}
@@ -883,6 +1186,11 @@ function Legend() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <WarningOutlined style={{ fontSize: 11, color: '#d4380d' }} />
         <span style={caption}>has malfunction</span>
+      </div>
+      {/* A flow is the one link whose arrow means something — see `isFlowLink`. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ display: 'inline-block', width: 14, height: 2, background: FLOW_STROKE }} />
+        <span style={caption}>flow</span>
       </div>
     </div>
   );

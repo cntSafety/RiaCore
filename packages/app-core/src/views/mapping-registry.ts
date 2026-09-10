@@ -101,6 +101,26 @@ export interface MappingDescriptor {
    */
   edgeQueryId?: string;
   /**
+   * Concept-name sets this mapping's catalog queries want resolved from the
+   * source metamodel's own subtype hierarchy, keyed by the query parameter to
+   * bind them to.
+   *
+   * `{ connectionConcepts: 'connection_usage' }` binds `$connectionConcepts` to
+   * `connection_usage` plus every transitive subtype of it declared by the
+   * metamodels of the view's source namespaces — for SysML v2 that is
+   * `interface_usage`, `allocation_usage`, and the flow connections. A catalog
+   * query then writes `ci.concept IN $connectionConcepts` instead of a literal
+   * list, so a metamodel that later declares another connection subtype is
+   * projected without editing any Cypher.
+   *
+   * The closure is read from `RIA_META_CONCEPT_SUBTYPEOF`, which
+   * `import-write-service.ts` populates from each metamodel's LinkML `is_a`
+   * declarations. A base concept no metamodel declares resolves to just itself,
+   * so a mapping naming one that does not exist degrades to the literal
+   * behaviour rather than matching nothing.
+   */
+  conceptGroups?: Record<string, string>;
+  /**
    * Highest traversal depth this mapping's catalog query can actually serve.
    * Defaults to {@link DEFAULT_MAX_TRAVERSAL_DEPTH}. Sphinx-Needs is lower
    * because a dynamic relationship name cannot appear in a recursive pattern,

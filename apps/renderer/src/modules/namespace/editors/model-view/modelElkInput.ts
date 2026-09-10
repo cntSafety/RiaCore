@@ -35,9 +35,15 @@
  * two-pass sequence described on it, which both of the canvas's layout entry
  * points need and neither should re-derive.
  */
-import { computeElkLayout, type ElkLayoutInput, type ElkLayoutResult } from '../safety-analysis/utils/elkLayout';
+import {
+  computeElkLayout,
+  type ElkLayoutInput,
+  type ElkLayoutResult,
+  type ElkNodeInput,
+} from '../safety-analysis/utils/elkLayout';
 import {
   HEADER_HEIGHT,
+  PORT_LABEL_WIDTH,
   PORT_ROW_HEIGHT,
   TILE_PADDING,
   TILE_WIDTH,
@@ -74,6 +80,40 @@ const PORT_TARGET_PREFIX = 'ptgt-';
 export const EDGE_ENDPOINT_STUB = 24;
 
 /**
+ * Clearance a frame keeps between its own border and the tiles nested inside it.
+ *
+ * Derived from `EDGE_ENDPOINT_STUB` rather than chosen, because this gap is not
+ * only whitespace: it is the lane every **delegation** route runs in. A
+ * delegation joins a frame's own port to a nested tile's port on the same side,
+ * so the only horizontal room it has is this inset, and the router needs a stub
+ * at each end of it — two stubs, hence twice the figure. Set it narrower and
+ * `orthogonalSection` finds no room for the second stub, takes its
+ * doubling-back branch, and draws the route *out through the frame's border* and
+ * back in again.
+ *
+ * The extra margin is breathing room, so the frame border, the lane, and the
+ * child read as three things rather than one thick smear.
+ */
+export const FRAME_INSET = EDGE_ENDPOINT_STUB * 2 + 8;
+
+/**
+ * Room a frame leaves on a border that carries its own ports.
+ *
+ * Historically this was the port column plus the delegation inset, because the
+ * column was drawn *inside* the frame and a child laid out under it would have
+ * been overlapped by the port names. The column now sits outside the border
+ * (`ModelTileNode.portColumn`), so this band no longer reserves space for a
+ * label — it is the lane every delegation route into that border runs along.
+ *
+ * The figure is kept rather than reduced to `FRAME_INSET`. Freeing the 150px
+ * would narrow every frame and move its children, which is a layout change with
+ * nothing to do with the overlap this band now prevents; and a wide lane is what
+ * lets several delegations into neighbouring port rows take separate turns
+ * instead of stacking onto one x. Narrowing it is a separate, measurable step.
+ */
+export const FRAME_PORT_BAND = PORT_LABEL_WIDTH + FRAME_INSET;
+
+/**
  * Graph-level ELK options for the model view.
  *
  * Left-to-right flow, orthogonal routing, and greedy cycle-breaking with
@@ -88,6 +128,18 @@ export const EDGE_ENDPOINT_STUB = 24;
  * horizontal edge lane plus that clearance on both sides between two stacked
  * tiles, and the between-layer gap widened with it so the router has lanes to
  * spread into instead of stacking edges against the boxes.
+ *
+ * `edgeEdge` is the separation between two parallel routes, and it is set from
+ * `EDGE_ENDPOINT_STUB` rather than left at the 16 it used to be because a frame
+ * full of delegations is mostly parallel routes. Measured on a frame with six
+ * own inputs fanning out to three children — twelve delegations, and the router
+ * lays them out cleanly: no segment within 24px of a border it does not attach
+ * to, and no two drawn on top of one another. The complaint there is not that
+ * the geometry is wrong but that it is dense: twelve lanes 16px apart, minus a
+ * 2.5px stroke, is 13.5px of blank between neighbouring wires, and following one
+ * of them to the port it ends at is guesswork. At 24 the gap is 21.5px. It costs
+ * width — eight extra pixels per lane — which is the right trade for a diagram
+ * whose purpose is to show what connects to what.
  */
 export const MODEL_VIEW_LAYOUT_OPTIONS: Record<string, string> = {
   'elk.direction': 'RIGHT',
@@ -98,8 +150,8 @@ export const MODEL_VIEW_LAYOUT_OPTIONS: Record<string, string> = {
   'elk.layered.spacing.nodeNodeBetweenLayers': '160',
   'elk.spacing.edgeNode': String(EDGE_ENDPOINT_STUB),
   'elk.layered.spacing.edgeNodeBetweenLayers': String(EDGE_ENDPOINT_STUB),
-  'elk.spacing.edgeEdge': '16',
-  'elk.layered.spacing.edgeEdgeBetweenLayers': '16',
+  'elk.spacing.edgeEdge': String(EDGE_ENDPOINT_STUB),
+  'elk.layered.spacing.edgeEdgeBetweenLayers': String(EDGE_ENDPOINT_STUB),
 };
 
 /**
@@ -111,6 +163,185 @@ export const MODEL_VIEW_LAYOUT_OPTIONS: Record<string, string> = {
  */
 export function portOffset(rowIndex: number): number {
   return HEADER_HEIGHT + TILE_PADDING + rowIndex * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT / 2;
+}
+
+/**
+ * Vertical centre of every one of a tile's port rows, keyed by port id, in
+ * tile-local coordinates. The single source of that geometry: the ELK port
+ * offsets, the client-side route pinning, and the DOM all read it from here, and
+ * a disagreement between any two of them draws a connector off its own pin.
+ *
+ * An ordinary tile stacks all its ports in one column under the header, so the
+ * row index is the offset — `portOffset`.
+ *
+ * A frame instead puts each direction against the border it faces and **centres
+ * that column vertically** in the space below its header. Centred rather than
+ * stacked at the top because a frame's ports are where the rest of the canvas
+ * reaches it, and the rest of the canvas is level with its middle, not its title:
+ * with the ports in a top band every delegation route had to run the full height
+ * of the frame to get to a child, which is what made a frame full of actions read
+ * as a bundle of long parallel wires down one side.
+ *
+ * `frameHeight` is what makes it a frame here, and it must be the height the DOM
+ * will draw — the formula reproduces the `justify-content: center` the DOM uses,
+ * so passing a different height silently offsets every route.
+ *
+ * **`elkOffsets` overrides the formula, and for a laid-out frame it always
+ * should.** The centred stack is a guess made without knowing where the frame's
+ * children ended up; ELK places the same ports knowing exactly that, and under
+ * `INCLUDE_CHILDREN` it does so regardless of the positions it was handed for
+ * them (measured: 135px to 205px away, in a different order — see
+ * `ElkLayoutResult.portOffsets`). Whoever loses that argument has their geometry
+ * translated onto the other's, and translating ELK's routes is what stopped them
+ * avoiding the boxes they were routed around. So ELK wins, and the pins move to
+ * where it put them.
+ */
+export function portRowOffsets(
+  tile: ModelTile,
+  frameHeight?: number,
+  elkOffsets?: Record<string, number>,
+): Map<string, number> {
+  const offsets = new Map<string, number>();
+  if (frameHeight === undefined) {
+    tile.ports.forEach((port, rowIndex) => offsets.set(port.id, portOffset(rowIndex)));
+    return offsets;
+  }
+  // A frame's ports are placed by ELK, not by this formula — see
+  // `ElkLayoutResult.portOffsets`. Where ELK reported a port, that is where the
+  // pin is drawn and where the route was anchored, so the two cannot disagree.
+  // The centred stack below remains the fallback for a port ELK did not report
+  // and for the first render, before any layout has run.
+  if (elkOffsets !== undefined) {
+    let complete = true;
+    for (const port of tile.ports) {
+      const reported = elkOffsets[port.id];
+      if (reported === undefined) { complete = false; break; }
+      offsets.set(port.id, reported);
+    }
+    if (complete) return offsets;
+    offsets.clear();
+  }
+  for (const dir of ['in', 'out'] as const) {
+    const column = tile.ports.filter((port) => port.dir === dir);
+    if (column.length === 0) continue;
+    const stack = column.length * PORT_ROW_HEIGHT;
+    // The band is the frame below its header. Clamped so a frame too short for
+    // its own ports overflows downward rather than up through the title.
+    const band = Math.max(frameHeight - HEADER_HEIGHT, stack);
+    const top = HEADER_HEIGHT + (band - stack) / 2;
+    column.forEach((port, index) => {
+      offsets.set(port.id, top + index * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT / 2);
+    });
+  }
+  return offsets;
+}
+
+/** Whether the tile has a port facing this border. */
+function hasPortOn(tile: ModelTile, side: TileSide): boolean {
+  return tile.ports.some((port) => (side === 'west' ? port.dir === 'in' : port.dir === 'out'));
+}
+
+/**
+ * Smallest box a frame may occupy, whatever it contains.
+ *
+ * Tall enough for its header plus the taller of its two port columns, and never
+ * shorter than the inset its children need — otherwise a frame with many ports
+ * and one small child would centre its columns outside its own border.
+ */
+export function frameMinHeight(tile: ModelTile): number {
+  const tallest = Math.max(
+    tile.ports.filter((port) => port.dir === 'in').length,
+    tile.ports.filter((port) => port.dir === 'out').length,
+  );
+  return HEADER_HEIGHT + Math.max(tallest * PORT_ROW_HEIGHT, 2 * FRAME_INSET);
+}
+
+/**
+ * Group the nested tiles by the tile they are nested in.
+ *
+ * The render model records containment the way React Flow needs it — each tile
+ * naming its parent — but the layout needs the inverse, since ELK is given a
+ * frame with its children inside it. One shared derivation, so the canvas and
+ * the layout cannot disagree about which tiles are frames.
+ */
+export function childrenByParent(tiles: ModelTile[]): Map<string, ModelTile[]> {
+  const byParent = new Map<string, ModelTile[]>();
+  for (const tile of tiles) {
+    if (tile.parentId === undefined) continue;
+    const siblings = byParent.get(tile.parentId);
+    if (siblings) siblings.push(tile);
+    else byParent.set(tile.parentId, [tile]);
+  }
+  return byParent;
+}
+
+/** Which border of a tile an edge endpoint attaches to. */
+export type TileSide = 'west' | 'east';
+
+/**
+ * Whether an edge keeps each end on the border its own port faces, rather than
+ * leaving right and arriving left.
+ *
+ * True for a *delegation* — a frame's own port and one of its children's are two
+ * views of the same signal, so the link between them stays inside the frame — and
+ * for a *self-connection*, where both ends are ports of one tile. Every other edge
+ * runs between tiles that sit side by side and takes the peer rule.
+ */
+export function isDelegation(edge: ModelEdge, tiles: Map<string, ModelTile>): boolean {
+  // A connection between two ports of the *same* element is not a delegation, but
+  // it wants the identical treatment and for the same reason: the peer rule sends
+  // it out of one border and back into the opposite one, which for a single tile
+  // means leaving on the right and arriving on the left, so the route has to loop
+  // all the way around the box. ELK anchors such a self-loop at the ports' own
+  // sides, so the peer rule also disagrees with the route ELK planned and the
+  // pinning drags it — the same failure the frame ports had.
+  //
+  // These exist in real exports. Simulink traces a signal through routing blocks
+  // and both ends land on one element's own boundary, giving a pass-through: in
+  // `ClstrCtrl.sysml`, `AvgClstrVolt` has two (`connect CmdBus_In to
+  // CC_TaskFast_Out` and `connect Digital_In to CC_TaskFast_Out`), which is why
+  // `CC_TaskFast` appeared to be wired to itself.
+  if (edge.source === edge.target) return true;
+  return tiles.get(edge.target)?.parentId === edge.source
+    || tiles.get(edge.source)?.parentId === edge.target;
+}
+
+/**
+ * Which border an edge endpoint sits on.
+ *
+ * Between two tiles side by side, a route leaves the source's **east** border and
+ * arrives at the target's **west** one, whichever way the ports themselves face:
+ * that is what makes a left-to-right diagram read left to right.
+ *
+ * A delegation cannot follow that rule. Its two ends are a frame and something
+ * inside the frame, so "leave on the right, arrive on the left" sends the route
+ * out of the frame and back in again — and worse, away from the pin the user can
+ * see, since a frame's own pins are drawn on the border their direction puts them
+ * on. So a delegation anchors **both** ends on the side the port faces, and the
+ * route runs inward from there.
+ */
+export function anchorSide(
+  role: 'source' | 'target',
+  portDir: 'in' | 'out' | undefined,
+  delegation: boolean,
+): TileSide {
+  if (delegation && portDir !== undefined) return portDir === 'in' ? 'west' : 'east';
+  return role === 'source' ? 'east' : 'west';
+}
+
+/**
+ * The room a frame has to leave inside its border, as an ELK padding vector.
+ *
+ * The top clears the frame's header. A border carrying the frame's own ports
+ * clears the whole port column, so a child is never laid out under a port's name;
+ * a border with no ports on it only needs the plain inset, which is why a frame
+ * is not uniformly padded.
+ */
+export function framePadding(tile: ModelTile): string {
+  const top = HEADER_HEIGHT + FRAME_INSET;
+  const left = hasPortOn(tile, 'west') ? FRAME_PORT_BAND : FRAME_INSET;
+  const right = hasPortOn(tile, 'east') ? FRAME_PORT_BAND : FRAME_INSET;
+  return `[top=${top},left=${left},bottom=${FRAME_INSET},right=${right}]`;
 }
 
 /**
@@ -141,56 +372,136 @@ export function portIdFromHandle(handle: string | undefined): string | undefined
  * endpoint correction drag the route through the tile.
  * Ownership edges anchor at the tile. The graph options are `MODEL_VIEW_LAYOUT_OPTIONS`.
  *
+ * Containment enters as ELK hierarchy: a tile with a `parentId` is handed to ELK
+ * as a *child* of that frame rather than as another node at the root, and the
+ * frame gets `elk.padding` reserving its own chrome. Edges all stay declared at
+ * the root whatever level their endpoints are on — ELK re-homes each one to the
+ * lowest container holding both ends, and `computeElkLayout` normalises the
+ * routes it returns back to canvas coordinates.
+ *
  * `portConstraints` decides what ELK is allowed to do with those ports, and the
  * two passes of `computeModelLayout` want opposite things from it — see there.
  */
 export function buildElkInput(
   graph: ModelGraph,
   portConstraints: 'FIXED_SIDE' | 'FIXED_POS' = 'FIXED_SIDE',
+  frameSizes?: ElkLayoutResult['sizes'],
 ): ElkLayoutInput {
   const sourcePorts = new Set(graph.edges.map(edge => `${edge.source}|${portIdFromHandle(edge.sourceHandle)}`));
   const targetPorts = new Set(graph.edges.map(edge => `${edge.target}|${portIdFromHandle(edge.targetHandle)}`));
   const tiles = new Map(graph.tiles.map(tile => [tile.id, tile]));
-  const endpointPort = (tileId: string, handle: string, role: 'source' | 'target') => {
+  const endpointPort = (
+    tileId: string, handle: string, role: 'source' | 'target', delegation: boolean,
+  ) => {
     const portId = portIdFromHandle(handle);
     const port = tiles.get(tileId)?.ports.find(candidate => candidate.id === portId);
-    const oppositeSide = port && (role === 'source' ? port.dir === 'in' : port.dir === 'out');
-    return oppositeSide ? handle : portId;
+    if (port === undefined) return portId;
+    // The `psrc-`/`ptgt-` ELK ports are the extra anchors on the *opposite* border,
+    // and they exist only so a peer route can leave on the right and arrive on the
+    // left. A delegation keeps each end on the border its port faces, so it uses
+    // the port's own anchor — see `anchorSide`.
+    const side = anchorSide(role, port.dir, delegation);
+    const natural = port.dir === 'in' ? 'west' : 'east';
+    return side === natural ? portId : handle;
   };
-  return {
-    nodes: graph.tiles.map((tile) => ({
+  const nestedIn = childrenByParent(graph.tiles);
+  const toNode = (tile: ModelTile): ElkNodeInput => {
+    const children = nestedIn.get(tile.id);
+    // A frame's size is ELK's to decide — it has to fit whatever it contains —
+    // so on the second pass the size the first pass settled on is fed back in.
+    // Without it the frame goes in 260 wide again and `FIXED_POS` pins its EAST
+    // port at x=260, a few hundred pixels inside its own right border, which is
+    // where every route into that port would then be drawn.
+    const measured = children ? frameSizes?.get(tile.id) : undefined;
+    const width = Math.max(measured?.width ?? 0, TILE_WIDTH);
+    const height = Math.max(measured?.height ?? 0, children ? frameMinHeight(tile) : tileHeight(tile));
+    // A frame's ports are centred on its height, so their offsets depend on the
+    // size decided above — which is why the second pass has to be told what the
+    // first one measured.
+    const offsets = portRowOffsets(tile, children ? height : undefined);
+    const offsetOf = (portId: string) => offsets.get(portId) ?? height / 2;
+    return {
       id: tile.id,
-      width: TILE_WIDTH,
-      height: tileHeight(tile),
-      layoutOptions: { 'elk.portConstraints': portConstraints },
-      ports: tile.ports.flatMap((port, rowIndex) => {
-        const ports = [{ id: port.id, side: port.dir === 'in' ? 'WEST' as const : 'EAST' as const, offset: portOffset(rowIndex) }];
+      width,
+      height,
+      layoutOptions: {
+        'elk.portConstraints': portConstraints,
+        // The given size stays a floor rather than a fixed value, so a frame
+        // around one small child is still wide enough to read its title.
+        ...(children
+          ? {
+            // A frame's interior is laid out against the frame's own options, not
+            // the graph's, so the spacing tuned for this view has to be repeated
+            // here. Left off, the inside falls back to ELK's defaults — roughly
+            // 20px between layers instead of 160 — and the children end up packed
+            // tight with their connectors flush against the boxes, which is
+            // exactly the defect these numbers were chosen to fix.
+            ...MODEL_VIEW_LAYOUT_OPTIONS,
+            'elk.padding': framePadding(tile),
+            'elk.nodeSize.constraints': 'MINIMUM_SIZE',
+            'elk.nodeSize.minimum': `(${width},${height})`,
+          }
+          : {}),
+      },
+      ports: tile.ports.flatMap((port) => {
+        const offset = offsetOf(port.id);
+        const ports = [{ id: port.id, side: port.dir === 'in' ? 'WEST' as const : 'EAST' as const, offset }];
         if (port.dir === 'in' && sourcePorts.has(`${tile.id}|${port.id}`)) {
-          ports.push({ id: portSourceHandle(port.id), side: 'EAST', offset: portOffset(rowIndex) });
+          ports.push({ id: portSourceHandle(port.id), side: 'EAST', offset });
         }
         if (port.dir === 'out' && targetPorts.has(`${tile.id}|${port.id}`)) {
-          ports.push({ id: portTargetHandle(port.id), side: 'WEST', offset: portOffset(rowIndex) });
+          ports.push({ id: portTargetHandle(port.id), side: 'WEST', offset });
         }
         return ports;
       }),
-    })),
-    edges: graph.edges.map((edge: ModelEdge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourcePort: endpointPort(edge.source, edge.sourceHandle, 'source'),
-      targetPort: endpointPort(edge.target, edge.targetHandle, 'target'),
-    })),
+      ...(children ? { children: children.map(toNode) } : {}),
+    };
+  };
+
+  return {
+    // Only the tiles nothing contains go in at the root; a nested tile enters as
+    // a child of its frame, which is how ELK is told to lay it out inside.
+    nodes: graph.tiles.filter((tile) => tile.parentId === undefined).map(toNode),
+    edges: graph.edges.map((edge: ModelEdge) => {
+      const delegation = isDelegation(edge, tiles);
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourcePort: endpointPort(edge.source, edge.sourceHandle, 'source', delegation),
+        targetPort: endpointPort(edge.target, edge.targetHandle, 'target', delegation),
+      };
+    }),
     layoutOptions: MODEL_VIEW_LAYOUT_OPTIONS,
   };
 }
 
 /** A settled model layout: node positions, routed edges, and the row order. */
 export interface ModelLayout {
+  /**
+   * Where each tile goes, in the frame that contains it — which is what React
+   * Flow wants for a nested node, and identical to the absolute position for a
+   * tile no frame contains.
+   */
   positions: ElkLayoutResult['positions'];
+  /**
+   * The same positions resolved to canvas coordinates. The re-route pass works
+   * in canvas space, because a route can run between two different frames.
+   */
+  absolutePositions: ElkLayoutResult['absolutePositions'];
+  /**
+   * What each tile measures. Only a frame needs this — ELK grew it around its
+   * children, so its size is a layout result rather than a constant.
+   */
+  sizes: ElkLayoutResult['sizes'];
   edgeSections: ElkLayoutResult['edgeSections'];
   /** ELK's intra-side port order, to be fed back through `resolvePortOrder`. */
   portOrder: ElkLayoutResult['portOrder'];
+  /**
+   * Where ELK put each port on each node. Only a frame's entry is consumed, and
+   * there it is authoritative — see `portRowOffsets`.
+   */
+  portOffsets: ElkLayoutResult['portOffsets'];
   /** `graph` with every tile's ports already resolved into that order. */
   ordered: ModelGraph;
 }
@@ -219,6 +530,10 @@ export interface ModelLayout {
  * against the geometry that will actually be drawn, the endpoint pinning becomes
  * a no-op, and the box crossings go to zero. It costs a second layout call —
  * roughly 95ms to 180ms on a 30-tile model, behind the existing spinner.
+ *
+ * Pass 1's node sizes are handed to pass 2 along with the order, because a frame
+ * is the one node whose size is a layout result rather than a constant, and
+ * fixing a port's position means knowing which border it is fixed to.
  */
 export async function computeModelLayout(graph: ModelGraph): Promise<ModelLayout> {
   const pass1 = await computeElkLayout(buildElkInput(graph, 'FIXED_SIDE'));
@@ -236,14 +551,19 @@ export async function computeModelLayout(graph: ModelGraph): Promise<ModelLayout
     return { ...pass1, ordered };
   }
 
-  const pass2 = await computeElkLayout(buildElkInput(ordered, 'FIXED_POS'));
+  const pass2 = await computeElkLayout(buildElkInput(ordered, 'FIXED_POS', pass1.sizes));
   if (pass2.mode !== 'elk') return { ...pass1, ordered };
 
-  // Pass 2 reports back the order it was given, so pass 1's stays authoritative.
+  // Pass 2 reports back the order it was given, so pass 1's stays authoritative
+  // — for a leaf node, which honours the positions it was handed. A frame does
+  // not, so its *offsets* come from pass 2, the layout that produced the routes.
   return {
     positions: pass2.positions,
+    absolutePositions: pass2.absolutePositions,
+    sizes: pass2.sizes,
     edgeSections: pass2.edgeSections,
     portOrder: pass1.portOrder,
+    portOffsets: pass2.portOffsets,
     ordered,
   };
 }

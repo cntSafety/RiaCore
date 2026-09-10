@@ -193,6 +193,28 @@ export interface EvaluateViewParams {
   depth?: number;
   /** Bounded result size, applied inside the query. */
   maxResults?: number;
+  /**
+   * Set `false` to resolve representatives only and skip edge completion, for a
+   * caller that reads `representatives` and discards `relationships`.
+   *
+   * `element`, `elements` and `traversal` do not return edges from their own
+   * catalog entry; evaluation completes them by additionally running the
+   * mapping's `edges` entry (and its continuations) over the resolved node set.
+   * That is the most expensive part of such an evaluation and it is pure waste
+   * when the caller only wanted to know *which* elements it reached.
+   *
+   * The model view is exactly that caller: it walks a neighbourhood over ~10
+   * traversals to discover a node set, keeping only the ids, and then makes one
+   * `elements` call whose edge set is computed against the final node set —
+   * because only edges computed against the node set actually drawn are mutually
+   * consistent. So every intermediate walk was computing an edge set that was
+   * then thrown away.
+   *
+   * Defaults to `true`, which is the historical behaviour: a caller that wants
+   * edges keeps getting them without asking. `whole` returns its edges inline
+   * and is unaffected.
+   */
+  includeRelationships?: boolean;
 }
 
 export interface MaterializeViewParams {

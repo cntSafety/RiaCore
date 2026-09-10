@@ -27,7 +27,7 @@
  * the same concept names so the same metamodel (sysml-v2.linkml.yaml) works.
  */
 import type { ConceptBatch, RelationshipBatch } from '@riacore/app-contracts';
-import type { SysmlTextualModel, SysmlTextualElementInfo } from './sysml-textual-parser.js';
+import type { SysmlTextualModel } from './sysml-textual-parser.js';
 
 function compact(attrs: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
@@ -65,6 +65,18 @@ export function mapModelToConceptBatches(model: SysmlTextualModel): ConceptBatch
           declared_name: el.name,
           qualified_name: el.qualifiedName,
           is_abstract:   el.isAbstract,
+          is_composite:  el.isComposite,
+          is_ordered:    el.isOrdered,
+          is_unique:     el.isUnique,
+          is_end:        el.isEnd,
+          is_individual: el.isIndividual,
+          is_variation:  el.isVariation,
+          is_reference:  el.isReference,
+          is_derived:    el.isDerived,
+          is_readonly:   el.isReadonly,
+          is_portion:    el.isPortion,
+          is_conjugated: el.isConjugated,
+          direction:     el.direction,
           source_file:   el.sourceFile,
         }),
       },
@@ -89,18 +101,22 @@ export function mapModelToRelationshipBatches(model: SysmlTextualModel): Relatio
   );
 
   // Also index by short name for same-package resolution
-  const nameToPath = new Map<string, string>();
+  const nameToPaths = new Map<string, string[]>();
   for (const el of model.elements) {
-    // Only store if name is unique (first wins on collision)
-    if (!nameToPath.has(el.name)) {
-      nameToPath.set(el.name, el.stablePath);
-    }
+    if (!el.name) continue;
+    const paths = nameToPaths.get(el.name) ?? [];
+    paths.push(el.stablePath);
+    nameToPaths.set(el.name, paths);
   }
 
   const batchMap = new Map<string, RelationshipBatch>();
+  const relationshipKeys = new Set<string>();
 
   function addRel(relationship: string, sourcePath: string, targetPath: string): void {
     if (!sourcePath || !targetPath || sourcePath === targetPath) return;
+    const key = `${relationship}\u0000${sourcePath}\u0000${targetPath}`;
+    if (relationshipKeys.has(key)) return;
+    relationshipKeys.add(key);
     let batch = batchMap.get(relationship);
     if (!batch) {
       batch = { relationship, items: [] };
@@ -114,15 +130,16 @@ export function mapModelToRelationshipBatches(model: SysmlTextualModel): Relatio
     const byQN = qnToPath.get(typeName);
     if (byQN) return byQN;
 
-    // Try scoped: prepend the owner's top-level package
-    const ownerPkg = ownerQN.split('::')[0];
-    if (ownerPkg) {
-      const scoped = qnToPath.get(`${ownerPkg}::${typeName}`);
+    // Try lexical scopes from nearest to farthest.
+    const ownerSegments = ownerQN.split('::').slice(0, -1).filter(Boolean);
+    for (let length = ownerSegments.length; length > 0; length -= 1) {
+      const scoped = qnToPath.get(`${ownerSegments.slice(0, length).join('::')}::${typeName}`);
       if (scoped) return scoped;
     }
 
-    // Short name fallback
-    return nameToPath.get(typeName);
+    // A short name is safe only if unique across the imported project.
+    const paths = nameToPaths.get(typeName) ?? [];
+    return paths.length === 1 ? paths[0] : undefined;
   }
 
   for (const el of model.elements) {
@@ -145,6 +162,17 @@ export function mapModelToRelationshipBatches(model: SysmlTextualModel): Relatio
         addRel('has_definition', el.stablePath, targetPath);
       }
     }
+  }
+
+  // Connector endpoint support is extracted from anonymous Langium AST nodes
+  // by the parser. These records reproduce the JSON importer's relationship
+  // shape (ReferenceUsage / Feature / FeatureChaining) for CommonModel views.
+  for (const relationship of model.relationships) {
+    addRel(
+      relationship.relationship,
+      relationship.sourceStablePath,
+      relationship.targetStablePath,
+    );
   }
 
   return [...batchMap.entries()]

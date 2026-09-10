@@ -126,6 +126,11 @@ function evaluateElement(
     mode: 'element',
     elementNodeId,
     allowUnavailableMapping,
+    // Both callers — `fetchAnchor` and `useIsDiagramConcept` — read
+    // `representatives[0]` and nothing else. This runs on every tree selection,
+    // so the edge set it used to compute for one node was the most frequently
+    // wasted work in the renderer.
+    includeRelationships: false,
   });
 }
 
@@ -149,6 +154,13 @@ async function traverseIds(
     relationship,
     direction,
     depth: ONE_HOP,
+    // Ids only. The walk exists to discover *which* elements are involved; the
+    // single `mode=elements` call at the end supplies the edges, computed against
+    // the exact node set that will be drawn — which is the only way they come out
+    // mutually consistent. Every intermediate walk was therefore paying for an
+    // edge set that this function then dropped on the floor, and edge completion
+    // is the dominant cost of a traversal evaluation.
+    includeRelationships: false,
   });
   collect(result);
   return result.representatives.map((rep) => rep.id);
@@ -328,14 +340,31 @@ async function loadModelView(
   const discovered = new Set<string>([focusId]);
   const add = (ids: string[]) => { for (const id of ids) discovered.add(id); };
 
-  // The seed. A component opens on its connections, which is what the diagram
-  // lens has always shown; anything else — a package, a requirement — opens on
-  // what it contains, since it has no ports and would otherwise render as a
-  // single tile with nothing around it.
+  // The seed. A component opens on **both** its connections and what it
+  // contains; a port opens on its connections alone, having nothing inside it.
+  //
+  // Both walks, not one, because they answer different questions and only their
+  // union is a whole picture. `connectionNeighbourhood` never walks `Ownership`,
+  // so on its own it reaches a child only when that child happens to sit on the
+  // connection chain — and then only the ports that chain passes through. Opening
+  // a part whose internals are actions therefore drew some of those actions, some
+  // of their ports, and no containment, until the user right-clicked "expand
+  // contained elements" and got a different and better diagram of the same thing.
+  // Seeding with both makes the first render the complete one, and makes that
+  // expansion idempotent rather than corrective.
   const focusConcept = focusId === anchor.id ? anchor.concept : ACTIVE_ELEMENT_CONCEPT;
-  add(focusConcept === ACTIVE_ELEMENT_CONCEPT || PORT_CONCEPTS.has(focusConcept)
-    ? await connectionNeighbourhood(namespace, [focusId], collect)
-    : await containedElements(namespace, [focusId], collect));
+  const seeds = PORT_CONCEPTS.has(focusConcept)
+    ? [await connectionNeighbourhood(namespace, [focusId], collect)]
+    : focusConcept === ACTIVE_ELEMENT_CONCEPT
+      ? await Promise.all([
+        connectionNeighbourhood(namespace, [focusId], collect),
+        containedElements(namespace, [focusId], collect),
+      ])
+      // A package or a requirement exposes no ports, so its connection
+      // neighbourhood is empty by construction and asking for it is a round trip
+      // that can only return nothing.
+      : [await containedElements(namespace, [focusId], collect)];
+  for (const ids of seeds) add(ids);
 
   // Expansions are independent of one another — each is anchored at a
   // representative the user already had on the canvas — so they run together.
