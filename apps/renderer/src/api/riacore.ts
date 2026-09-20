@@ -116,6 +116,7 @@ import type {
   ConnectionEntry,
   DisconnectResult,
   CrossNsLinkSettings,
+  ExportSettings,
   LayoutRecord,
   ViewLayoutSourceRef,
   DiagramLayout,
@@ -301,6 +302,13 @@ export const api = {
       window.riacore.crossNsLinkSettings.getSettings(),
     saveSettings: (settings: CrossNsLinkSettings): Promise<void> =>
       window.riacore.crossNsLinkSettings.saveSettings(settings),
+  },
+
+  exportSettings: {
+    getSettings: (): Promise<ExportSettings> =>
+      window.riacore.exportSettings.getSettings(),
+    saveSettings: (settings: ExportSettings): Promise<void> =>
+      window.riacore.exportSettings.saveSettings(settings),
   },
 
   canvasLayout: {
@@ -530,8 +538,12 @@ export const api = {
       window.riacore.safety.getDirectRequirementsForFm({ failureModeNodeId }),
     searchRequirementsAcrossNamespaces: (query: string): Promise<ConceptInstanceData[]> =>
       window.riacore.safety.searchRequirementsAcrossNamespaces({ query }),
-    exportSphinxNeeds: (namespace: string, outputDir: string): Promise<{ exportedFiles: string[]; outputDir: string }> =>
-      window.riacore.safety.exportSphinxNeeds({ namespace, outputDir }),
+    exportSphinxNeeds: (
+      namespace: string,
+      outputDir: string,
+      includeRiskRatings?: boolean,
+    ): Promise<{ exportedFiles: string[]; outputDir: string }> =>
+      window.riacore.safety.exportSphinxNeeds({ namespace, outputDir, includeRiskRatings }),
     exportXlsx: (namespace: string, outputPath: string): Promise<{ outputPath: string }> =>
       window.riacore.safety.exportXlsx({ namespace, outputPath }),
     getSafetyData: (namespace: string): Promise<SafetyExportData> =>

@@ -27,6 +27,7 @@
  * the same concept names so the same metamodel (sysml-v2.linkml.yaml) works.
  */
 import type { ConceptBatch, RelationshipBatch } from '@riacore/app-contracts';
+import { toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { SysmlTextualModel } from './sysml-textual-parser.js';
 
 function compact(attrs: Record<string, unknown>): Record<string, unknown> {
@@ -35,7 +36,29 @@ function compact(attrs: Record<string, unknown>): Record<string, unknown> {
   );
 }
 
-export function mapModelToConceptBatches(model: SysmlTextualModel): ConceptBatch[] {
+/**
+ * Persisted form of an element's defining file.
+ *
+ * The parser works in absolute paths — it has to, it reads the files — but an
+ * absolute path must not reach the database: ria-data is committed and shared,
+ * so a machine-specific path makes the attribute meaningless on every other
+ * checkout. Anchoring at the workspace root is the same rule `project_dir` and
+ * every other configured path follows (see importer-sdk/config-paths.ts), so a
+ * config that says `../01_SysML` yields `../01_SysML/InnoDrive.sysml` here.
+ *
+ * A source on another volume has no relative form; `toWorkspaceRelative` returns
+ * it absolute, which is the honest answer — such a source does not travel with
+ * the workspace in the first place.
+ */
+function toStoredSourceFile(workspaceRoot: string, sourceFile: string): string | undefined {
+  if (!sourceFile) return undefined;
+  return toWorkspaceRelative(workspaceRoot, sourceFile);
+}
+
+export function mapModelToConceptBatches(
+  model: SysmlTextualModel,
+  workspaceRoot: string,
+): ConceptBatch[] {
   const batchMap = new Map<string, ConceptBatch>();
 
   for (const el of model.elements) {
@@ -77,7 +100,8 @@ export function mapModelToConceptBatches(model: SysmlTextualModel): ConceptBatch
           is_portion:    el.isPortion,
           is_conjugated: el.isConjugated,
           direction:     el.direction,
-          source_file:   el.sourceFile,
+          body:          el.body,
+          source_file:   toStoredSourceFile(workspaceRoot, el.sourceFile),
         }),
       },
     });

@@ -27,6 +27,8 @@
  * No I/O, no side effects. Deterministic: same input → same output.
  */
 
+import { formatReviews, formatSotifDetails } from './safety-export-format.js';
+
 import type {
   SafetyExportData,
   ComponentExportData,
@@ -42,6 +44,36 @@ import type {
 export interface SphinxNeedsOutput {
   /** Relative path (forward-slash separators) → file content string */
   files: Map<string, string>;
+}
+
+/**
+ * Caller-controlled switches for what the generated report contains.
+ * Every field is optional and defaults to the historical behaviour, so
+ * `generateSphinxNeedsRst(data)` is unchanged.
+ */
+export interface SphinxNeedsGeneratorOptions {
+  /**
+   * Write the semi-quantitative risk-rating values — Severity, Occurrence,
+   * Detection and RPN — into the report. Default `true`.
+   *
+   * When `false`, the malfunction "Risk Rating" field, the "Max Risk Rating"
+   * column of `status.rst` and the risk-rating rows of the per-component
+   * Analysis Statistics table are all omitted. A malfunction's free-text
+   * risk-rating note survives, rendered as its own "Risk Rating Note" field.
+   */
+  includeRiskRatings?: boolean;
+}
+
+/** Options with every default applied, threaded through the private builders. */
+interface ResolvedOptions {
+  includeRiskRatings: boolean;
+}
+
+function resolveOptions(options: SphinxNeedsGeneratorOptions | undefined): ResolvedOptions {
+  return {
+    // Only an explicit `false` turns ratings off — undefined keeps them.
+    includeRiskRatings: options?.includeRiskRatings !== false,
+  };
 }
 
 // ── ASIL priority ────────────────────────────────────────────────────────────
@@ -180,11 +212,25 @@ function flattenText(value: string): string {
   return value.replace(/\r\n?|\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
+/** A rendered risk-rating block: the directive field label and its content. */
+interface RiskRatingField {
+  label: string;
+  text: string;
+}
+
 /**
- * Format a risk rating as a human-readable string.
- * Returns undefined if the risk rating has no meaningful content.
+ * Format a risk rating as a human-readable directive field.
+ * Returns undefined if the risk rating has no content worth emitting.
+ *
+ * With `includeRiskRatings: false` the Severity / Occurrence / Detection / RPN
+ * values are dropped and only the free-text note remains — under its own
+ * "Risk Rating Note" label, so the report never implies a rating that the
+ * project does not maintain.
  */
-function formatRiskRating(rr: RiskRatingData | null): string | undefined {
+function formatRiskRating(
+  rr: RiskRatingData | null,
+  options: ResolvedOptions,
+): RiskRatingField | undefined {
   if (!rr) return undefined;
 
   const lines: string[] = [];
@@ -199,6 +245,12 @@ function formatRiskRating(rr: RiskRatingData | null): string | undefined {
     return undefined;
   }
 
+  if (!options.includeRiskRatings) {
+    if (!hasNote) return undefined;
+    const noteOnly = flattenText(rr.risk_rating_note);
+    return noteOnly ? { label: 'Risk Rating Note', text: noteOnly } : undefined;
+  }
+
   if (hasSeverity) lines.push(`Severity: ${flattenText(rr.has_severity)}`);
   if (hasOccurrence) lines.push(`Occurrence: ${flattenText(rr.has_occurrence_level)}`);
   if (hasDetection) lines.push(`Detection: ${flattenText(rr.has_detection_level)}`);
@@ -211,12 +263,15 @@ function formatRiskRating(rr: RiskRatingData | null): string | undefined {
     if (noteText) lines.push(`Note: ${noteText}`);
   }
 
-  return lines.length > 0 ? lines.join('\n') : undefined;
+  return lines.length > 0 ? { label: 'Risk Rating', text: lines.join('\n') } : undefined;
 }
 
 // ── Malfunction directive rendering ─────────────────────────────────────────
 
-function renderMalfunctionDirective(mf: MalfunctionExportData): string {
+function renderMalfunctionDirective(
+  mf: MalfunctionExportData,
+  options: ResolvedOptions,
+): string {
   const lines: string[] = [`.. mf:: ${mf.name}`, `   :id: ${mf.id}`];
 
   if (mf.asil && normalizeAsil(mf.asil)) {
@@ -246,12 +301,19 @@ function renderMalfunctionDirective(mf: MalfunctionExportData): string {
   lines.push('');
   lines.push(...renderDirectiveField('Description', description));
 
-  const riskText = formatRiskRating(mf.riskRating);
-  if (riskText) {
+  const risk = formatRiskRating(mf.riskRating, options);
+  if (risk) {
     lines.push('');
-    lines.push(...renderDirectiveField('Risk Rating', riskText));
+    lines.push(...renderDirectiveField(risk.label, risk.text));
   }
 
+  for (const [label, content] of [
+    ['Reviews', formatReviews(mf.reviews)],
+    ['Functional Insufficiencies', formatSotifDetails(mf.functionalInsufficiencies)],
+    ['Triggering Conditions', formatSotifDetails(mf.triggeringConditions)],
+  ]) {
+    if (content) lines.push('', ...renderDirectiveField(label, content));
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -271,6 +333,10 @@ function renderRequirementDirective(req: RequirementExportData): string {
   if (req.reqId && req.reqId.trim().length > 0) {
     lines.push(...renderDirectiveField('Requirement ID', req.reqId));
     lines.push('');
+  }
+
+  if (req.originatingTask) {
+    lines.push(...renderDirectiveField('Originating Task', req.originatingTask), '');
   }
 
   if (req.reqLinkedTo && req.reqLinkedTo.trim().length > 0) {
@@ -337,7 +403,10 @@ function renderSafetyNoteDirective(note: SafetyNoteExportData): string {
 
 // ── Analysis Statistics section ──────────────────────────────────────────────
 
-function buildAnalysisStatistics(component: ComponentExportData): string {
+function buildAnalysisStatistics(
+  component: ComponentExportData,
+  options: ResolvedOptions,
+): string {
   const lines: string[] = [];
 
   // Safety Tasks by status
@@ -401,13 +470,15 @@ function buildAnalysisStatistics(component: ComponentExportData): string {
   lines.push('Functional Failure Modes');
   lines.push('~~~~~~~~~~~~~~~~~~~~~~~~');
   lines.push('');
-  lines.push('.. csv-table:: component malfunctions Summary');
+  lines.push('.. csv-table:: Component Malfunctions Summary');
   lines.push('   :header: "Metric", "Value"');
   lines.push('   :widths: auto');
   lines.push('');
-  lines.push(`   "Total component malfunctions", "${component.functionalMFs.length}"`);
-  lines.push(`   "Malfunctions with Risk Rating", "${functionalWithRisk}"`);
-  lines.push(`   "Malfunctions without Risk Rating", "${functionalWithoutRisk}"`);
+  lines.push(`   "Total Component Malfunctions", "${component.functionalMFs.length}"`);
+  if (options.includeRiskRatings) {
+    lines.push(`   "Malfunctions with Risk Rating", "${functionalWithRisk}"`);
+    lines.push(`   "Malfunctions without Risk Rating", "${functionalWithoutRisk}"`);
+  }
   lines.push('');
   lines.push('');
 
@@ -430,7 +501,10 @@ function buildAnalysisStatistics(component: ComponentExportData): string {
 
 // ── Per-component RST file ───────────────────────────────────────────────────
 
-function buildComponentRst(component: ComponentExportData): string {
+function buildComponentRst(
+  component: ComponentExportData,
+  options: ResolvedOptions,
+): string {
   const lines: string[] = [];
 
   // Section heading
@@ -455,8 +529,22 @@ function buildComponentRst(component: ComponentExportData): string {
   lines.push('');
   lines.push('');
 
+  for (const [label, content] of [
+    ['Tag Details', (component.tagDetails ?? []).map(tag =>
+      `Name: ${tag.name}\nDescription: ${tag.description}\nColor: ${tag.color}`).join('\n\n')],
+    ['Unlinked Functional Insufficiencies', formatSotifDetails(component.unlinkedFunctionalInsufficiencies)],
+    ['Unlinked Triggering Conditions', formatSotifDetails(component.unlinkedTriggeringConditions)],
+    ['Unlinked Reviews', formatReviews(component.unlinkedReviews)],
+  ]) {
+    if (content) {
+      lines.push(label, repeatChar('-', label.length), '');
+      // A line block preserves readable field boundaries without creating needs.
+      lines.push(...content.split('\n').map(line => `| ${line}`), '', '');
+    }
+  }
+
   // Analysis Statistics
-  lines.push(buildAnalysisStatistics(component));
+  lines.push(buildAnalysisStatistics(component, options));
 
   // Safety Information (notes)
   lines.push('Safety Information');
@@ -500,8 +588,8 @@ function buildComponentRst(component: ComponentExportData): string {
   }
   lines.push('');
 
-  // component malfunctions
-  lines.push('component malfunctions');
+  // Component Malfunctions
+  lines.push('Component Malfunctions');
   lines.push('------------------------');
   lines.push('');
   if (component.functionalMFs.length === 0) {
@@ -509,7 +597,7 @@ function buildComponentRst(component: ComponentExportData): string {
     lines.push('   No functional failure modes recorded for this component.');
     lines.push('');
   } else {
-    lines.push(component.functionalMFs.map(renderMalfunctionDirective).join('\n\n'));
+    lines.push(component.functionalMFs.map(mf => renderMalfunctionDirective(mf, options)).join('\n\n'));
     lines.push('');
   }
   lines.push('');
@@ -523,7 +611,7 @@ function buildComponentRst(component: ComponentExportData): string {
     lines.push('   No failure modes recorded for these ports.');
     lines.push('');
   } else {
-    lines.push(component.receiverPortMFs.map(renderMalfunctionDirective).join('\n\n'));
+    lines.push(component.receiverPortMFs.map(mf => renderMalfunctionDirective(mf, options)).join('\n\n'));
     lines.push('');
   }
   lines.push('');
@@ -537,7 +625,7 @@ function buildComponentRst(component: ComponentExportData): string {
     lines.push('   No failure modes recorded for these ports.');
     lines.push('');
   } else {
-    lines.push(component.providerPortMFs.map(renderMalfunctionDirective).join('\n\n'));
+    lines.push(component.providerPortMFs.map(mf => renderMalfunctionDirective(mf, options)).join('\n\n'));
     lines.push('');
   }
   lines.push('');
@@ -547,10 +635,15 @@ function buildComponentRst(component: ComponentExportData): string {
 
 // ── status.rst ───────────────────────────────────────────────────────────────
 
-function buildStatusRst(data: SafetyExportData): string {
+function buildStatusRst(data: SafetyExportData, options: ResolvedOptions): string {
   // Components are already sorted alphabetically by the aggregator,
   // but we sort here too for determinism in case the caller doesn't guarantee order.
   const sorted = [...data.components].sort((a, b) => a.name.localeCompare(b.name));
+
+  // "Max Risk Rating" is the maximum RPN, so it goes away with the ratings.
+  const header = options.includeRiskRatings
+    ? '   :header: "Component", "Max ASIL", "Max Risk Rating", "Ports", "Missing MF", "Tags"'
+    : '   :header: "Component", "Max ASIL", "Ports", "Missing MF", "Tags"';
 
   const lines: string[] = [
     'Status',
@@ -560,18 +653,16 @@ function buildStatusRst(data: SafetyExportData): string {
     '----------------------',
     '',
     '.. csv-table:: Safety Status',
-    '   :header: "Component", "Max ASIL", "Max Risk Rating", "Ports", "Missing MF", "Tags"',
+    header,
     '   :widths: auto',
     '',
   ];
 
   if (sorted.length === 0) {
-    lines.push('   -, -, -, -, -, -');
+    lines.push(options.includeRiskRatings ? '   -, -, -, -, -, -' : '   -, -, -, -, -');
   } else {
     for (const component of sorted) {
       const maxAsil = computeMaxAsil(component) ?? '';
-      const maxRisk = computeMaxRisk(component);
-      const riskValue = maxRisk !== undefined ? String(maxRisk) : '';
       const portCount = component.portCount ?? 0;
 
       // Missing MF: ports that have no malfunction coverage
@@ -579,7 +670,14 @@ function buildStatusRst(data: SafetyExportData): string {
       const missingMF = Math.max(0, portCount - portsWithMF);
 
       const tags = component.tags && component.tags.length > 0 ? component.tags.join('; ') : '';
-      lines.push(`   ${component.name}, ${maxAsil}, ${riskValue}, ${portCount}, ${missingMF}, ${tags}`);
+
+      const cells = [component.name, maxAsil];
+      if (options.includeRiskRatings) {
+        const maxRisk = computeMaxRisk(component);
+        cells.push(maxRisk !== undefined ? String(maxRisk) : '');
+      }
+      cells.push(String(portCount), String(missingMF), tags);
+      lines.push(`   ${cells.join(', ')}`);
     }
   }
 
@@ -589,7 +687,7 @@ function buildStatusRst(data: SafetyExportData): string {
 
 // ── index.rst ────────────────────────────────────────────────────────────────
 
-function buildIndexRst(data: SafetyExportData): string {
+function buildIndexRst(data: SafetyExportData, documents: ComponentDocument[]): string {
   const title = 'SW Safety Analysis Export';
   const titleUnderline = repeatChar('=', title.length);
 
@@ -612,9 +710,9 @@ function buildIndexRst(data: SafetyExportData): string {
   ];
 
   // Components are already sorted alphabetically by the aggregator
-  const sorted = [...data.components].sort((a, b) => a.name.localeCompare(b.name));
-  for (const component of sorted) {
-    lines.push(`   components/${component.name}`);
+  const sorted = [...documents].sort((a, b) => a.component.name.localeCompare(b.component.name));
+  for (const { docname } of sorted) {
+    lines.push(`   components/${docname}`);
   }
 
   lines.push('');
@@ -653,6 +751,23 @@ function buildExportInfoJson(data: SafetyExportData, fileKeys: string[]): string
   return JSON.stringify(info, null, 2);
 }
 
+interface ComponentDocument {
+  component: ComponentExportData;
+  docname: string;
+}
+
+/** One document per input entry, even when node IDs repeat. */
+function componentDocuments(components: ComponentExportData[]): ComponentDocument[] {
+  const used = new Set<string>();
+  return components.map(component => {
+    const base = encodeURIComponent(component.name) || 'Component';
+    let name = base;
+    while (used.has(name.toLowerCase())) name = `${name}_${Math.abs(component.nodeId)}`;
+    used.add(name.toLowerCase());
+    return { component, docname: name };
+  });
+}
+
 // ── Main entry point ─────────────────────────────────────────────────────────
 
 /**
@@ -662,20 +777,26 @@ function buildExportInfoJson(data: SafetyExportData, fileKeys: string[]): string
  * to file content strings. The function is pure: no I/O, no side effects.
  * Same input always produces the same output.
  */
-export function generateSphinxNeedsRst(data: SafetyExportData): SphinxNeedsOutput {
+export function generateSphinxNeedsRst(
+  data: SafetyExportData,
+  options?: SphinxNeedsGeneratorOptions,
+): SphinxNeedsOutput {
+  const resolved = resolveOptions(options);
   const files = new Map<string, string>();
 
+  const documents = componentDocuments(data.components);
+
   // Generate per-component RST files
-  for (const component of data.components) {
-    const filePath = `components/${component.name}.rst`;
-    files.set(filePath, buildComponentRst(component));
+  for (const { component, docname } of documents) {
+    const filePath = `components/${docname}.rst`;
+    files.set(filePath, buildComponentRst(component, resolved));
   }
 
   // Generate status.rst
-  files.set('status.rst', buildStatusRst(data));
+  files.set('status.rst', buildStatusRst(data, resolved));
 
   // Generate index.rst
-  files.set('index.rst', buildIndexRst(data));
+  files.set('index.rst', buildIndexRst(data, documents));
 
   // Generate export-info.json (needs the list of all file keys)
   const allFileKeys = Array.from(files.keys());

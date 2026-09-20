@@ -47,6 +47,9 @@ import {
   Spin,
   Typography,
 } from 'antd';
+import { MODEL_OPTIONS } from './llmModelOptions';
+import { ModelFieldLabel } from './ModelFieldLabel';
+import { ConnectionTestResult } from './ConnectionTestResult';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { LlmProvider, LlmSaveSettingsInput, LlmSettings } from '@riacore/app-contracts';
 import { useLlmSettings } from '../../hooks/useLlmSettings';
@@ -70,42 +73,6 @@ const PROVIDER_OPTIONS: { value: LlmProvider; label: string }[] = [
   { value: 'ollama',         label: 'Ollama (local)' },
 ];
 
-const MODEL_OPTIONS: Record<LlmProvider, { value: string }[]> = {
-  bedrock: [
-    { value: 'eu.anthropic.claude-sonnet-4-6' },
-    { value: 'eu.anthropic.claude-opus-4-7' },
-    { value: 'us.anthropic.claude-sonnet-4-5' },
-    { value: 'us.amazon.nova-pro-v1:0' },
-    { value: 'us.amazon.nova-lite-v1:0' },
-  ],
-  anthropic: [
-    { value: 'claude-sonnet-4-5' },
-    { value: 'claude-opus-4-5' },
-    { value: 'claude-3-7-sonnet-20250219' },
-    { value: 'claude-3-5-haiku-20241022' },
-  ],
-  openai: [
-    { value: 'gpt-4o' },
-    { value: 'gpt-4o-mini' },
-    { value: 'o3' },
-    { value: 'o4-mini' },
-  ],
-  'google-vertex': [
-    { value: 'gemini-2.0-flash-001' },
-    { value: 'gemini-2.5-pro-preview-05-06' },
-    { value: 'gemini-2.5-flash-preview-05-20' },
-  ],
-  ollama: [
-    { value: 'gemma3:4b-it-qat' },
-    { value: 'gemma3:1b' },
-    { value: 'llama3.3' },
-    { value: 'llama3.2' },
-    { value: 'mistral' },
-    { value: 'qwen2.5' },
-    { value: 'deepseek-r1' },
-    { value: 'phi4-mini' },
-  ],
-};
 
 const STORED = '(stored — leave blank to keep)';
 
@@ -156,6 +123,8 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
   const settingsQuery = useLlmSettings();
   const saveMutation = useSaveLlmSettings();
   const [testing, setTesting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
 
   // Track the selected provider so we can show/hide the right fields.
@@ -193,11 +162,18 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
   const settings = settingsQuery.data;
   const hasCredentials = settings?.has_credentials === true;
 
+  // A save refetches settings while the dialog stays open. Reset the success
+  // message only when opening it, otherwise that refetch erases confirmation.
+  useEffect(() => {
+    if (open) setSaved(false);
+  }, [open]);
+
   // Re-seed the form whenever the dialog opens or settings change.
   useEffect(() => {
     if (open && settings) {
       const vals = buildInitialValues(settings);
       form.setFieldsValue(vals);
+      setDirty(false);
       setSelectedProvider(settings.provider);
       setTestResult(null);
       if (settings.provider === 'ollama') {
@@ -275,7 +251,10 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
 
     try {
       await saveMutation.mutateAsync(payload);
-      onClose();
+      setTestResult(null);
+      setDirty(false);
+      setSaved(true);
+      void message.success('LLM settings saved');
     } catch (err) {
       void message.error(
         `Failed to save LLM settings: ${err instanceof Error ? err.message : String(err)}`,
@@ -440,7 +419,9 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
       onOk={() => void handleSave()}
       onCancel={handleCancel}
       okText="Save"
+      cancelText="Close"
       confirmLoading={saveMutation.isPending}
+      okButtonProps={{ disabled: testing }}
       destroyOnHidden
       mask={{ closable: !saveMutation.isPending }}
       width={520}
@@ -463,7 +444,9 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
         <Form
           form={form}
           layout="vertical"
-          size="small"
+          size="middle"
+          disabled={saveMutation.isPending || testing}
+          onValuesChange={() => { setDirty(true); setSaved(false); setTestResult(null); }}
           initialValues={buildInitialValues(settings)}
           autoComplete="off"
         >
@@ -481,7 +464,7 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
 
           {/* Model selector — live list for Ollama, static suggestions for cloud providers */}
           <Form.Item
-            label="Model"
+            label={<ModelFieldLabel provider={selectedProvider} />}
             name="model_id"
             rules={[{ required: true, message: 'Enter a model id' }]}
           >
@@ -536,27 +519,19 @@ export function LlmSettingsDialog({ open, onClose }: Props) {
               <Button
                 onClick={() => void handleTestConnection()}
                 loading={testing}
-                disabled={selectedProvider !== 'ollama' && !hasCredentials}
+                disabled={dirty || saveMutation.isPending || (selectedProvider !== 'ollama' && !hasCredentials && !saved)}
               >
                 Test Connection
               </Button>
-              {selectedProvider !== 'ollama' && !hasCredentials && (
+              {(dirty || saved || (selectedProvider !== 'ollama' && !hasCredentials)) && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Save credentials first
+                  {dirty ? 'Save changes before testing' : saved ? 'Changes saved' : 'Save credentials first'}
                 </Text>
               )}
             </Space>
           </Form.Item>
 
-          {testResult && (
-            <Alert
-              type={testResult.ok ? 'success' : 'error'}
-              message={testResult.ok ? 'Connection successful' : 'Connection failed'}
-              description={testResult.ok ? undefined : testResult.error}
-              showIcon
-              style={{ marginTop: 12 }}
-            />
-          )}
+          {testResult && <ConnectionTestResult result={testResult} />}
         </Form>
       )}
     </Modal>

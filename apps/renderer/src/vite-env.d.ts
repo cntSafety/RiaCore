@@ -121,6 +121,7 @@ import type {
   ConnectionEntry,
   DisconnectResult,
   CrossNsLinkSettings,
+  ExportSettings,
   LayoutRecord,
   ViewLayoutSourceRef,
   DiagramLayout,
@@ -247,6 +248,10 @@ declare global {
         getSettings(): Promise<CrossNsLinkSettings>;
         saveSettings(settings: CrossNsLinkSettings): Promise<void>;
       };
+      exportSettings: {
+        getSettings(): Promise<ExportSettings>;
+        saveSettings(settings: ExportSettings): Promise<void>;
+      };
       canvasLayout: {
         getLayout(): Promise<DiagramLayout>;
         setRecords(records: LayoutRecord[]): Promise<DiagramLayout>;
@@ -361,7 +366,7 @@ declare global {
         unlinkDirectRequirementFromFm(params: { failureModeNodeId: number; requirementNodeId: number }): Promise<void>;
         getDirectRequirementsForFm(params: { failureModeNodeId: number }): Promise<ConceptInstanceData[]>;
         searchRequirementsAcrossNamespaces(params: { query: string }): Promise<ConceptInstanceData[]>;
-        exportSphinxNeeds(params: { namespace: string; outputDir: string }): Promise<{ exportedFiles: string[]; outputDir: string }>;
+        exportSphinxNeeds(params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }): Promise<{ exportedFiles: string[]; outputDir: string }>;
         exportXlsx(params: { namespace: string; outputPath: string }): Promise<{ outputPath: string }>;
         getSafetyData(params: { namespace: string }): Promise<SafetyExportData>;
       };

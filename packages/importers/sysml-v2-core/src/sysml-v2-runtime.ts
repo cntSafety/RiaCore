@@ -22,6 +22,7 @@ import type { ImportDiagnostic } from '@riacore/app-contracts';
 import { resolveFiles, DEFAULT_ENABLED_CATEGORIES, type SysmlImportConfig } from './config-loader.js';
 import { parseSysmlProject } from './sysml-v2-parser.js';
 import { mapModelToConceptBatches, mapModelToRelationshipBatches } from './sysml-v2-mapper.js';
+import { materializeConnectorEndpoints } from './sysml-v2-endpoints.js';
 
 export function createSysmlV2Runtime(): ImporterRuntime {
   return {
@@ -55,6 +56,17 @@ export function createSysmlV2Runtime(): ImporterRuntime {
         total: files.length,
       });
       const model = parseSysmlProject({ ...DEFAULT_ENABLED_CATEGORIES, ...config.elements }, files);
+      // Before the batches are built, so the synthetic endpoint features are
+      // written as ordinary concepts and relationships rather than needing a
+      // second pass over the graph.
+      const rewrittenEndpoints = materializeConnectorEndpoints(model);
+      if (rewrittenEndpoints > 0) {
+        diagnostics.push({
+          level: 'info',
+          message: `Resolved ${rewrittenEndpoints} flow/binding endpoint(s) to a (container, pin) pair. ` +
+            'The pilot export names only the containing usage on these, so without this they carry no pin.',
+        });
+      }
 
       const conceptBatches = mapModelToConceptBatches(model);
       const totalConcepts = conceptBatches.reduce((sum, batch) => sum + batch.items.length, 0);

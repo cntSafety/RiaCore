@@ -17,11 +17,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+/** Longest annotation preview used as a label before it is elided. */
+const ANNOTATION_PREVIEW_LENGTH = 60;
+
 /**
  * Extract a human-readable node name from concept-instance attributes.
  *
  * For requirements prefer `req_name` over technical IDs.
  * For safety notes return a short preview from `note_text`.
+ * For SysML annotations return a short preview from `body`.
  */
 export function extractNodeName(attrs: Record<string, unknown>, concept?: string): string {
   const normalizedConcept = (concept ?? '').toLowerCase();
@@ -37,6 +41,34 @@ export function extractNodeName(attrs: Record<string, unknown>, concept?: string
     const noteText = attrs.note_text;
     if (typeof noteText === 'string' && noteText.trim().length > 0) {
       return noteText.trim().slice(0, 10);
+    }
+  }
+
+  // SysML `doc` / `comment` annotations are written without a name in nearly
+  // every model, so their `name` is one the importer supplied for identity —
+  // `$doc`, or the JSON importer's id-suffixed stable path. Neither says
+  // anything, and there is no shortage of them in one tree, so the text itself
+  // is the only label that distinguishes one from the next. A `$` prefix is the
+  // textual importer's marker for a supplied name and cannot occur in a SysML
+  // identifier, so an author-declared `doc Rationale` still wins.
+  if (normalizedConcept === 'documentation' || normalizedConcept === 'comment') {
+    const declared = [attrs.name, attrs.declared_name].find(
+      (value): value is string =>
+        typeof value === 'string' && value.length > 0 && !value.startsWith('$'),
+    );
+    if (declared) return declared;
+
+    const body = attrs.body;
+    if (typeof body === 'string' && body.trim().length > 0) {
+      const preview = body.replace(/\s+/g, ' ').trim();
+      if (preview.length <= ANNOTATION_PREVIEW_LENGTH) return preview;
+
+      // Elide on a word boundary when there is one late enough to still leave a
+      // readable label; a cut mid-word reads like a corrupted name.
+      const clipped = preview.slice(0, ANNOTATION_PREVIEW_LENGTH);
+      const lastSpace = clipped.lastIndexOf(' ');
+      const stem = lastSpace > ANNOTATION_PREVIEW_LENGTH / 2 ? clipped.slice(0, lastSpace) : clipped;
+      return `${stem.trimEnd()}…`;
     }
   }
 

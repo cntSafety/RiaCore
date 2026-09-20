@@ -32,6 +32,7 @@ import { registerNamespaceChannels } from './handlers/namespace-channels.js';
 import { registerMetamodelChannels } from './handlers/metamodel-channels.js';
 import { registerNamespaceConnectionChannels } from './handlers/namespace-connection-channels.js';
 import { registerCrossNsLinkSettingsChannels } from './handlers/cross-ns-link-settings-channels.js';
+import { registerExportSettingsChannels } from './handlers/export-settings-channels.js';
 import { registerCanvasLayoutChannels } from './handlers/canvas-layout-channels.js';
 import { registerNamespaceMergeChannels } from './handlers/namespace-merge-channels.js';
 import { registerGraphChannels } from './handlers/graph-channels.js';
@@ -82,6 +83,7 @@ export function createCommandDispatcher(): ICommandDispatcher {
   registerMetamodelChannels(reg);
   registerNamespaceConnectionChannels(reg);
   registerCrossNsLinkSettingsChannels(reg);
+  registerExportSettingsChannels(reg);
   registerCanvasLayoutChannels(reg);
   registerNamespaceMergeChannels(reg);
   registerGraphChannels(reg);

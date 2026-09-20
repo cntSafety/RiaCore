@@ -88,7 +88,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Alert, Button, Spin, Tooltip, theme } from 'antd';
-import { ApartmentOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, InfoCircleOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons';
 import type { EdgeSection, ElkPoint } from '../safety-analysis/utils/elkLayout';
 import { useCommonModelPresentation } from '../../../../hooks/usePresentation';
 import { useModelView, type ModelExpansion } from '../../../../hooks/useModelView';
@@ -532,6 +532,9 @@ function ModelViewCanvasInner({
   const [settledStructure, setSettledStructure] = useState('');
   const layoutReady = structureKey !== '' && settledStructure === structureKey;
   const [autoLayoutRunning, setAutoLayoutRunning] = useState(false);
+  // Off by default, and session-local — the same treatment tile positions get. It
+  // is a reference card, not a preference worth persisting.
+  const [legendOpen, setLegendOpen] = useState(false);
   const [fitRevision, setFitRevision] = useState(0);
   const autoLayoutRunId = useRef(0);
   const autoLayoutStartedFor = useRef<string | null>(null);
@@ -1092,19 +1095,42 @@ function ModelViewCanvasInner({
         <Background gap={18} size={1} color={token.colorBorderSecondary} />
         <Controls showInteractive={false} />
 
+        {/*
+          The legend is opt-in and sits with the canvas controls rather than in a
+          corner of its own. It answers a question a reader asks once — what does a
+          hollow pin mean, which colour is ASIL C — and then stops being useful,
+          which is a poor trade for a permanent strip across the top of the diagram.
+          Right-aligned so opening it grows the block leftwards into empty canvas
+          instead of pushing the buttons around.
+        */}
         <Panel position="bottom-right">
-          <Button
-            size="small"
-            icon={<ApartmentOutlined />}
-            onClick={handleAutoLayout}
-            loading={autoLayoutRunning}
-            disabled={!resolvedGraph || resolvedGraph.tiles.length === 0}
-          >
-            Auto Layout
-          </Button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            {legendOpen && <Legend />}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <Tooltip title={legendOpen ? 'Hide legend' : 'Show legend'}>
+                <Button
+                  size="small"
+                  icon={<InfoCircleOutlined />}
+                  onClick={() => setLegendOpen((open) => !open)}
+                  type={legendOpen ? 'primary' : 'default'}
+                  aria-label="Toggle legend"
+                  aria-pressed={legendOpen}
+                >
+                  Legend
+                </Button>
+              </Tooltip>
+              <Button
+                size="small"
+                icon={<ApartmentOutlined />}
+                onClick={handleAutoLayout}
+                loading={autoLayoutRunning}
+                disabled={!resolvedGraph || resolvedGraph.tiles.length === 0}
+              >
+                Auto Layout
+              </Button>
+            </div>
+          </div>
         </Panel>
-
-        <Panel position="top-left"><Legend /></Panel>
 
         {(expansions.length > 0 || query.isFetching) && (
           <Panel position="top-right">
@@ -1170,11 +1196,17 @@ function Legend() {
         display: 'flex',
         gap: 12,
         alignItems: 'center',
+        // Wraps rather than running off the canvas edge, since the panel is
+        // right-anchored and the strip grows leftwards.
         flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        maxWidth: 420,
         padding: '4px 10px',
         borderRadius: 6,
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
+        // Above the canvas but below any modal.
+        boxShadow: token.boxShadowTertiary,
       }}
     >
       {asilLevels.map(({ label, color }) => (
@@ -1183,6 +1215,22 @@ function Legend() {
           <span style={caption}>{label}</span>
         </div>
       ))}
+      {/*
+        A hollow pin is a port whose direction the model does not fix — see
+        `isBidirectionalPort`. It sits in the input column because a row has to pick
+        one, so the fill is what tells it apart from a plain input.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{
+          display: 'inline-block',
+          width: 10,
+          height: 10,
+          borderRadius: 2,
+          border: `1.5px solid ${token.colorTextQuaternary}`,
+          boxSizing: 'border-box',
+        }} />
+        <span style={caption}>bidirectional port</span>
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <WarningOutlined style={{ fontSize: 11, color: '#d4380d' }} />
         <span style={caption}>has malfunction</span>
@@ -1191,6 +1239,21 @@ function Legend() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{ display: 'inline-block', width: 14, height: 2, background: FLOW_STROKE }} />
         <span style={caption}>flow</span>
+      </div>
+      {/*
+        Dashed means the two ends are the same value seen from inside and outside —
+        a port delegation, or a SysML `bind` tying a definition's own parameter to a
+        nested usage's. Not a transfer between two peers, which is why it carries no
+        arrow. See `isDelegationLink`.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{
+          display: 'inline-block',
+          width: 14,
+          height: 0,
+          borderTop: `2px dashed ${token.colorTextSecondary}`,
+        }} />
+        <span style={caption}>delegation / binding</span>
       </div>
     </div>
   );

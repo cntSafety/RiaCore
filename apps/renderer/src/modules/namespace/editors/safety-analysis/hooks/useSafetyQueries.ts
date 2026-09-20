@@ -19,221 +19,281 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../../../../api/riacore';
+import { useWorkspaceQueryEnabled } from '../../../../../hooks/useWorkspaceQueryEnabled';
 
 export function useMalfunctions(namespace: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctions', namespace],
     queryFn: () => api.safety.getMalfunctions(namespace),
+    enabled: workspaceQueryEnabled,
   });
 }
 
 export function useMalfunctionsForElement(targetNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctionsForElement', targetNodeId],
     queryFn: () => api.safety.getMalfunctionsForElement(targetNodeId!),
-    enabled: targetNodeId !== undefined,
+    enabled: workspaceQueryEnabled && targetNodeId !== undefined,
   });
 }
 
 export function useMalfunction(nodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunction', nodeId],
     queryFn: () => api.safety.getMalfunction(nodeId!),
-    enabled: nodeId !== undefined,
+    enabled: workspaceQueryEnabled && nodeId !== undefined,
   });
 }
 
 export function useRiskRating(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.riskRating', fmNodeId],
     queryFn: () => api.safety.getRiskRating(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 export function useAllSafetyTasks(namespace: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.allSafetyTasks', namespace],
     queryFn: () => api.safety.getAllSafetyTasks(namespace),
+    enabled: workspaceQueryEnabled,
   });
 }
 
 export function useSafetyTasks(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.safetyTasks', fmNodeId],
     queryFn: () => api.safety.getSafetyTasks(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 // SOTIF: functional insufficiencies linked to a malfunction.
 export function useFunctionalInsufficiencies(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.functionalInsufficiencies', fmNodeId],
     queryFn: () => api.safety.getFunctionalInsufficiencies(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 // SOTIF: triggering conditions linked to a malfunction.
 export function useTriggeringConditions(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.triggeringConditions', fmNodeId],
     queryFn: () => api.safety.getTriggeringConditions(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 // SOTIF: all functional insufficiencies in a namespace (for the "link existing" picker).
 export function useAllFunctionalInsufficiencies(namespace: string, enabled = true) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.allFunctionalInsufficiencies', namespace],
     queryFn: () => api.safety.getAllFunctionalInsufficiencies(namespace),
-    enabled,
+    enabled: workspaceQueryEnabled && enabled,
   });
 }
 
 // SOTIF: all triggering conditions in a namespace (for the "link existing" picker).
 export function useAllTriggeringConditions(namespace: string, enabled = true) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.allTriggeringConditions', namespace],
     queryFn: () => api.safety.getAllTriggeringConditions(namespace),
-    enabled,
+    enabled: workspaceQueryEnabled && enabled,
   });
 }
 
 // SOTIF: reverse 1-to-n — malfunctions that reference a functional insufficiency.
 export function useMalfunctionsForFunctionalInsufficiency(fiNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctionsForFunctionalInsufficiency', fiNodeId],
     queryFn: () => api.safety.getMalfunctionsForFunctionalInsufficiency(fiNodeId!),
-    enabled: fiNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fiNodeId !== undefined,
   });
 }
 
 // SOTIF: reverse 1-to-n — malfunctions that reference a triggering condition.
 export function useMalfunctionsForTriggeringCondition(tcNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctionsForTriggeringCondition', tcNodeId],
     queryFn: () => api.safety.getMalfunctionsForTriggeringCondition(tcNodeId!),
-    enabled: tcNodeId !== undefined,
+    enabled: workspaceQueryEnabled && tcNodeId !== undefined,
   });
 }
 
 export function useMalfunctionForRiskRating(riskRatingNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctionForRiskRating', riskRatingNodeId],
     queryFn: () => api.safety.getMalfunctionForRiskRating(riskRatingNodeId!),
-    enabled: riskRatingNodeId !== undefined,
+    enabled: workspaceQueryEnabled && riskRatingNodeId !== undefined,
   });
 }
 
 export function useMalfunctionForReviewItem(reviewItemNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.malfunctionForReviewItem', reviewItemNodeId],
     queryFn: () => api.safety.getMalfunctionForReviewItem(reviewItemNodeId!),
-    enabled: reviewItemNodeId !== undefined,
+    enabled: workspaceQueryEnabled && reviewItemNodeId !== undefined,
   });
 }
 
 export function useRequirements(namespace: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.requirements', namespace],
     queryFn: () => api.safety.getRequirements(namespace),
+    enabled: workspaceQueryEnabled,
   });
 }
 
 export function useSafetyNotes(namespace: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.safetyNotes', namespace],
     queryFn: () => api.safety.getSafetyNotes(namespace),
+    enabled: workspaceQueryEnabled,
   });
 }
 
 export function useAllReviewItems(namespace: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.allReviewItems', namespace],
     queryFn: () => api.safety.getAllReviewItems(namespace),
+    enabled: workspaceQueryEnabled,
   });
 }
 
 export function useReviewItems(elementNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.reviewItems', elementNodeId],
     queryFn: () => api.safety.getReviewItems(elementNodeId!),
-    enabled: elementNodeId !== undefined,
+    enabled: workspaceQueryEnabled && elementNodeId !== undefined,
   });
 }
 
 export function usePropagations(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.propagations', fmNodeId],
     queryFn: () => api.safety.getPropagations(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 export function usePropagationsForComponent(structuralNodeId: number | undefined, safetyNamespace?: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.propagationsForComponent', structuralNodeId, safetyNamespace],
     queryFn: () => api.safety.getPropagationsForComponent(structuralNodeId!, safetyNamespace),
-    enabled: structuralNodeId !== undefined,
+    enabled: workspaceQueryEnabled && structuralNodeId !== undefined,
   });
 }
 
 export function useRequirementsForFm(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.requirementsForFm', fmNodeId],
     queryFn: () => api.safety.getRequirementsForFm(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 export function useNotesForFm(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.notesForFm', fmNodeId],
     queryFn: () => api.safety.getNotesForFm(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 export function useNotesForElement(elementNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.notesForElement', elementNodeId],
     queryFn: () => api.safety.getNotesForElement(elementNodeId!),
-    enabled: elementNodeId !== undefined,
+    enabled: workspaceQueryEnabled && elementNodeId !== undefined,
   });
 }
 
 export function useInstance(nodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.instance', nodeId],
     queryFn: () => api.safety.getInstance(nodeId!),
-    enabled: nodeId !== undefined,
+    enabled: workspaceQueryEnabled && nodeId !== undefined,
   });
 }
 
 export function useNoteParent(noteNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.noteParent', noteNodeId],
     queryFn: () => api.safety.getNoteParent(noteNodeId!),
-    enabled: noteNodeId !== undefined,
+    enabled: workspaceQueryEnabled && noteNodeId !== undefined,
   });
 }
 
 export function useDirectRequirementsForFm(fmNodeId: number | undefined) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.directRequirementsForFm', fmNodeId],
     queryFn: () => api.safety.getDirectRequirementsForFm(fmNodeId!),
-    enabled: fmNodeId !== undefined,
+    enabled: workspaceQueryEnabled && fmNodeId !== undefined,
   });
 }
 
 export function useSearchRequirementsAcrossNamespaces(query: string) {
+  const workspaceQueryEnabled = useWorkspaceQueryEnabled();
+
   return useQuery({
     queryKey: ['safety.requirementSearch', query],
     queryFn: () => api.safety.searchRequirementsAcrossNamespaces(query),
-    enabled: query.trim().length >= 2,
+    enabled: workspaceQueryEnabled && query.trim().length >= 2,
     staleTime: 30_000,
   });
 }

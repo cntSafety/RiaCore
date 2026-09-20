@@ -42,12 +42,12 @@
  */
 
 import ExcelJS from 'exceljs';
+import { formatReviews, formatSotifDetails } from './safety-export-format.js';
 import type {
   SafetyExportData,
   ComponentExportData,
   MalfunctionExportData,
   RiskRatingData,
-  ReviewExportData,
 } from '@riacore/app-contracts';
 
 // ── ASIL priority (mirrors sphinx-needs-generator.ts) ───────────────────────
@@ -130,21 +130,6 @@ function formatRiskRating(rr: RiskRatingData | null): string {
   if (flatten(rr.risk_priority_number)) parts.push(`RPN: ${flatten(rr.risk_priority_number)}`);
   if (flatten(rr.risk_rating_note)) parts.push(`Note: ${flatten(rr.risk_rating_note)}`);
   return parts.join('\n');
-}
-
-function formatReviews(reviews: ReviewExportData[]): string {
-  if (reviews.length === 0) return '';
-  return reviews.map(r => {
-    const status = r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : '';
-    const verdict = flatten(r.verdict);
-    const comment = flatten(r.reviewerComment);
-    const authorNote = flatten(r.authorComment);
-    const parts = [status];
-    if (verdict) parts.push(`Verdict: ${verdict}`);
-    if (comment) parts.push(`Comment: ${comment}`);
-    if (authorNote) parts.push(`Resolution: ${authorNote}`);
-    return parts.join(' | ');
-  }).join('\n');
 }
 
 // ── Sheet-name sanitisation ─────────────────────────────────────────────────
@@ -232,12 +217,15 @@ interface RequirementRow {
   asil: string;
   text: string;
   link: string;
+  originatingTask: string;
 }
 
 interface TagRow {
   componentName: string;
   sheetName: string;
   tag: string;
+  description: string;
+  color: string;
 }
 
 interface NoteRow {
@@ -274,6 +262,7 @@ export async function generateSafetyXlsx(data: SafetyExportData): Promise<Buffer
     REQUIREMENTS_SHEET.toLowerCase(),
     NOTES_SHEET.toLowerCase(),
     TAGS_SHEET.toLowerCase(),
+    'unlinked details',
   ]);
   const sheetNameByComponent = new Map<number, string>();
   for (const component of components) {
@@ -320,11 +309,13 @@ export async function generateSafetyXlsx(data: SafetyExportData): Promise<Buffer
         asil: req.reqAsil,
         text: req.reqText,
         link: req.reqLinkedTo ?? '',
+        originatingTask: req.originatingTask ?? '',
       });
     }
 
-    for (const tag of component.tags) {
-      tagRows.push({ componentName: component.name, sheetName, tag });
+    const tags = component.tagDetails ?? component.tags.map(name => ({ name, description: '', color: '' }));
+    for (const tag of tags) {
+      tagRows.push({ componentName: component.name, sheetName, tag: tag.name, description: tag.description, color: tag.color });
     }
 
     for (const note of component.safetyNotes) {
@@ -337,6 +328,14 @@ export async function generateSafetyXlsx(data: SafetyExportData): Promise<Buffer
     }
   }
 
+  // SOTIF-only fields are relevant only when this analysis contains SOTIF
+  // records. Use the selected namespace's data, not its user-editable name.
+  const includeSotifDetails = components.some(component =>
+    (component.unlinkedFunctionalInsufficiencies?.length ?? 0) > 0 ||
+    (component.unlinkedTriggeringConditions?.length ?? 0) > 0 ||
+    [...component.functionalMFs, ...component.receiverPortMFs, ...component.providerPortMFs].some(mf =>
+      (mf.functionalInsufficiencies?.length ?? 0) > 0 || (mf.triggeringConditions?.length ?? 0) > 0));
+
   // ── Build sheets (creation order = tab order) ─────────────────────────────
   buildOverviewSheet(workbook, components, sheetNameByComponent);
   for (const component of components) {
@@ -346,12 +345,14 @@ export async function generateSafetyXlsx(data: SafetyExportData): Promise<Buffer
       sheetNameByComponent.get(component.nodeId)!,
       taskRowById,
       requirementRowById,
+      includeSotifDetails,
     );
   }
   buildTasksSheet(workbook, taskRows);
   buildRequirementsSheet(workbook, requirementRows);
   buildNotesSheet(workbook, noteRows);
   buildTagsSheet(workbook, tagRows);
+  buildUnlinkedDetailsSheet(workbook, components);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
@@ -408,6 +409,7 @@ function buildComponentSheet(
   sheetName: string,
   taskRowById: Map<string, number>,
   requirementRowById: Map<string, number>,
+  includeSotifDetails: boolean,
 ): void {
   const sheet = workbook.addWorksheet(sheetName);
 
@@ -451,6 +453,7 @@ function buildComponentSheet(
     'Safety Tasks',
     'Safety Requirements',
     'Review',
+    ...(includeSotifDetails ? ['Functional Insufficiencies', 'Triggering Conditions'] : []),
   ]);
   styleHeaderRow(header);
   const headerRowNumber = header.number;
@@ -472,6 +475,10 @@ function buildComponentSheet(
       mf.taskIds.join(', '),
       mf.reqIds.join(', '),
       formatReviews(mf.reviews),
+      ...(includeSotifDetails ? [
+        formatSotifDetails(mf.functionalInsufficiencies),
+        formatSotifDetails(mf.triggeringConditions),
+      ] : []),
     ]);
     row.alignment = { vertical: 'top', wrapText: true };
 
@@ -501,11 +508,12 @@ function buildComponentSheet(
 
   if (malfunctionCount(component) === 0) {
     const note = sheet.addRow(['No malfunctions recorded for this component.']);
-    sheet.mergeCells(note.number, 1, note.number, 12);
+    sheet.mergeCells(note.number, 1, note.number, includeSotifDetails ? 14 : 12);
     note.getCell(1).font = { italic: true };
   }
 
-  setColumnWidths(sheet, [24, 14, 18, 28, 40, 8, 30, 22, 22, 22, 24, 28]);
+  setColumnWidths(sheet, [24, 14, 18, 28, 40, 8, 30, 22, 22, 22, 24, 40,
+    ...(includeSotifDetails ? [50, 50] : [])]);
 
 }
 
@@ -568,6 +576,7 @@ function buildRequirementsSheet(workbook: ExcelJS.Workbook, requirementRows: Req
     'ASIL',
     'Requirement Text',
     'Link',
+    'Originating Task',
   ]);
   styleHeaderRow(header);
 
@@ -580,6 +589,7 @@ function buildRequirementsSheet(workbook: ExcelJS.Workbook, requirementRows: Req
       req.asil,
       req.text,
       req.link,
+      req.originatingTask,
     ]);
     row.alignment = { vertical: 'top', wrapText: true };
     const compCell = row.getCell(2);
@@ -597,8 +607,8 @@ function buildRequirementsSheet(workbook: ExcelJS.Workbook, requirementRows: Req
     sheet.addRow(['No safety requirements recorded.']).getCell(1).font = { italic: true };
   }
 
-  setColumnWidths(sheet, [20, 24, 26, 18, 8, 50, 28]);
-  sheet.autoFilter = { from: 'A1', to: 'G1' };
+  setColumnWidths(sheet, [20, 24, 26, 18, 8, 50, 28, 24]);
+  sheet.autoFilter = { from: 'A1', to: 'H1' };
 }
 
 // ── Safety Notes sheet ──────────────────────────────────────────────────────
@@ -634,11 +644,12 @@ function buildTagsSheet(workbook: ExcelJS.Workbook, tagRows: TagRow[]): void {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
 
-  const header = sheet.addRow(['Tag', 'Component']);
+  const header = sheet.addRow(['Tag', 'Component', 'Description', 'Color']);
   styleHeaderRow(header);
 
   for (const tag of tagRows) {
-    const row = sheet.addRow([tag.tag, tag.componentName]);
+    const row = sheet.addRow([tag.tag, tag.componentName, tag.description, tag.color]);
+    row.alignment = { vertical: 'top', wrapText: true };
     const compCell = row.getCell(2);
     compCell.value = { text: tag.componentName, hyperlink: internalLink(tag.sheetName, 'A1') };
     compCell.font = LINK_FONT;
@@ -648,6 +659,29 @@ function buildTagsSheet(workbook: ExcelJS.Workbook, tagRows: TagRow[]): void {
     sheet.addRow(['No tags recorded.']).getCell(1).font = { italic: true };
   }
 
-  setColumnWidths(sheet, [28, 28]);
-  sheet.autoFilter = { from: 'A1', to: 'B1' };
+  setColumnWidths(sheet, [28, 28, 60, 14]);
+  sheet.autoFilter = { from: 'A1', to: 'D1' };
+}
+/** Unlinked authored SOTIF/review records remain visible even before allocation. */
+function buildUnlinkedDetailsSheet(workbook: ExcelJS.Workbook, components: ComponentExportData[]): void {
+  const rows: string[][] = [];
+  for (const component of components) {
+    for (const detail of component.unlinkedFunctionalInsufficiencies ?? []) {
+      rows.push(['Functional insufficiency', component.name, detail.name, detail.description, detail.source]);
+    }
+    for (const detail of component.unlinkedTriggeringConditions ?? []) {
+      rows.push(['Triggering condition', component.name, detail.name, detail.description, detail.source]);
+    }
+    for (const review of component.unlinkedReviews ?? []) {
+      rows.push(['Review', component.name, review.name, '', '', review.status,
+        review.reviewerComment, review.authorStatus ?? '', review.authorComment, review.verdict]);
+    }
+  }
+  if (!rows.length) return;
+  const sheet = workbook.addWorksheet('Unlinked Details', { views: [{ state: 'frozen', ySplit: 1 }] });
+  styleHeaderRow(sheet.addRow(['Kind', 'Group', 'Name', 'Description', 'Source', 'Review Status',
+    'Reviewer Comment', 'Author Status', 'Author Comment', 'Verdict']));
+  for (const values of rows) sheet.addRow(values).alignment = { vertical: 'top', wrapText: true };
+  setColumnWidths(sheet, [26, 28, 35, 60, 18, 18, 60, 18, 60, 18]);
+  sheet.autoFilter = { from: 'A1', to: 'J1' };
 }

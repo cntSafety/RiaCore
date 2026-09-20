@@ -39,7 +39,7 @@ export function useSaveLlmSettings() {
   return useMutation<void, Error, LlmSaveSettingsInput>({
     mutationFn: (input) => api.llm.saveSettings(input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['llm.settings'] });
+      return queryClient.invalidateQueries({ queryKey: ['llm.settings'] });
     },
   });
 }

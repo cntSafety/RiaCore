@@ -1,1 +1,1 @@
-Improved SysML v2 rendering and write-ahead log (WAL) recovery for increased robustness.
+Faster SysML-v2 rendering and bug-fixes including LLM config UI.

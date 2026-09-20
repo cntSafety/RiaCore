@@ -1,0 +1,28 @@
+.riacore-settings-dialog .ant-tabs-nav {
+  width: 210px;
+  flex-shrink: 0;
+}
+
+.riacore-settings-dialog .ant-tabs-tab {
+  white-space: normal;
+  text-align: left;
+}
+
+.riacore-settings-dialog .ant-tabs-tab-btn {
+  white-space: normal;
+}
+
+.riacore-settings-dialog .llm-settings-section .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.riacore-settings-dialog .llm-settings-section .ant-form-item-extra {
+  font-size: 12px;
+  padding-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .riacore-settings-dialog .ant-tabs-nav {
+    width: 140px;
+  }
+}

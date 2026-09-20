@@ -5,7 +5,7 @@ description: >-
   Type hierarchy follows the OMG SysML v2 and KerML specifications.
   Abstract classes (abstract: true) serve as hierarchy nodes only;
   concrete classes correspond to element types extracted from the Langium AST.
-version: 0.2.0
+version: 0.4.0
 
 classes:
   sysml_element:
@@ -54,9 +54,16 @@ classes:
         range: boolean
       direction:
         range: string
+      body:
+        range: string
+        description: Text of a documentation or comment annotation
       source_file:
         range: string
-        description: Absolute path to the .sysml file that defined this element
+        description: >-
+          Path to the .sysml file that defined this element, anchored at the
+          workspace root like every configured path (forward slashes, so it
+          resolves unchanged on any platform). Absolute only when the file sits
+          on another volume and no relative form exists.
 
   # ── Namespace layer ────────────────────────────────────────────────────────
 
@@ -165,9 +172,11 @@ classes:
       icon: SwapOutlined
       color: '#b37feb'
 
-  flow_connection_definition:
+  # Named after the specification (`FlowDefinition`), not after the vendored SysIDE
+  # grammar's pre-release `FlowConnectionDefinition`.
+  flow_definition:
     is_a: connection_definition
-    description: Defines a flow connection (item flow between parts)
+    description: Defines a flow (item flow between parts)
     rendering:
       icon: SwapOutlined
       color: '#08979c'
@@ -268,12 +277,28 @@ classes:
       icon: SwapOutlined
       color: '#9254de'
 
-  flow_connection_usage:
+  # `flow_usage`, matching both the specification and the JSON importer, so a
+  # consumer filtering on `kind` sees one name for one construct regardless of
+  # which serialisation it was imported from.
+  flow_usage:
     is_a: connection_usage
     description: Flow of items between parts
     rendering:
       icon: SwapOutlined
       color: '#08979c'
+
+  # A `bind` is the delegation half of a decomposition: it ties a definition's
+  # own parameter to a nested usage's parameter, which is what `connect`
+  # delegation does for a part's ports. Declared a `connection_usage` subtype so
+  # `$connectionConcepts` resolves it and the projection treats its ends the same
+  # way — without this it imports as a plain usage and an action definition's
+  # boundary joins to nothing on the canvas.
+  binding_connector_as_usage:
+    is_a: connection_usage
+    description: Binds two features to the same value — a definition's parameter to a nested usage's
+    rendering:
+      icon: LinkOutlined
+      color: '#d48806'
 
   action_usage:
     is_a: usage
@@ -313,6 +338,26 @@ classes:
     rendering:
       icon: FileTextOutlined
       color: '#722ed1'
+
+  # ── SysML: Annotation elements ─────────────────────────────────────────────
+  # Same concept names, icons and (absent) hidden flag as the JSON importer's
+  # `comment` / `documentation`, so a `doc` block lands in the tree under the
+  # element it documents whichever serialisation it was imported from. The text
+  # itself is the inherited `body` attribute.
+
+  comment:
+    is_a: sysml_element
+    description: Textual comment annotation
+    rendering:
+      icon: FileTextOutlined
+      color: '#8c8c8c'
+
+  documentation:
+    is_a: sysml_element
+    description: Documentation annotation on a model element
+    rendering:
+      icon: FileTextOutlined
+      color: '#8c8c8c'
 
   # Generic fallbacks — catch any Definition/Usage subtype not covered above.
   # These are concrete so the persistor can assign an identity attribute.

@@ -391,6 +391,7 @@ function createBrowserBridge(): RiaCoreBridge {
     metamodel: createInvoker('metamodel') as RiaCoreBridge['metamodel'],
     namespaceConnections: createInvoker('namespaceConnections') as RiaCoreBridge['namespaceConnections'],
     crossNsLinkSettings: createInvoker('crossNsLinkSettings') as RiaCoreBridge['crossNsLinkSettings'],
+    exportSettings: createInvoker('exportSettings') as RiaCoreBridge['exportSettings'],
     canvasLayout: createInvoker('canvasLayout') as RiaCoreBridge['canvasLayout'],
     namespaces: createInvoker('namespaces') as RiaCoreBridge['namespaces'],
     safety: createInvoker('safety') as RiaCoreBridge['safety'],

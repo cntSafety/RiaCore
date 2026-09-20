@@ -22,7 +22,7 @@ import type { WorkspaceConfig, RunImportParams, PersistorLoadParams, PersistorSt
 import type { ShowInTreePayload, NavigationRequest, CacheInvalidationOutbound, CacheInvalidationMessage, LoadProgressPushEvent } from '@riacore/app-contracts';
 import type { LlmSaveSettingsInput, LlmStartReviewInput, LlmStartReviewResult, LlmCancelReviewInput, LlmStreamEvent, LlmSettings } from '@riacore/app-contracts';
 import type { LayoutRecord, ViewLayoutSourceRef } from '@riacore/app-contracts';
-import type { CrossNsLinkSettings } from '@riacore/app-contracts';
+import type { CrossNsLinkSettings, ExportSettings } from '@riacore/app-contracts';
 import type { CreateViewParams, UpdateViewParams, EvaluateViewParams, MaterializeViewParams, GetPresentationInput } from '@riacore/app-contracts';
 import type { CommitParams, FetchParams, PullParams, PushParams, LogParams } from '@riacore/git-service';
 import type { IpcRendererEvent } from 'electron';
@@ -113,6 +113,10 @@ contextBridge.exposeInMainWorld('riacore', {
   crossNsLinkSettings: {
     getSettings: () => ipcRenderer.invoke('crossNsLinkSettings.getSettings') as Promise<CrossNsLinkSettings>,
     saveSettings: (settings: CrossNsLinkSettings) => ipcRenderer.invoke('crossNsLinkSettings.saveSettings', settings) as Promise<void>,
+  },
+  exportSettings: {
+    getSettings: () => ipcRenderer.invoke('exportSettings.getSettings') as Promise<ExportSettings>,
+    saveSettings: (settings: ExportSettings) => ipcRenderer.invoke('exportSettings.saveSettings', settings) as Promise<void>,
   },
   canvasLayout: {
     getLayout: () => ipcRenderer.invoke('canvasLayout:getLayout'),
@@ -224,7 +228,7 @@ contextBridge.exposeInMainWorld('riacore', {
     unlinkDirectRequirementFromFm: (params: { failureModeNodeId: number; requirementNodeId: number }) => ipcRenderer.invoke('safety.unlinkDirectRequirementFromFm', params),
     getDirectRequirementsForFm: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getDirectRequirementsForFm', params),
     searchRequirementsAcrossNamespaces: (params: { query: string }) => ipcRenderer.invoke('safety.searchRequirementsAcrossNamespaces', params),
-    exportSphinxNeeds: (params: { namespace: string; outputDir: string }) => ipcRenderer.invoke('safety.exportSphinxNeeds', params),
+    exportSphinxNeeds: (params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }) => ipcRenderer.invoke('safety.exportSphinxNeeds', params),
     exportXlsx: (params: { namespace: string; outputPath: string }) => ipcRenderer.invoke('safety.exportXlsx', params),
     getSafetyData: (params: { namespace: string }) =>
       ipcRenderer.invoke('safety.getSafetyData', params),

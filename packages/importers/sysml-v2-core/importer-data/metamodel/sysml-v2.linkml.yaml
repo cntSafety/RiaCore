@@ -8,7 +8,7 @@ description: >-
   Type hierarchy follows the OMG SysML v2 and KerML specifications.
   Abstract classes (abstract: true) serve as hierarchy nodes only;
   concrete classes correspond to JSON @type values found in exports.
-version: 0.3.1
+version: 0.4.0
 
 classes:
   sysml_element:
@@ -371,8 +371,12 @@ classes:
     is_a: usage
     description: Instance of a metadata annotation
 
+  # A `connection_usage` subtype, not a plain usage: a binding is a connector,
+  # and declaring it here is what puts it in `$connectionConcepts` so the
+  # CommonModel projection resolves its ends. Kept in step with the textual
+  # importer's schema, which declares the same concept name.
   binding_connector_as_usage:
-    is_a: usage
+    is_a: connection_usage
     description: Binds two features to the same value (as a usage)
 
   succession_as_usage:

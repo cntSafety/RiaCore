@@ -35,6 +35,7 @@ import type { NamespaceDiffResult, ThreeWayDiffResult, CheckAttributeEntry } fro
 import type { IGitService } from '@riacore/git-service';
 import type { LlmSettingsStore } from '../llm/llm-settings-store.js';
 import type { CrossNsLinkSettingsStore } from '../settings/cross-ns-link-settings-store.js';
+import type { ExportSettingsStore } from '../settings/export-settings-store.js';
 import type { WebContentsLike, ReviewRunRegistry } from '../llm/review-run-registry.js';
 import type { LanguageModel } from 'ai';
 
@@ -101,6 +102,17 @@ export interface ServiceDependencies {
    * `DEFAULT_CROSS_NS_LINK_SETTINGS` and `crossNsLinkSettings.saveSettings` throws.
    */
   crossNsLinkSettingsStore?: CrossNsLinkSettingsStore;
+  /**
+   * Persistent store for {@link ExportSettings} — the report-export
+   * preferences (currently whether the semi-quantitative risk-rating values
+   * are written into exported reports). Injected by the host with
+   * `app.getPath('userData')`, same placement rationale as
+   * {@link CrossNsLinkSettingsStore}.
+   *
+   * Optional: when absent, `exportSettings.getSettings` falls back to
+   * `DEFAULT_EXPORT_SETTINGS` and `exportSettings.saveSettings` throws.
+   */
+  exportSettingsStore?: ExportSettingsStore;
   /**
    * Test seam: a pre-built Vercel AI SDK `LanguageModel` to use instead of
    * constructing one from stored credentials. When set, the `llm.startReview`

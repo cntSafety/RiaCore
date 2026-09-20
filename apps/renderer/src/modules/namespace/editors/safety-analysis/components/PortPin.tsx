@@ -52,6 +52,12 @@ export interface PortPinProps {
   name: string;
   /** 'in' for requester/inner ports, 'out' for provider/outer ports. */
   dir: 'in' | 'out';
+  /**
+   * Whether the port carries data both ways. Drawn hollow, because `dir` has
+   * already collapsed it onto the input side and would otherwise make it
+   * indistinguishable from a plain input — see `isBidirectionalPort`.
+   */
+  bidirectional?: boolean;
   /** Whether this port has malfunctions attached. */
   warn: boolean;
   /** ASIL hex color for the port square, or null for no malfunctions. */
@@ -76,7 +82,7 @@ export interface PortPinProps {
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
 }
 
-export function PortPin({ id, name, dir, warn, asilColor, side, refCb, hovered, onHover, portTarget, malfunctions, malfunctionNamespace, onNavigateToNode, onNavigateToReference }: PortPinProps) {
+export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor, side, refCb, hovered, onHover, portTarget, malfunctions, malfunctionNamespace, onNavigateToNode, onNavigateToReference }: PortPinProps) {
   const { token } = theme.useToken();
   const navigatingRef = useRef(false);
 
@@ -93,14 +99,21 @@ export function PortPin({ id, name, dir, warn, asilColor, side, refCb, hovered, 
   // Hover background: semi-transparent info color
   const hoverBg = `rgba(${hexToRgb(token.colorInfo)}, 0.12)`;
 
+  // A bidirectional port is drawn hollow: same size, same position, same colour, so
+  // the ASIL encoding and the layout are untouched and only the fill carries the
+  // extra bit. The border keeps `squareColor`, so a bidirectional port with a
+  // malfunction still reads at its ASIL colour.
   const square = (
     <span
+      title={bidirectional ? `${name} — bidirectional` : undefined}
       style={{
         display: 'inline-block',
         width: 10,
         height: 10,
         borderRadius: 2,
-        background: squareColor,
+        background: bidirectional ? 'transparent' : squareColor,
+        border: bidirectional ? `1.5px solid ${squareColor}` : undefined,
+        boxSizing: 'border-box',
         flexShrink: 0,
       }}
     />

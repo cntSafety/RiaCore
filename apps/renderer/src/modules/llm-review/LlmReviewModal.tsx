@@ -46,8 +46,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Modal, Alert, Button, Space, Spin, Typography, theme, Tooltip } from 'antd';
-import { SettingOutlined, BugOutlined, DownloadOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Modal, Alert, Button, Space, Spin, Typography, theme } from 'antd';
+import { SettingOutlined, BugOutlined, DownloadOutlined } from '@ant-design/icons';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { LlmDryRunResult, LlmReviewProfile } from '@riacore/app-contracts';
@@ -56,6 +56,7 @@ import { useLlmSettings } from '../../hooks/useLlmSettings';
 import { useSafetyInstance } from '../../hooks/useSafetyInstance';
 import { useLlmSettingsDialogStore } from '../../store/llmSettingsDialogStore';
 import { api } from '../../api/riacore';
+import { ASSUMED_OUTPUT_TOKENS, estimateReviewCost } from './costEstimate';
 
 const { Text, Title } = Typography;
 const { useToken } = theme;
@@ -171,6 +172,7 @@ export function LlmReviewModal({
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleStart = (): void => {
+    setDryRunResult(null);
     void review.start();
   };
 
@@ -289,7 +291,7 @@ export function LlmReviewModal({
         <Button
           type="primary"
           onClick={handleStart}
-          disabled={!hasCredentials || !settingsLoaded}
+          disabled={!hasCredentials || !settingsLoaded || dryRunning}
         >
           Start review
         </Button>
@@ -453,7 +455,7 @@ export function LlmReviewModal({
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>
             {status === 'idle'
-              ? 'Click "Start review" to begin.'
+              ? 'Click "Dry Run" to preview, or "Start review" to begin directly.'
               : 'Processing prompt — the model is reading the safety data before generating the first token. This is normal for large prompts.'}
           </Text>
         )}
@@ -521,34 +523,23 @@ export function LlmReviewModal({
                     <div style={{ fontSize: 12, lineHeight: 1.8 }}>
                       {(() => {
                         const inputChars = dryRunResult.systemPrompt.length + dryRunResult.userPrompt.length;
-                        const estInputTokens = Math.ceil(inputChars / 4);
-                        const estOutputTokens = 2000;
+                        const estimate = estimateReviewCost(settingsQuery.data, dryRunResult.model_id, inputChars, dryRunResult.region);
                         const isLocal = settingsQuery.data?.provider === 'ollama';
-                        const inputPricePer1M = 3.0;
-                        const outputPricePer1M = 15.0;
-                        const estCost = (estInputTokens / 1_000_000) * inputPricePer1M + (estOutputTokens / 1_000_000) * outputPricePer1M;
                         return (
                           <>
                             <div><strong>Profile:</strong> {dryRunResult.profile} · <strong>Context elements:</strong> {dryRunResult.contextElementCount}</div>
-                            <div><strong>Model:</strong> {dryRunResult.model_id}{dryRunResult.region ? ` · Region: ${dryRunResult.region}` : ''}</div>
-                            <div><strong>Est. input:</strong> ~{estInputTokens.toLocaleString()} tokens ({inputChars.toLocaleString()} chars) · <strong>Est. output:</strong> ~{estOutputTokens.toLocaleString()} tokens (fixed)</div>
+                            <div><strong>Est. input:</strong> ~{estimate.inputTokens.toLocaleString()} tokens ({inputChars.toLocaleString()} chars)</div>
                             {!isLocal && (
-                              <>
-                                <div style={{ marginTop: 4, marginBottom: 2 }}>
-                                  <strong>Cost estimation</strong>
-                                  <span style={{ fontWeight: 'normal', marginLeft: 6, opacity: 0.65 }}>
-                                    @ ${inputPricePer1M.toFixed(2)}/1M input · ${outputPricePer1M.toFixed(2)}/1M output
-                                    <Tooltip title="Claude Sonnet list price. Tokens estimated at 1 token ≈ 4 chars. Output budget is fixed at 2,000 tokens. Actual cost depends on the selected model and provider pricing.">
-                                      <InfoCircleOutlined style={{ marginLeft: 5, cursor: 'help', fontSize: 10 }} />
-                                    </Tooltip>
-                                  </span>
-                                </div>
-                                <div style={{ paddingLeft: 12 }}>
-                                  <div>Input: ~{estInputTokens.toLocaleString()} tokens × ${inputPricePer1M.toFixed(2)}/1M = ${((estInputTokens / 1_000_000) * inputPricePer1M).toFixed(4)}</div>
-                                  <div>Output: ~{estOutputTokens.toLocaleString()} tokens × ${outputPricePer1M.toFixed(2)}/1M = ${((estOutputTokens / 1_000_000) * outputPricePer1M).toFixed(4)}</div>
-                                  <div><strong>Total: ~${estCost.toFixed(4)} (≈ {(estCost * 100).toFixed(2)}¢)</strong></div>
-                                </div>
-                              </>
+                              estimate.cost === null ? (
+                                <div>Cost estimate unavailable for this model or endpoint. Check your provider’s rates.</div>
+                              ) : (
+                                <>
+                                  <div>
+                                    <strong>Illustrative cost: ~${estimate.cost.toFixed(estimate.cost < 0.01 ? 4 : 2)} USD</strong>
+                                  </div>
+                                  <div>Assumes ~{estimate.inputTokens.toLocaleString()} input + {ASSUMED_OUTPUT_TOKENS.toLocaleString()} output tokens (including reasoning). Actual usage may differ.</div>
+                                </>
+                              )
                             )}
                           </>
                         );

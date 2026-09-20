@@ -59,7 +59,7 @@ import {
 import type { ConceptPresentation } from '@riacore/app-contracts';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { PortPin } from '../safety-analysis/components/PortPin';
-import { PORT_CONCEPTS, getAsilHexColor } from '../safety-analysis/components/diagramModel';
+import { PORT_CONCEPTS, getAsilHexColor, isBidirectionalPort } from '../safety-analysis/components/diagramModel';
 import {
   TILE_SOURCE_HANDLE,
   TILE_TARGET_HANDLE,
@@ -230,6 +230,7 @@ function ModelTileNodeImpl({ data }: NodeProps) {
         id={port.id}
         name={port.name}
         dir={port.dir}
+        bidirectional={isBidirectionalPort(port.concept)}
         warn={port.warn}
         asilColor={getAsilHexColor(port.maxAsil)}
         side={pinSide(port.dir, placement)}

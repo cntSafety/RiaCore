@@ -48,7 +48,8 @@ import {
   isPartUsage, isPortUsage, isItemUsage, isAttributeUsage, isActionUsage,
   isStateUsage, isExhibitStateUsage, isConnectionUsage, isInterfaceUsage,
   isFlowConnectionUsage, isRequirementUsage,
-  isConnector, isItemFlowEnd,
+  isConnector, isItemFlowEnd, isBindingConnectorAsUsage,
+  isDocumentation, isComment,
   isOwningMembership, isElement, isNamespace, isDefinition, isUsage, isType,
 } from '@riacore/sysml-language';
 import type { Type as SysmlType } from '@riacore/sysml-language';
@@ -87,8 +88,23 @@ export interface SysmlTextualElementInfo {
   isReadonly?: boolean;
   isPortion?: boolean;
   isConjugated?: boolean;
+  /**
+   * Text of a `doc` or `comment` annotation, mirroring the JSON importer's
+   * `body` field on Documentation/Comment elements.
+   */
+  body?: string;
   /** File the element was defined in */
   sourceFile: string;
+}
+
+/**
+ * Per-owner counters for the names this importer supplies to elements the
+ * source left unnamed. Kept apart by kind so the import report can describe
+ * each kind in its own terms rather than reporting one opaque total.
+ */
+interface SyntheticNameCounters {
+  connectors: Map<string, number>;
+  annotations: Map<string, number>;
 }
 
 export interface SysmlTextualRelationshipInfo {
@@ -123,7 +139,14 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
     EnumerationDefinition: { concept: 'enumeration_definition', category: 'structure' },
     ConnectionDefinition: { concept: 'connection_definition', category: 'structure' },
     InterfaceDefinition: { concept: 'interface_definition', category: 'structure' },
-    FlowConnectionDefinition: { concept: 'flow_connection_definition', category: 'structure' },
+    // Concept names follow the *specification*, not the AST. The vendored SysIDE
+    // grammar still uses the pre-release `FlowConnection*` metaclass names, which
+    // appear nowhere in the SysML v2 release — its library and BNF say `FlowUsage`
+    // and `FlowDefinition`. Naming the concepts after the release is what lets one
+    // projection and one query catalog read both importers: the JSON importer
+    // derives its concept names mechanically from the pilot's `@type`, so it
+    // already produces `flow_usage`.
+    FlowConnectionDefinition: { concept: 'flow_definition', category: 'structure' },
     MetadataDefinition: { concept: 'metadata_definition', category: 'structure' },
     PartUsage: { concept: 'part_usage', category: 'structure' },
     PortUsage: { concept: 'port_usage', category: 'structure' },
@@ -131,8 +154,9 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
     AttributeUsage: { concept: 'attribute_usage', category: 'structure' },
     ConnectionUsage: { concept: 'connection_usage', category: 'structure' },
     InterfaceUsage: { concept: 'interface_usage', category: 'structure' },
+    BindingConnectorAsUsage: { concept: 'binding_connector_as_usage', category: 'structure' },
     ReferenceUsage: { concept: 'reference_usage', category: 'structure' },
-    FlowConnectionUsage: { concept: 'flow_connection_usage', category: 'behavior' },
+    FlowConnectionUsage: { concept: 'flow_usage', category: 'behavior' },
     ActionDefinition: { concept: 'action_definition', category: 'behavior' },
     StateDefinition: { concept: 'state_definition', category: 'behavior' },
     ConstraintDefinition: { concept: 'constraint_definition', category: 'behavior' },
@@ -145,6 +169,10 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
     StateUsage: { concept: 'state_usage', category: 'behavior' },
     ActionUsage: { concept: 'action_usage', category: 'behavior' },
     RequirementUsage: { concept: 'requirement_usage', category: 'behavior' },
+    // Annotations. Categorised as `structure` to match the JSON importer's
+    // TYPE_CATEGORY, so one config toggle governs both importers.
+    Documentation: { concept: 'documentation', category: 'structure' },
+    Comment: { concept: 'comment', category: 'structure' },
   };
   const exactMatch = exact[el.$type];
   if (exactMatch) return exactMatch;
@@ -152,7 +180,7 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
   if (isLibraryPackage(el))         return { concept: 'library_package',             category: 'structure' };
   if (isPackage(el))                return { concept: 'package',                     category: 'structure' };
   if (isInterfaceDefinition(el))    return { concept: 'interface_definition',        category: 'structure' };
-  if (isFlowConnectionDefinition(el)) return { concept: 'flow_connection_definition', category: 'structure' };
+  if (isFlowConnectionDefinition(el)) return { concept: 'flow_definition',            category: 'structure' };
   if (isConnectionDefinition(el))   return { concept: 'connection_definition',       category: 'structure' };
   if (isStateDefinition(el))        return { concept: 'state_definition',            category: 'behavior' };
   if (isActionDefinition(el))       return { concept: 'action_definition',           category: 'behavior' };
@@ -164,8 +192,12 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
   if (isAttributeDefinition(el))    return { concept: 'attribute_definition',        category: 'structure' };
   if (isEnumerationDefinition(el))  return { concept: 'enumeration_definition',      category: 'structure' };
   if (isInterfaceUsage(el))         return { concept: 'interface_usage',             category: 'structure' };
+  // Before `isConnectionUsage`: a binding is not a ConnectionUsage subtype in the
+  // AST, but keeping the connector guards adjacent makes the ordering rule above
+  // — concrete before broad — visible at a glance.
+  if (isBindingConnectorAsUsage(el)) return { concept: 'binding_connector_as_usage', category: 'structure' };
   if (isConnectionUsage(el))        return { concept: 'connection_usage',            category: 'structure' };
-  if (isFlowConnectionUsage(el))    return { concept: 'flow_connection_usage',       category: 'behavior' };
+  if (isFlowConnectionUsage(el))    return { concept: 'flow_usage',                  category: 'behavior' };
   if (isPortUsage(el))              return { concept: 'port_usage',                  category: 'structure' };
   if (isPartUsage(el))              return { concept: 'part_usage',                  category: 'structure' };
   if (isItemUsage(el))              return { concept: 'item_usage',                  category: 'structure' };
@@ -178,6 +210,9 @@ function conceptAndCategory(el: Element): { concept: string; category: ElementCa
   if (isViewDefinition(el))         return { concept: 'view_definition',             category: 'behavior' };
   if (isViewpointDefinition(el))    return { concept: 'viewpoint_definition',        category: 'behavior' };
   if (isMetadataDefinition(el))     return { concept: 'metadata_definition',         category: 'structure' };
+  // Documentation extends Comment in the AST, so the concrete guard goes first.
+  if (isDocumentation(el))          return { concept: 'documentation',               category: 'structure' };
+  if (isComment(el))                return { concept: 'comment',                     category: 'structure' };
   // Generic fallbacks — map to concrete metamodel classes so the persistor
   // can resolve an identity attribute. These catch any Definition/Usage subtype
   // not explicitly handled above (e.g. AllocationDefinition, CaseUsage, etc.)
@@ -241,7 +276,8 @@ function getSuperTypeNames(el: Element): string[] {
 export const CONNECTOR_CONCEPTS: ReadonlySet<string> = new Set([
   'connection_usage',
   'interface_usage',
-  'flow_connection_usage',
+  'flow_usage',
+  'binding_connector_as_usage',
 ]);
 
 /**
@@ -327,6 +363,125 @@ function getConnectorEnds(el: Element): string[][] | undefined {
   return ends.length > 0 ? ends : undefined;
 }
 
+/**
+ * The tag that opens the synthetic name of an unnamed connector, per concept.
+ * Keyed on the concept rather than the AST `$type` for the same reason
+ * {@link CONNECTOR_CONCEPTS} is: the concept is the vocabulary shared with the
+ * view layer. An unlisted connector concept falls back to its own name.
+ */
+const CONNECTOR_NAME_TAGS: Readonly<Record<string, string>> = {
+  connection_usage: 'connect',
+  interface_usage: 'interface',
+  flow_usage: 'flow',
+  binding_connector_as_usage: 'bind',
+};
+
+/**
+ * A deterministic name for a connector the source model left unnamed.
+ *
+ * Unnamed is the *idiomatic* form in SysML v2 — `connect a.p to b.p` and
+ * `flow from a.p to b.p` are what the specification's own examples write, and
+ * what real models overwhelmingly contain. Anonymous elements are otherwise
+ * dropped by {@link processElement}, which discarded a model's entire
+ * connectivity: no element, therefore no endpoint references, therefore no
+ * `Connection` in the projection and no edge on the canvas. Only the tiles
+ * survived, and their contextual ports vanished with the connectors that
+ * define them.
+ *
+ * Derived from the endpoint paths rather than a declaration ordinal, because
+ * `stablePath` is the importer's identity key: it decides node identity for the
+ * persistor, and therefore what diff and merge see as "the same" connector
+ * across re-imports. An ordinal renumbers every later connector when one is
+ * inserted or removed, churning IDs for connectors that did not change. The
+ * endpoint pair is what the connector *is*, so it survives both reordering and
+ * insertion.
+ *
+ * The `$` prefix marks the name as supplied rather than declared, and cannot
+ * collide with a real SysML identifier, so the lexical resolution that
+ * `indexElements` performs over these names is unaffected.
+ *
+ * `taken` disambiguates the genuinely ambiguous case of the same owner
+ * declaring the same pair twice, keeping such a duplicate stable at `.2`, `.3`
+ * rather than letting the two collapse onto one identity.
+ */
+function syntheticConnectorName(
+  concept: string,
+  ends: string[][],
+  ownerQualifiedName: string,
+  taken: Map<string, number>,
+): string {
+  const tag = CONNECTOR_NAME_TAGS[concept] ?? concept;
+  const base = `$${tag}.${ends.map((end) => end.join('.')).join('-to-')}`;
+  const key = `${ownerQualifiedName}::${base}`;
+  const seen = taken.get(key) ?? 0;
+  taken.set(key, seen + 1);
+  return seen === 0 ? base : `${base}.${seen + 1}`;
+}
+
+/**
+ * Concepts that annotate their owner rather than declaring a member.
+ *
+ * `doc /* … *\/` is written without an identification in virtually every real
+ * model — the specification's own examples do — so these arrive anonymous and
+ * were dropped along with their text. They are named here for the same reason
+ * connectors are: {@link processElement} cannot emit an element without a name,
+ * and no element means no `body` attribute and no tree entry under the
+ * documented element.
+ */
+const ANNOTATION_CONCEPTS: ReadonlySet<string> = new Set(['documentation', 'comment']);
+
+const ANNOTATION_NAME_TAGS: Record<string, string> = {
+  documentation: 'doc',
+  comment: 'comment',
+};
+
+/**
+ * A deterministic name for an annotation the source model left unnamed.
+ *
+ * Keyed on the owner and a declaration ordinal rather than on the annotation's
+ * own text, which is the opposite of the connector rule and deliberately so.
+ * `stablePath` is the importer's identity key, so deriving it from the body
+ * would make every wording change look like a delete plus an add to diff and
+ * merge. An owner almost always carries exactly one `doc`, so the ordinal is
+ * stable in practice and an edited paragraph reads as a modified attribute on
+ * the same node.
+ */
+/**
+ * The text of an annotation, without the notation that delimited it.
+ *
+ * Langium hands back the comment token verbatim — `/*`, the decorative leading
+ * asterisk on each continuation line, and the closing `*\/` included. The JSON
+ * importer's `body` holds the text alone, because the pilot API has already
+ * stripped the notation, so the same paragraph imported from `.sysml` and from
+ * JSON would otherwise compare unequal and read differently in the UI. Stripped
+ * here rather than in the mapper so the parser's output is the sole definition
+ * of what `body` means for this importer.
+ */
+function normalizeAnnotationBody(raw: string | undefined): string | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+
+  const lines = raw
+    .replace(/^\s*\/\*+/, '')
+    .replace(/\*+\/\s*$/, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\*+ ?/, '').trimEnd());
+
+  const text = lines.join('\n').trim();
+  return text.length > 0 ? text : undefined;
+}
+
+function syntheticAnnotationName(
+  concept: string,
+  ownerQualifiedName: string,
+  taken: Map<string, number>,
+): string {
+  const base = `$${ANNOTATION_NAME_TAGS[concept] ?? concept}`;
+  const key = `${ownerQualifiedName}::${base}`;
+  const seen = taken.get(key) ?? 0;
+  taken.set(key, seen + 1);
+  return seen === 0 ? base : `${base}.${seen + 1}`;
+}
+
 // ── AST walker ────────────────────────────────────────────────────────────────
 
 function walkNamespace(
@@ -336,14 +491,18 @@ function walkNamespace(
   enabled: SysmlTextualEnabledCategories,
   output: SysmlTextualElementInfo[],
   skipped: Map<string, number>,
+  synthetic: SyntheticNameCounters,
 ): void {
   for (const child of ns.children ?? []) {
     if (!isOwningMembership(child)) continue;
     const om = child as OwningMembership;
     const rel = om as unknown as { elements?: Element[]; target?: Element };
+    // `target` is what carries annotations: the grammar's AnnotatingMember /
+    // VisibleAnnotatingMember rules bind the annotating element there rather
+    // than into `elements`.
     const owned = rel.elements?.[0] ?? rel.target;
     if (!owned || !isElement(owned)) continue;
-    processElement(owned as Element, pathSegments, sourceFile, enabled, output, skipped);
+    processElement(owned as Element, pathSegments, sourceFile, enabled, output, skipped, synthetic);
   }
 }
 
@@ -354,25 +513,43 @@ function processElement(
   enabled: SysmlTextualEnabledCategories,
   output: SysmlTextualElementInfo[],
   skipped: Map<string, number>,
+  synthetic: SyntheticNameCounters,
 ): void {
-  const name = getElementName(el);
+  const cc = conceptAndCategory(el);
+  const connectorEnds = getConnectorEnds(el);
+
+  // An unnamed connector is named from its ends rather than dropped — see
+  // `syntheticConnectorName`. Gated on {@link CONNECTOR_CONCEPTS}, not merely on
+  // being connector-shaped: those are exactly the concepts whose endpoints get
+  // materialised and which the view layer can project as a `Connection`, so a
+  // name is what unblocks them. A `succession` or a `bind` would gain a tree
+  // entry and no edge. Annotations are named on the same grounds — see
+  // {@link ANNOTATION_CONCEPTS}. Every other anonymous element falls through to
+  // the skip below, which is what keeps anonymous memberships out of the
+  // namespace tree.
+  const name = getElementName(el)
+    ?? (cc && connectorEnds && CONNECTOR_CONCEPTS.has(cc.concept)
+      ? syntheticConnectorName(cc.concept, connectorEnds, parentSegments.join('::'), synthetic.connectors)
+      : undefined)
+    ?? (cc && ANNOTATION_CONCEPTS.has(cc.concept)
+      ? syntheticAnnotationName(cc.concept, parentSegments.join('::'), synthetic.annotations)
+      : undefined);
 
   // Anonymous elements — still recurse into namespaces but don't emit a record
   if (!name) {
     skipped.set(el.$type ?? 'unknown', (skipped.get(el.$type ?? 'unknown') ?? 0) + 1);
     if (isNamespace(el)) {
-      walkNamespace(el as Namespace, parentSegments, sourceFile, enabled, output, skipped);
+      walkNamespace(el as Namespace, parentSegments, sourceFile, enabled, output, skipped, synthetic);
     }
     return;
   }
 
-  const cc = conceptAndCategory(el);
   if (!cc) {
     // Unrecognised type — skip but count
     skipped.set(el.$type ?? 'unknown', (skipped.get(el.$type ?? 'unknown') ?? 0) + 1);
     if (isNamespace(el)) {
       const segments = [...parentSegments, name];
-      walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped);
+      walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped, synthetic);
     }
     return;
   }
@@ -381,7 +558,7 @@ function processElement(
   if (!enabled[cc.category]) {
     if (isNamespace(el)) {
       const segments = [...parentSegments, name];
-      walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped);
+      walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped, synthetic);
     }
     return;
   }
@@ -414,7 +591,7 @@ function processElement(
     isAbstract: (el as { isAbstract?: unknown }).isAbstract === true
                   || (el as { isAbstract?: unknown }).isAbstract === 'abstract',
     superTypeNames,
-    connectorEnds: getConnectorEnds(el),
+    connectorEnds,
     direction: feature.direction,
     isComposite: feature.isComposite === true || feature.isComposite === 'composite',
     isOrdered: feature.isOrdered,
@@ -427,12 +604,14 @@ function processElement(
     isReadonly: feature.isReadOnly === true || feature.isReadOnly === 'readonly',
     isPortion: feature.isPortion === true || feature.isPortion === 'portion',
     isConjugated: feature.heritage?.some((relationship) => relationship.$type === 'ConjugatedPortTyping'),
+    // `body` on a TextualAnnotatingElement — the text of a `doc` or `comment`.
+    body: normalizeAnnotationBody((el as unknown as { body?: string }).body),
     sourceFile,
   });
 
   // Recurse
   if (isNamespace(el)) {
-    walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped);
+    walkNamespace(el as Namespace, segments, sourceFile, enabled, output, skipped, synthetic);
   }
 }
 
@@ -585,6 +764,38 @@ function materializeConnectorEndpoints(
       resolved.push(next);
       current = next;
     }
+
+    // A binding end may name a feature of the *enclosing* type with no container:
+    //
+    //     bind determineCurrentRef.T_accel = T_accel;
+    //     bind Te = generateShaftTorque.Te;
+    //
+    // That is the canonical form — `bind a_out = acc.a` and
+    // `bind wheelTorque1 = 'distribute torque'.wheelTorque1` are how the
+    // specification's own examples write it, and the pilot implementation accepts
+    // it. But a payload feature is not a pin on its own; it becomes one only in
+    // the context of what owns it, which is what the other end's written
+    // `determineCurrentRef.T_accel` supplies. Naming that owner here puts both
+    // ends into the same (container, pin) shape, so the implicit one reaches the
+    // same contextual-pin rule in the query catalog instead of arriving as a
+    // one-member chain the catalog discards.
+    //
+    // Deliberately restricted to bindings. The same bare shape on a *flow* end is
+    // not valid SysML — the pilot rejects it with "Cannot identify flow end (use
+    // dot notation)" — so normalising it there would render a malformed model as
+    // though it were well-formed, and hide a defect the author should fix. A port
+    // needs no such treatment either: it is already the pin a diagram draws on and
+    // the caller resolves straight to it.
+    //
+    // The owner is a fact about the model, not an inference — the feature really is
+    // a member of it — so the chain stays as traceable as an explicit one.
+    if (connection.concept === 'binding_connector_as_usage'
+      && resolved.length === 1
+      && PAYLOAD_FEATURE_CONCEPTS.has(resolved[0].concept)) {
+      const ownerQualifiedName = resolved[0].qualifiedName.split('::').slice(0, -1).join('::');
+      const owner = byQualifiedName.get(ownerQualifiedName);
+      if (owner) return [owner, resolved[0]];
+    }
     return resolved;
   }
 
@@ -635,8 +846,29 @@ function materializeConnectorEndpoints(
       });
     }
 
+    // `connect a to b` and `flow from a to b` read left to right, so the first end
+    // is the source. `bind a = b` does not: the `=` puts the destination on the
+    // left, exactly as the specification's own examples use it —
+    // `bind 'generate torque'.fuelCmd = fuelCmd` delegates the enclosing parameter
+    // *inward*, and `bind wheelTorque1 = 'distribute torque'.wheelTorque1` carries a
+    // nested result *outward*. Both are RHS → LHS.
+    //
+    // Reading it the other way inverts every boundary delegation. A binding draws no
+    // arrow, so this is not about a visible arrowhead: ELK lays out left to right and
+    // assigns layers from edge direction, so an inbound delegation pointing from the
+    // child back to its own frame is a backward edge, and gets routed as a dogleg out
+    // of the port, around, and back in. It also decides which end owns the
+    // `psrc-`/`ptgt-` anchor.
+    //
+    // A binding is formally symmetric — it asserts both features hold the same value —
+    // so nothing here claims a causal direction. It claims that when a diagram has to
+    // pick an orientation, the one the `=` already implies is the right one.
+    const roleOfEnd = connection.concept === 'binding_connector_as_usage'
+      ? (['target', 'source'] as const)
+      : (['source', 'target'] as const);
+
     for (const [endIndex, references] of connection.connectorEnds.entries()) {
-      const role = endIndex === 0 ? 'source' : 'target';
+      const role = roleOfEnd[endIndex] ?? (endIndex === 0 ? 'source' : 'target');
       const end = addSynthetic(
         `${connection.stablePath}/$end/${endIndex}`,
         'reference_usage',
@@ -738,6 +970,13 @@ export async function parseSysmlTextualProject(
   const relationships: SysmlTextualRelationshipInfo[] = [];
   const skippedElements = new Map<string, number>();
   const diagnostics: ImportDiagnostic[] = [];
+  // Project-wide, not per-file: SysML lets a package be reopened in another
+  // file, so two unnamed connectors with the same ends and the same owner can
+  // arrive from different files and must still be told apart.
+  const synthetic: SyntheticNameCounters = {
+    connectors: new Map<string, number>(),
+    annotations: new Map<string, number>(),
+  };
 
   for (const filePath of files) {
     let source: string;
@@ -784,7 +1023,7 @@ export async function parseSysmlTextualProject(
 
     // Walk the AST even if there were parse errors — partial extraction is better than nothing
     try {
-      walkNamespace(doc.parseResult.value, [], filePath, enabled, elements, skippedElements);
+      walkNamespace(doc.parseResult.value, [], filePath, enabled, elements, skippedElements, synthetic);
     } catch (err) {
       diagnostics.push({
         level: 'error',
@@ -792,6 +1031,28 @@ export async function parseSysmlTextualProject(
         source: filePath,
       });
     }
+  }
+
+  // Reported because the names are visible: they become tree labels and
+  // qualified names, so a reader who finds a `$connect.…` element should be able
+  // to tell from the import report that the importer supplied it.
+  const autoNamed = [...synthetic.connectors.values()].reduce((total, count) => total + count, 0);
+  if (autoNamed > 0) {
+    diagnostics.push({
+      level: 'info',
+      message: `Named ${autoNamed} unnamed connector(s) from their endpoints (e.g. ` +
+        '`$connect.battery.dcOut-to-drive.hvDcIn`) so their connections are imported.',
+    });
+  }
+
+  const autoNamedAnnotations = [...synthetic.annotations.values()]
+    .reduce((total, count) => total + count, 0);
+  if (autoNamedAnnotations > 0) {
+    diagnostics.push({
+      level: 'info',
+      message: `Named ${autoNamedAnnotations} unnamed doc/comment annotation(s) after their ` +
+        'owner (e.g. `$doc`) so their text is imported.',
+    });
   }
 
   // Before endpoint synthesis, so the ports the connectors resolve to already

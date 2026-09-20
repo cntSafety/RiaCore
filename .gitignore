@@ -1,3 +1,57 @@
-# Dependencies
+
 node_modules/
-**/node_modules/
+dist/
+
+.claude
+
+*.tsbuildinfo
+
+.env
+.env.local
+
+.DS_Store
+Thumbs.db
+
+temp/
+
+out/
+
+graphify-out/
+temp/
+
+*.log
+coverage/
+
+# Generated desktop packaging artifacts
+apps/desktop-host/.release/
+apps/desktop-host/dist-electron/
+.desktop-host-test*.log
+
+# Local migration assets
+migration/
+
+# Test workspace artifacts (DB, logs, and generated config — keep the script)
+packages/importers/*/test/workspace/db
+packages/importers/*/test/workspace/db.wal
+packages/importers/*/test/workspace/logs/
+packages/importers/*/test/workspace/importer-config/
+
+# Local TypeScript architecture scan output
+docs/tsScan/scan-result/
+
+# Qualification test temporary workspaces
+qualification/*/tmp_*/
+
+# Qualification reference project: mounted as a git submodule from
+# github.com/cntSafety/ref-project. Its own .gitignore governs the contents
+# (build artefacts, the 5-safety/ workspace db, .venv), so nothing is listed
+# here — a superproject ignore rule cannot reach inside a submodule anyway.
+
+# Python cache
+__pycache__/
+
+# Accidental CLI output files (e.g. --quiet parsed as filename)
+qualification/cli-test/python/--quiet
+
+# Playwright MCP browser automation output (snapshots, console/network logs)
+.playwright-mcp/

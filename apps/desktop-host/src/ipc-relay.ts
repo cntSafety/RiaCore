@@ -19,10 +19,11 @@
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '@riacore/app-contracts';
-import type { LlmSaveSettingsInput, LlmTestConnectionResult, LlmStartReviewInput, CrossNsLinkSettings } from '@riacore/app-contracts';
+import type { LlmSaveSettingsInput, LlmTestConnectionResult, LlmStartReviewInput, CrossNsLinkSettings, ExportSettings } from '@riacore/app-contracts';
 import type { LlmSettingsStore } from '@riacore/app-core/dist/llm/llm-settings-store.js';
 import { testProviderConnection } from '@riacore/app-core/dist/llm/test-connection.js';
 import type { CrossNsLinkSettingsStore } from '@riacore/app-core/dist/settings/cross-ns-link-settings-store.js';
+import type { ExportSettingsStore } from '@riacore/app-core/dist/settings/export-settings-store.js';
 import type { UtilityProcessManager } from './utility-process-manager.js';
 import { getAppLogger } from './app-logger.js';
 
@@ -35,9 +36,9 @@ import { getAppLogger } from './app-logger.js';
  * `Electron.safeStorage` for credential encryption/decryption — the
  * worker child process has no access to it.
  *
- * `crossNsLinkSettings.getSettings` / `crossNsLinkSettings.saveSettings` are
- * also handled here — not because of `safeStorage`, but because they need
- * `app.getPath('userData')`, which is equally main-process-only.
+ * `crossNsLinkSettings.*` and `exportSettings.*` are also handled here — not
+ * because of `safeStorage`, but because they need `app.getPath('userData')`,
+ * which is equally main-process-only.
  *
  * This replaces the old `ipc-handlers.ts` which called app-core
  * services directly in the main process.
@@ -48,6 +49,7 @@ export function registerIpcRelay(
   manager: UtilityProcessManager,
   settingsStore?: LlmSettingsStore,
   crossNsLinkSettingsStore?: CrossNsLinkSettingsStore,
+  exportSettingsStore?: ExportSettingsStore,
 ): void {
   const logger = getAppLogger();
 
@@ -74,6 +76,30 @@ export function registerIpcRelay(
             return await store.load();
           }
           await store.save(payload as CrossNsLinkSettings);
+          return;
+        } catch (error) {
+          logger.error('IPC handler failed (main process)', {
+            channel,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      });
+    } else if (
+      (channel === 'exportSettings.getSettings' || channel === 'exportSettings.saveSettings')
+      && exportSettingsStore
+    ) {
+      // Same rationale as the cross-namespace-link settings above: needs
+      // `app.getPath('userData')`, so main answers it. Deliberately not in
+      // MAIN_PROCESS_CHANNELS — without a store the call relays to the worker,
+      // whose handler returns DEFAULT_EXPORT_SETTINGS.
+      const store = exportSettingsStore;
+      ipcMain.handle(channel, async (_event, payload) => {
+        try {
+          if (channel === 'exportSettings.getSettings') {
+            return await store.load();
+          }
+          await store.save(payload as ExportSettings);
           return;
         } catch (error) {
           logger.error('IPC handler failed (main process)', {

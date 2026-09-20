@@ -1,5 +1,13 @@
 # RiaCore: Modernize Your Safety Engineering Workflow
 
+## [⬇ Download RiaCore](https://github.com/cntSafety/RiaCore/releases)
+
+**Ready-to-run apps for Windows, macOS, and Linux — no build required.**
+Open the releases page above and download the package for your platform.
+Then follow [Getting Started with Sample Data](#getting-started-with-sample-data).
+
+---
+
 Struggling to bridge the gap between complex system design and rigorous safety standards? RiaCore is an open-source toolkit designed to streamline your safety analysis process, making safety engineering more accessible, collaborative, and structured.
 
 Built with the systems engineer in mind, RiaCore transforms fragmented documentation into a cohesive, analysis-ready framework. Whether you are managing safety goals, defining system requirements, or architecting complex software, RiaCore provides the environment you need to keep your development lifecycle compliant and efficient.

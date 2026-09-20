@@ -354,7 +354,7 @@ export function createViewService(
    *
    * This is what lets a catalog query test `ci.concept IN $connectionConcepts`
    * rather than spell out `'connection_usage', 'interface_usage',
-   * 'flow_connection_usage', ...`. The literal list is the bug: a metamodel that
+   * 'flow_usage', ...`. The literal list is the bug: a metamodel that
    * declares a new subtype — SysML v2's flow and allocation connections are
    * exactly this case — is silently dropped from the projection, and nothing
    * reports it, because a concept the query never names simply produces no rows.

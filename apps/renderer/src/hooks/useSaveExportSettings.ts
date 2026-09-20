@@ -17,21 +17,23 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ExportSettings } from '@riacore/app-contracts';
 import { api } from '../api/riacore';
 
 /**
- * `includeRiskRatings` mirrors the persisted `ExportSettings` preference and is
- * passed explicitly: the export runs in the worker, which has no access to the
- * settings store (it lives in the Electron main process). Omit it to keep the
- * ratings, matching the channel default.
+ * Mutation hook for persisting the report-export preferences via the
+ * `exportSettings.saveSettings` IPC channel.
+ *
+ * On success it invalidates `['exportSettings.settings']` so
+ * `useExportSettings` re-fetches the freshly persisted record.
  */
-export function useExportSphinxNeeds() {
-  return useMutation({
-    mutationFn: ({ namespace, outputDir, includeRiskRatings }: {
-      namespace: string;
-      outputDir: string;
-      includeRiskRatings?: boolean;
-    }) => api.safety.exportSphinxNeeds(namespace, outputDir, includeRiskRatings),
+export function useSaveExportSettings() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, ExportSettings>({
+    mutationFn: (settings) => api.exportSettings.saveSettings(settings),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['exportSettings.settings'] });
+    },
   });
 }

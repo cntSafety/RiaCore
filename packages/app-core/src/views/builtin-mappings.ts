@@ -79,7 +79,7 @@ export const SPHINX_NEEDS_MAX_TRAVERSAL_DEPTH = 3;
  * declares (see `MappingDescriptor.conceptGroups`).
  *
  * SysML has four such subtypes across the two importers — `interface_usage`,
- * `allocation_usage`, and `flow_usage` / `flow_connection_usage` — and each was
+ * `allocation_usage`, `flow_usage` and `binding_connector_as_usage` — and each was
  * previously absent from the projection simply because the Cypher spelled out
  * one name. A `flow` declaration therefore imported as a node with endpoints and
  * still drew nothing. Resolving the set from the metamodel means the next

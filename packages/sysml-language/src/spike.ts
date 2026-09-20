@@ -106,7 +106,7 @@ function conceptOf(el: Element): string {
   if (isRequirementDefinition(el)) return 'requirement_definition';
   if (isConstraintDefinition(el)) return 'constraint_definition';
   if (isConnectionDefinition(el)) return 'connection_definition';
-  if (isFlowConnectionDefinition(el)) return 'flow_connection_definition';
+  if (isFlowConnectionDefinition(el)) return 'flow_definition';
   if (isUseCaseDefinition(el)) return 'use_case_definition';
   if (isViewDefinition(el)) return 'view_definition';
   if (isViewpointDefinition(el)) return 'viewpoint_definition';
@@ -120,7 +120,7 @@ function conceptOf(el: Element): string {
   if (isStateUsage(el)) return 'state_usage';
   if (isConnectionUsage(el)) return 'connection_usage';
   if (isInterfaceUsage(el)) return 'interface_usage';
-  if (isFlowConnectionUsage(el)) return 'flow_connection_usage';
+  if (isFlowConnectionUsage(el)) return 'flow_usage';
   if (isRequirementUsage(el)) return 'requirement_usage';
   if (isDefinition(el)) return 'definition';
   if (isUsage(el)) return 'usage';

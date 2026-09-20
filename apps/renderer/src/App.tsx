@@ -40,6 +40,7 @@ import { useCreateWorkspaceMutation } from './hooks/useCreateWorkspaceMutation';
 import { useCloseWorkspaceMutation } from './hooks/useCloseWorkspaceMutation';
 import { useFullWorkspaceSaveMutation } from './hooks/useFullWorkspaceSaveMutation';
 import { useExportSphinxNeeds } from './hooks/useExportSphinxNeeds';
+import { useExportSettings } from './hooks/useExportSettings';
 import { useExportSafetyXlsx } from './hooks/useExportSafetyXlsx';
 import { SettingsDialog } from './modules/settings/SettingsDialog';
 import { useAppSettingsDialogStore } from './store/appSettingsDialogStore';
@@ -79,6 +80,10 @@ function RootApp() {
 
   // ── Sphinx-Needs export mutation ──────────────────────────────────────────
   const exportSphinxNeedsMutation = useExportSphinxNeeds();
+
+  // Report-export preferences (Settings → Report Export). Read here because the
+  // export runs in the worker, which cannot reach the main-process settings store.
+  const exportSettingsQuery = useExportSettings();
 
   // ── Excel (.xlsx) export mutation ─────────────────────────────────────────
   const exportSafetyXlsxMutation = useExportSafetyXlsx();
@@ -278,6 +283,7 @@ function RootApp() {
       const result = await exportSphinxNeedsMutation.mutateAsync({
         namespace: activeNamespace.name,
         outputDir,
+        includeRiskRatings: exportSettingsQuery.data?.includeRiskRatings ?? true,
       });
       message.destroy(loadingKey);
       setExportModal({ open: true, kind: 'success', fileCount: result.exportedFiles.length, outputDir: result.outputDir });

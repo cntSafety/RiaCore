@@ -37,6 +37,7 @@ export * from './diff-types.js';
 export * from './cache-invalidation.js';
 export * from './show-in-tree.js';
 export * from './namespace-connection-types.js';
+export * from './export-settings-types.js';
 export * from './canvas-layout-types.js';
 export * from './view-types.js';
 export * from './presentation-types.js';

@@ -71,7 +71,9 @@ export function createSysmlTextualRuntime(): ImporterRuntime {
       });
 
       // ── Step 3: Map to ConceptBatches ─────────────────────────────────────
-      const conceptBatches = mapModelToConceptBatches(model);
+      // The parser resolved absolute paths so it could read the files; the
+      // mapper anchors them back at the workspace root before they are stored.
+      const conceptBatches = mapModelToConceptBatches(model, context.workspaceRoot);
       const totalConcepts = conceptBatches.reduce((s, b) => s + b.items.length, 0);
 
       context.onProgress({

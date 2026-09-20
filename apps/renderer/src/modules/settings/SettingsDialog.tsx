@@ -30,6 +30,7 @@
  *   - "SysML v2 Tree View" — toggles hidden elements in the namespace tree.
  *   - "Imported Requirement Linking" — how the Imported Requirement picker
  *     handles a match whose namespace isn't connected yet.
+ *   - "Report Export" — what the generated safety report contains.
  *   - "LLM" — multi-provider LLM configuration (provider, model, credentials).
  */
 
@@ -51,6 +52,9 @@ import {
   Typography,
   theme,
 } from 'antd';
+import { MODEL_OPTIONS } from './llmModelOptions';
+import { ModelFieldLabel } from './ModelFieldLabel';
+import { ConnectionTestResult } from './ConnectionTestResult';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import type { LlmProvider, LlmSaveSettingsInput, LlmSettings, CrossNsLinkUnconnectedMode } from '@riacore/app-contracts';
@@ -60,7 +64,10 @@ import { useLlmSettings } from '../../hooks/useLlmSettings';
 import { useSaveLlmSettings } from '../../hooks/useSaveLlmSettings';
 import { useCrossNsLinkSettings } from '../../hooks/useCrossNsLinkSettings';
 import { useSaveCrossNsLinkSettings } from '../../hooks/useSaveCrossNsLinkSettings';
+import { useExportSettings } from '../../hooks/useExportSettings';
+import { useSaveExportSettings } from '../../hooks/useSaveExportSettings';
 import { api } from '../../api/riacore';
+import './settings.css';
 
 const { Text, Title } = Typography;
 
@@ -161,6 +168,56 @@ function CrossNsLinkingSection() {
   );
 }
 
+// ── Report Export section ────────────────────────────────────────────────────
+
+function ReportExportSection() {
+  const { token } = theme.useToken();
+  const { message } = AntdApp.useApp();
+  const settingsQuery = useExportSettings();
+  const saveMutation = useSaveExportSettings();
+  const includeRiskRatings = settingsQuery.data?.includeRiskRatings ?? true;
+
+  const handleChange = (checked: boolean) => {
+    saveMutation.mutate({ includeRiskRatings: checked }, {
+      onError: (err) => message.error(String(err?.message ?? 'Failed to save setting')),
+    });
+  };
+
+  return (
+    <div>
+      <Title level={5} style={{ marginTop: 0 }}>
+        Report Export
+      </Title>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        Controls what the generated safety report (.rst / Sphinx-Needs) contains.
+      </Text>
+      <Space align="start" size={12} style={{ width: '100%', marginTop: 12 }}>
+        <Switch
+          checked={includeRiskRatings}
+          disabled={settingsQuery.isLoading || saveMutation.isPending}
+          onChange={handleChange}
+        />
+        <div style={{ flex: 1 }}>
+          <Text strong>Include ratings in export</Text>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Write the semi-quantitative risk rating — Severity, Occurrence,
+              Detection and RPN — into the exported report. Switch this off for
+              projects that do not maintain those values: the malfunction Risk
+              Rating line, the "Max Risk Rating" column of the status table and
+              the risk-rating rows of the per-component statistics are then all
+              omitted. A malfunction's risk-rating note is still exported.
+            </Text>
+          </div>
+        </div>
+      </Space>
+      <div style={{ marginTop: 12, color: token.colorTextTertiary, fontSize: 12 }}>
+        Applies to the next export.
+      </div>
+    </div>
+  );
+}
+
 // ── LLM settings section ─────────────────────────────────────────────────────
 
 const PROVIDER_OPTIONS: { value: LlmProvider; label: string }[] = [
@@ -171,42 +228,6 @@ const PROVIDER_OPTIONS: { value: LlmProvider; label: string }[] = [
   { value: 'ollama',        label: 'Ollama (local)' },
 ];
 
-const MODEL_OPTIONS: Record<LlmProvider, { value: string }[]> = {
-  bedrock: [
-    { value: 'eu.anthropic.claude-sonnet-4-6' },
-    { value: 'eu.anthropic.claude-opus-4-7' },
-    { value: 'us.anthropic.claude-sonnet-4-5' },
-    { value: 'us.amazon.nova-pro-v1:0' },
-    { value: 'us.amazon.nova-lite-v1:0' },
-  ],
-  anthropic: [
-    { value: 'claude-sonnet-4-5' },
-    { value: 'claude-opus-4-5' },
-    { value: 'claude-3-7-sonnet-20250219' },
-    { value: 'claude-3-5-haiku-20241022' },
-  ],
-  openai: [
-    { value: 'gpt-4o' },
-    { value: 'gpt-4o-mini' },
-    { value: 'o3' },
-    { value: 'o4-mini' },
-  ],
-  'google-vertex': [
-    { value: 'gemini-2.0-flash-001' },
-    { value: 'gemini-2.5-pro-preview-05-06' },
-    { value: 'gemini-2.5-flash-preview-05-20' },
-  ],
-  ollama: [
-    { value: 'gemma3:4b-it-qat' },
-    { value: 'gemma3:1b' },
-    { value: 'llama3.3' },
-    { value: 'llama3.2' },
-    { value: 'mistral' },
-    { value: 'qwen2.5' },
-    { value: 'deepseek-r1' },
-    { value: 'phi4-mini' },
-  ],
-};
 
 const STORED = '(stored — leave blank to keep)';
 
@@ -242,17 +263,15 @@ function buildLlmInitialValues(settings: LlmSettings | undefined): LlmFormValues
   };
 }
 
-interface LlmSectionProps {
-  /** Called after a successful save so the parent can close if needed. */
-  onSaved: () => void;
-}
-
-function LlmSection({ onSaved }: LlmSectionProps) {
+export function LlmSection() {
+  const { token } = theme.useToken();
   const { message } = AntdApp.useApp();
   const [form] = Form.useForm<LlmFormValues>();
   const settingsQuery = useLlmSettings();
   const saveMutation = useSaveLlmSettings();
   const [testing, setTesting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<LlmProvider>(
     settingsQuery.data?.provider ?? 'bedrock',
@@ -287,6 +306,7 @@ function LlmSection({ onSaved }: LlmSectionProps) {
   useEffect(() => {
     if (settings) {
       form.setFieldsValue(buildLlmInitialValues(settings));
+      setDirty(false);
       setSelectedProvider(settings.provider);
       setTestResult(null);
       if (settings.provider === 'ollama') void fetchOllamaModels(settings.base_url);
@@ -360,7 +380,10 @@ function LlmSection({ onSaved }: LlmSectionProps) {
 
     try {
       await saveMutation.mutateAsync(payload);
-      onSaved();
+      setDirty(false);
+      setSaved(true);
+      setTestResult(null);
+      void message.success('LLM settings saved');
     } catch (err) {
       void message.error(
         `Failed to save LLM settings: ${err instanceof Error ? err.message : String(err)}`,
@@ -448,12 +471,17 @@ function LlmSection({ onSaved }: LlmSectionProps) {
   );
 
   return (
-    <div>
-      <Title level={5} style={{ marginTop: 0 }}>LLM Configuration</Title>
+    <div className="llm-settings-section">
+      <Title level={5} style={{ marginTop: 0, marginBottom: 4 }}>LLM Configuration</Title>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 20 }}>
+        Choose a provider and model, then save and test your connection.
+      </Text>
       <Form
         form={form}
         layout="vertical"
-        size="small"
+        size="middle"
+        disabled={saveMutation.isPending || testing}
+        onValuesChange={() => { setDirty(true); setSaved(false); setTestResult(null); }}
         initialValues={buildLlmInitialValues(settings)}
         autoComplete="off"
       >
@@ -461,7 +489,7 @@ function LlmSection({ onSaved }: LlmSectionProps) {
           <Select options={PROVIDER_OPTIONS} onChange={(v) => handleProviderChange(v as LlmProvider)} />
         </Form.Item>
 
-        <Form.Item label="Model" name="model_id" rules={[{ required: true, message: 'Enter a model id' }]}>
+        <Form.Item label={<ModelFieldLabel provider={selectedProvider} />} name="model_id" rules={[{ required: true, message: 'Enter a model id' }]}>
           {selectedProvider === 'ollama' ? (
             <Select
               showSearch
@@ -502,41 +530,35 @@ function LlmSection({ onSaved }: LlmSectionProps) {
           )}
         </Form.Item>
 
-        {credentialFields()}
+        <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 16 }}>
+          <Text strong style={{ display: 'block', marginBottom: 12 }}>Connection details</Text>
+          {credentialFields()}
+        </div>
 
-        <Form.Item style={{ marginBottom: 0 }}>
-          <Space align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Space align="center">
-              <Button
-                onClick={() => void handleTestConnection()}
-                loading={testing}
-                disabled={selectedProvider !== 'ollama' && !hasCredentials}
-              >
-                Test Connection
-              </Button>
-              {selectedProvider !== 'ollama' && !hasCredentials && (
-                <Text type="secondary" style={{ fontSize: 12 }}>Save credentials first</Text>
-              )}
-            </Space>
+        <div role="group" aria-label="LLM configuration actions" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, paddingTop: 16 }}>
+          <Space wrap>
             <Button
               type="primary"
               onClick={() => void handleSave()}
               loading={saveMutation.isPending}
+              disabled={testing}
             >
               Save
             </Button>
+            <Button
+              onClick={() => void handleTestConnection()}
+              loading={testing}
+              disabled={dirty || saveMutation.isPending || (selectedProvider !== 'ollama' && !hasCredentials && !saved)}
+            >
+              Test Connection
+            </Button>
           </Space>
-        </Form.Item>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }} role="status">
+            {dirty ? 'Unsaved changes — save before testing.' : saved ? 'Changes saved. Ready to test.' : 'Test Connection uses saved settings.'}
+          </Text>
+        </div>
 
-        {testResult && (
-          <Alert
-            type={testResult.ok ? 'success' : 'error'}
-            message={testResult.ok ? 'Connection successful' : 'Connection failed'}
-            description={testResult.ok ? undefined : testResult.error}
-            showIcon
-            style={{ marginTop: 12 }}
-          />
-        )}
+        {testResult && <ConnectionTestResult result={testResult} />}
       </Form>
     </div>
   );
@@ -563,15 +585,21 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     content: () => <CrossNsLinkingSection />,
   },
   {
+    key: 'report-export',
+    label: 'Report Export',
+    content: () => <ReportExportSection />,
+  },
+  {
     key: 'llm',
     label: 'LLM',
-    content: (onClose) => <LlmSection onSaved={onClose} />,
+    content: () => <LlmSection />,
   },
 ];
 
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function SettingsDialog({ open, onClose }: Props) {
+  const { token } = theme.useToken();
   const activeTabFromStore = useAppSettingsDialogStore((s) => s.activeTab);
   const setActiveTab = useAppSettingsDialogStore((s) => s.setActiveTab);
 
@@ -594,15 +622,17 @@ export function SettingsDialog({ open, onClose }: Props) {
 
   return (
     <Modal
+      className="riacore-settings-dialog"
       title="Settings"
       open={open}
       onCancel={onClose}
+      styles={{ footer: { borderTop: `1px solid ${token.colorBorderSecondary}`, marginTop: 20, paddingTop: 12 } }}
       footer={[
         <Button key="close" onClick={onClose}>
           Close
         </Button>,
       ]}
-      width={680}
+      width={900}
       destroyOnHidden
     >
       <Tabs
@@ -613,7 +643,7 @@ export function SettingsDialog({ open, onClose }: Props) {
           key: section.key,
           label: section.label,
           children: (
-            <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ maxHeight: 'min(620px, 68vh)', overflowY: 'auto', paddingRight: 12, paddingLeft: 8 }}>
               {section.content(onClose)}
             </div>
           ),

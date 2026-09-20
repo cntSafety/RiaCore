@@ -46,6 +46,8 @@ export interface MalfunctionExportData {
   riskRating: RiskRatingData | null;
   /** Review items attached to this malfunction. */
   reviews: ReviewExportData[];
+  functionalInsufficiencies?: SafetyDetailExportData[];
+  triggeringConditions?: SafetyDetailExportData[];
 }
 
 export interface RequirementExportData {
@@ -56,6 +58,7 @@ export interface RequirementExportData {
   reqText: string;
   reqAsil: string;
   reqLinkedTo?: string;
+  originatingTask?: string;
 }
 
 export interface SafetyTaskExportData {
@@ -87,6 +90,22 @@ export interface ReviewExportData {
   authorComment: string;
   /** Verdict set on resolution (may be empty) */
   verdict: string;
+  authorStatus?: string;
+}
+
+/** Authored SOTIF detail, shared by one or more analysis cases. */
+export interface SafetyDetailExportData {
+  nodeId: number;
+  name: string;
+  description: string;
+  source: string;
+}
+
+export interface TagExportData {
+  nodeId: number;
+  name: string;
+  description: string;
+  color: string;
 }
 
 export interface PortExportData {
@@ -112,6 +131,11 @@ export interface ComponentExportData {
   portCount: number;
   ports: PortExportData[];
   tags: string[];
+  tagDetails?: TagExportData[];
+  /** Preserve authored records that have not yet been linked to a malfunction. */
+  unlinkedFunctionalInsufficiencies?: SafetyDetailExportData[];
+  unlinkedTriggeringConditions?: SafetyDetailExportData[];
+  unlinkedReviews?: ReviewExportData[];
 }
 
 export interface SafetyExportData {

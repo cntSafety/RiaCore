@@ -38,7 +38,7 @@ export type {
   ViewDefinition, ViewpointDefinition, MetadataDefinition,
   PartUsage, PortUsage, ItemUsage, AttributeUsage, ActionUsage,
   StateUsage, ExhibitStateUsage, ConnectionUsage, InterfaceUsage,
-  FlowConnectionUsage, RequirementUsage,
+  FlowConnectionUsage, RequirementUsage, BindingConnectorAsUsage,
   Connector, ItemFlow, ItemFlowEnd,
   Definition, Usage, Feature, Type, Classifier,
 } from './generated/ast.js';
@@ -58,6 +58,12 @@ export {
   // allocations, flows, successions, bindings — which is what lets the importer
   // read endpoint paths without enumerating AST `$type` literals.
   isConnector, isItemFlow, isItemFlowEnd,
+  // A binding is a connector in its own right rather than a ConnectionUsage
+  // subtype, so it needs its own guard: `isConnectionUsage` does not match it.
+  isBindingConnectorAsUsage,
+  // Annotating elements. `Documentation` extends `Comment` in the AST, so a
+  // consumer matching both must test the concrete guard first.
+  isDocumentation, isComment,
   isOwningMembership, isElement, isNamespace, isDefinition, isUsage,
   isFeature, isType, isClassifier,
 } from './generated/ast.js';

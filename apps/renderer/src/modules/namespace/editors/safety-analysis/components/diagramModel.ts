@@ -75,6 +75,28 @@ export function portDirection(concept: string): 'in' | 'out' {
 }
 
 /**
+ * Whether a port carries data both ways, and so has no single side to belong to.
+ *
+ * `InOutPort` is a real answer, not a missing one. A SysML port typed by a
+ * definition whose features disagree — `HvDcSupply` reports voltage and state of
+ * charge outward while current is drawn inward — is left bidirectional on purpose;
+ * `resolvePortDirections` declines to guess rather than picking a side.
+ *
+ * {@link portDirection} has to collapse that to a side, because a row can only sit
+ * in one column and the layout keys off it: ELK assigns WEST/EAST from it, frame
+ * height is the taller of the two columns, and edge anchors derive from it. It
+ * collapses to `'in'`, which is why a bidirectional port sits on the left — and why,
+ * without this, it was indistinguishable from a plain input.
+ *
+ * So the distinction is carried visually instead. Neither of the obvious channels
+ * was free: colour on the pin is the ASIL encoding, and position is the direction
+ * itself. Fill is, hence a hollow pin — see `PortPin`.
+ */
+export function isBidirectionalPort(concept: string): boolean {
+  return concept === 'InOutPort';
+}
+
+/**
  * Whether the diagram renders a concept at all — "has a presentation entry for
  * the view's immediate metamodel" (spec-view.md Phase 4.4), replacing the two
  * hardcoded ARXML concept sets.
@@ -93,9 +115,15 @@ export function isRelevantConcept(concept: string, presentation: ConceptPresenta
  * in its `kind` attribute (RiaViews.md — "`kind` is where that distinction
  * survives"). Matched as a substring rather than against a literal source
  * concept name, so an unrecognized kind renders solid instead of failing.
+ *
+ * A binding counts as a delegation. SysML's `bind` is what ties a definition's
+ * own parameter to a nested usage's parameter — the same boundary-to-internals
+ * relationship that a delegation `connect` expresses for a part's ports, and not
+ * a transfer between two peers. Drawing it dashed says that: the two ends are the
+ * same value seen from inside and outside, rather than two things exchanging one.
  */
 export function isDelegationLink(connectorType: string): boolean {
-  return /delegation/i.test(connectorType);
+  return /delegation|binding/i.test(connectorType);
 }
 
 /**
@@ -108,10 +136,10 @@ export function isDelegationLink(connectorType: string): boolean {
  * arrow on a flow says something true; on a connection it would be decoration.
  *
  * Matched as a substring of `kind` for the same reason as
- * {@link isDelegationLink}: the source discriminator is a metamodel concept name
- * — `flow_usage` in the JSON importer, `flow_connection_usage` in the textual one,
- * and whatever a succession flow is called next — so an unrecognized kind renders
- * as an ordinary connection instead of failing.
+ * {@link isDelegationLink}: the source discriminator is a metamodel concept name.
+ * Both SysML importers now say `flow_usage`, but a substring test still costs
+ * nothing and keeps an unrecognized kind — a succession flow, or whatever a future
+ * metamodel calls one — rendering as an ordinary connection instead of failing.
  */
 export function isFlowLink(connectorType: string): boolean {
   return /flow/i.test(connectorType);

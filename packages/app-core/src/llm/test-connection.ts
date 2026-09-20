@@ -32,7 +32,8 @@ import { createLanguageModel } from './provider-factory.js';
 
 /**
  * Send a minimal prompt to the configured model to verify credentials
- * and network connectivity. Uses maxOutputTokens=4 to minimise cost.
+ * and network connectivity. Keeps output small while meeting the OpenAI
+ * Responses API's minimum output-token budget of 16.
  */
 export async function testProviderConnection(
   settings: LlmSettings,
@@ -46,7 +47,7 @@ export async function testProviderConnection(
     await generateText({
       model,
       prompt: 'Reply with exactly: ok',
-      maxOutputTokens: 4,
+      maxOutputTokens: 16,
     });
     return {
       ok: true,

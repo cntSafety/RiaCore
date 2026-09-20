@@ -101,6 +101,12 @@ export type {
   LlmSettingsStoreOptions,
 } from './llm/llm-settings-store.js';
 export {
+  ExportSettingsStore,
+  DEFAULT_EXPORT_SETTINGS,
+  EXPORT_SETTINGS_FILENAME,
+} from './settings/export-settings-store.js';
+export type { ExportSettingsStoreOptions } from './settings/export-settings-store.js';
+export {
   LLM_STREAM_CHANNEL,
   pushStreamEvent,
   consumePumpedStream,

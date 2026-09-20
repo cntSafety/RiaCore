@@ -19,7 +19,7 @@
  */
 import type { ServiceDependencies } from '../types.js';
 import type { ConceptInstanceData } from '../../namespaces/instance-service.js';
-import type { RiskRatingData, MalfunctionExportData, RequirementExportData, SafetyTaskExportData, SafetyNoteExportData, ReviewExportData, ComponentExportData, SafetyExportData, PortExportData } from '@riacore/app-contracts';
+import type { RiskRatingData, MalfunctionExportData, RequirementExportData, SafetyTaskExportData, SafetyNoteExportData, ReviewExportData, ComponentExportData, SafetyExportData, SafetyDetailExportData, TagExportData } from '@riacore/app-contracts';
 
 // ── ID generation helpers ────────────────────────────────────────────────────
 
@@ -62,22 +62,6 @@ async function required<T>(name: string, fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Query '${name}' failed: ${msg}`);
-  }
-}
-
-// ── Optional-call wrapper ────────────────────────────────────────────────────
-
-async function optional<T>(
-  name: string,
-  fn: () => Promise<T>,
-  fallback: T,
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[safety-export-aggregator] Optional call '${name}' failed (continuing with empty result): ${msg}`);
-    return fallback;
   }
 }
 
@@ -124,8 +108,7 @@ RETURN owner.node_id AS owner_node_id, port.node_id AS port_node_id,
 
 /**
  * Aggregate all safety export data for a namespace into a format-agnostic
- * SafetyExportData object. Required calls throw on failure; optional calls
- * log a warning and substitute an empty array.
+ * SafetyExportData object. Every query is required: an export must not silently omit data on failure.
  */
 export async function aggregateExportData(
   namespace: string,
@@ -155,50 +138,46 @@ export async function aggregateExportData(
     return result.data;
   });
 
-  // ── Step 2: Optional bulk queries ─────────────────────────────────────────
+  // ── Step 2: Additional bulk queries ─────────────────────────────────────────
 
-  const rawSafetyTasks = await optional(
+  const rawSafetyTasks = await required(
     'getAllSafetyTasks',
     async () => {
       const result = await sc.getAllSafetyTasks(namespace);
       if (!result.ok) throw new Error(result.error);
       return result.data;
     },
-    [] as ConceptInstanceData[],
   );
 
-  const propagationRows = await optional(
+  const propagationRows = await required(
     'propagation query',
     () => db.runQuery(PROPAGATION_QUERY, { namespace }),
-    [] as Record<string, unknown>[],
   );
 
-  const rawAllTags = await optional(
+  const rawAllTags = await required(
     'getAllTags',
     async () => {
       const result = await sc.getAllTags(namespace);
       if (!result.ok) throw new Error(result.error);
       return result.data;
     },
-    [] as ConceptInstanceData[],
   );
 
   // Bulk review-item query: fetch all review_items in the namespace together with
   // their parent malfunction node_id via the RIA_UNIV_RelationshipInstance secondary
   // table (target-pinned).
-  const reviewItemRows = await optional(
+  const reviewItemRows = await required(
     'bulk review-item query',
     () => db.runQuery(
       `MATCH (ri:RIA_UNIV_ConceptInstance)
        WHERE ri.namespace = $namespace AND ri.concept = 'review_item'
-       MATCH (ri2:RIA_UNIV_RelationshipInstance)
+       OPTIONAL MATCH (ri2:RIA_UNIV_RelationshipInstance)
          WHERE ri2.target_node_id = ri.node_id AND ri2.relationship = 'has_review'
        RETURN ri2.source_node_id AS fm_node_id,
               ri.node_id AS node_id,
               ri.attributes AS attributes`,
       { namespace },
     ),
-    [] as Record<string, unknown>[],
   );
 
   // ── Step 3: Build lookup maps ──────────────────────────────────────────────
@@ -216,6 +195,8 @@ export async function aggregateExportData(
 
   // Map malfunction nodeId → review items attached to it
   const reviewsByFm = new Map<number, ReviewExportData[]>();
+  const unlinkedReviews: ReviewExportData[] = [];
+  const malfunctionIds = new Set(rawMalfunctions.map(fm => fm.node_id));
   for (const row of reviewItemRows) {
     const fmId = Number(row.fm_node_id);
     const attrs = parseAttrs(row.attributes);
@@ -226,17 +207,52 @@ export async function aggregateExportData(
       reviewerComment: str(attrs.reviewer_comment),
       authorComment: str(attrs.author_comment),
       verdict: str(attrs.reviewer_verdict),
+      authorStatus: str(attrs.author_status),
     };
+    if (!malfunctionIds.has(fmId)) {
+      unlinkedReviews.push(review);
+      continue;
+    }
     if (!reviewsByFm.has(fmId)) reviewsByFm.set(fmId, []);
     reviewsByFm.get(fmId)!.push(review);
   }
 
-  // Map nodeId → tag has_name values (all tags in namespace)
-  const tagById = new Map<number, string>();
+  // Use the same relationship-instance lookup as the UI's SOTIF commands,
+  // in bulk, preserving both linked and not-yet-linked authored details.
+  async function loadDetails(concept: string, relationship: string, prefix: string) {
+    const rows = await required(`${concept} query`, () => db.runQuery(
+      `MATCH (item:RIA_UNIV_ConceptInstance)
+       WHERE item.namespace = $namespace AND item.concept = $concept
+       OPTIONAL MATCH (rel:RIA_UNIV_RelationshipInstance)
+       WHERE rel.target_node_id = item.node_id AND rel.relationship = $relationship
+       RETURN item.node_id AS node_id, item.attributes AS attributes,
+              rel.source_node_id AS fm_node_id`,
+      { namespace, concept, relationship },
+    ));
+    const byFm = new Map<number, SafetyDetailExportData[]>();
+    const unlinked: SafetyDetailExportData[] = [];
+    for (const row of rows) {
+      const attrs = parseAttrs(row.attributes);
+      const detail = { nodeId: Number(row.node_id), name: str(attrs.has_name),
+        description: str(attrs[`${prefix}_description`]), source: str(attrs[`${prefix}_source`]) };
+      const fmId = Number(row.fm_node_id);
+      if (!malfunctionIds.has(fmId)) {
+        unlinked.push(detail);
+      } else {
+        if (!byFm.has(fmId)) byFm.set(fmId, []);
+        byFm.get(fmId)!.push(detail);
+      }
+    }
+    return { byFm, unlinked };
+  }
+  const functionalInsufficiencies = await loadDetails('functional_insufficiency', 'has_functional_insufficiencies', 'fi');
+  const triggeringConditions = await loadDetails('triggering_condition', 'has_triggering_conditions', 'tc');
+
+  const tagById = new Map<number, TagExportData>();
   for (const tag of rawAllTags) {
     const attrs = parseAttrs(tag.attributes);
-    const name = str(attrs.has_name);
-    if (name) tagById.set(tag.node_id, name);
+    tagById.set(tag.node_id, { nodeId: tag.node_id, name: str(attrs.has_name),
+      description: str(attrs.tag_description), color: str(attrs.tag_color) });
   }
 
   // Port count per component node_id — populated after step 5 once componentNodeIds is known
@@ -278,6 +294,7 @@ export async function aggregateExportData(
        WHERE fm.namespace = $namespace AND fm.concept = 'malfunction' AND r.relationship = 'occurs_at'
        OPTIONAL MATCH (owner:RIA_UNIV_ConceptInstance)-[op:RIA_UNIV_INSTANCE_REL]->(tgt)
        WHERE op.relationship IN ['has_p_port', 'has_r_port', 'has_pr_port']
+          OR (op.relationship = 'owns_element' AND tgt.concept = 'port_usage')
        RETURN fm.node_id AS fm_node_id,
               tgt.node_id AS tgt_node_id,
               tgt.namespace AS tgt_namespace,
@@ -296,7 +313,7 @@ export async function aggregateExportData(
     const fmId = Number(row.fm_node_id);
     const tgtConcept = str(row.tgt_concept);
     const portRel = str(row.port_rel);
-    const isPort = ['p_port', 'r_port', 'pr_port'].includes(tgtConcept);
+    const isPort = ['p_port', 'r_port', 'pr_port', 'port_usage'].includes(tgtConcept);
 
     let portKind: 'receiver' | 'provider' | undefined;
     let portName: string | undefined;
@@ -307,7 +324,8 @@ export async function aggregateExportData(
       const tgtAttrs = parseAttrs(row.tgt_attrs);
       portName = str(tgtAttrs.short_name || tgtAttrs.has_name || tgtAttrs.name) || undefined;
       // r_port = receiver, p_port = provider, pr_port = provider (bidirectional treated as provider)
-      if (tgtConcept === 'r_port' || portRel === 'has_r_port') {
+      if (tgtConcept === 'r_port' || portRel === 'has_r_port' ||
+          (tgtConcept === 'port_usage' && str(tgtAttrs.direction).toLowerCase() === 'in')) {
         portKind = 'receiver';
       } else {
         portKind = 'provider';
@@ -342,14 +360,57 @@ export async function aggregateExportData(
     if (oa.portKind) {
       // Port-level MF: owner is the SWC
       if (oa.ownerNodeId != null) componentNodeIds.add(oa.ownerNodeId);
+      else if (oa.targetNodeId != null) componentNodeIds.add(oa.targetNodeId);
     } else {
       // Functional MF: target is the SWC
       if (oa.targetNodeId != null) componentNodeIds.add(oa.targetNodeId);
     }
   }
 
-  // Also collect component node IDs from safety notes (notes can be attached to components)
-  // We'll handle notes separately below.
+  // Discover notes before components, including elements without malfunctions.
+  // Notes can be attached to components via cross-namespace has_notes edges
+  const notesByComponent = new Map<number, ConceptInstanceData[]>();
+  const noteById = new Map(rawSafetyNotes.map(note => [note.node_id, note]));
+  if (rawSafetyNotes.length > 0) {
+    const noteCompRows = await required(
+      'notes-component link query',
+      () => db.runQuery(
+        `MATCH (comp:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(note:RIA_UNIV_ConceptInstance)
+         WHERE note.namespace = $namespace AND r.relationship = 'has_notes' AND note.concept = 'safety_note'
+         RETURN comp.node_id AS comp_node_id, note.node_id AS note_node_id,
+                note.namespace AS note_namespace, note.concept AS note_concept,
+                note.metamodel AS note_metamodel, note.attributes AS note_attributes`,
+        { namespace },
+      ),
+    );
+    for (const row of noteCompRows) {
+      const compId = Number(row.comp_node_id);
+      const note = noteById.get(Number(row.note_node_id));
+      if (!note) continue;
+      componentNodeIds.add(compId);
+      if (!notesByComponent.has(compId)) notesByComponent.set(compId, []);
+      notesByComponent.get(compId)!.push(note);
+    }
+  }
+
+  // Discover tag-only elements as well; the UI API intentionally returns tags
+  // from every analysis, whereas an export must select exactly this namespace.
+  const tagsByComponent = new Map<number, TagExportData[]>();
+  if (rawAllTags.length > 0) {
+    const rows = await required('tags-component link query', () => db.runQuery(
+      `MATCH (comp:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tag:RIA_UNIV_ConceptInstance)
+       WHERE tag.namespace = $namespace AND tag.concept = 'tag' AND r.relationship = 'has_tag'
+       RETURN comp.node_id AS comp_node_id, tag.node_id AS tag_node_id`, { namespace },
+    ));
+    for (const row of rows) {
+      const compId = Number(row.comp_node_id);
+      const tag = tagById.get(Number(row.tag_node_id));
+      if (!tag) continue;
+      componentNodeIds.add(compId);
+      if (!tagsByComponent.has(compId)) tagsByComponent.set(compId, []);
+      tagsByComponent.get(compId)!.push(tag);
+    }
+  }
 
   // Fetch component data for all referenced SWC nodes
   interface ComponentInfo {
@@ -395,10 +456,9 @@ export async function aggregateExportData(
   const portsByComponent = new Map<number, PortData[]>();
 
   if (componentNodeIds.size > 0) {
-    const portRows = await optional(
+    const portRows = await required(
       'port query',
       () => db.runQuery(PORT_QUERY, { nodeIds: Array.from(componentNodeIds) }),
-      [] as Record<string, unknown>[],
     );
     for (const row of portRows) {
       const ownerId = Number(row.owner_node_id);
@@ -455,8 +515,8 @@ export async function aggregateExportData(
   );
   for (const row of riskRatingRows) {
     const fmId = Number(row.fm_node_id);
-    // A malfunction has at most one risk rating; keep the first if duplicated.
-    if (riskRatingByFm.has(fmId)) continue;
+    // Do not silently discard invalid duplicate ratings.
+    if (riskRatingByFm.has(fmId)) throw new Error(`Malfunction ${fmId} has multiple risk ratings`);
     riskRatingByFm.set(fmId, {
       node_id: Number(row.node_id),
       namespace: str(row.namespace),
@@ -512,7 +572,7 @@ export async function aggregateExportData(
   const tasksByFm = new Map<number, number[]>();
   if (rawSafetyTasks.length > 0) {
     // Query which tasks are linked to which malfunctions
-    const taskLinkRows = await optional(
+    const taskLinkRows = await required(
       'task-fm link query',
       () => db.runQuery(
         `MATCH (task:RIA_UNIV_ConceptInstance)<-[r:RIA_UNIV_INSTANCE_REL]-(fm:RIA_UNIV_ConceptInstance)
@@ -521,62 +581,12 @@ export async function aggregateExportData(
          RETURN fm.node_id AS fm_node_id, task.node_id AS task_node_id`,
         { namespace },
       ),
-      [] as Record<string, unknown>[],
     );
     for (const row of taskLinkRows) {
       const fmId = Number(row.fm_node_id);
       const taskId = Number(row.task_node_id);
       if (!tasksByFm.has(fmId)) tasksByFm.set(fmId, []);
       tasksByFm.get(fmId)!.push(taskId);
-    }
-  }
-
-  // ── Step 8: Fetch tags for each SWC component ─────────────────────────────
-  const tagsByComponent = new Map<number, string[]>();
-  if (rawAllTags.length > 0) {
-    for (const compId of componentNodeIds) {
-      const compTags = await optional(
-        `getTagsForImportedElement(${compId})`,
-        async () => {
-          const result = await sc.getTagsForImportedElement(compId);
-          if (!result.ok) throw new Error(result.error);
-          return result.data;
-        },
-        [] as ConceptInstanceData[],
-      );
-      const tagNames = compTags
-        .map(t => str(parseAttrs(t.attributes).has_name))
-        .filter(n => n.length > 0);
-      if (tagNames.length > 0) tagsByComponent.set(compId, tagNames);
-    }
-  }
-
-  // ── Step 9: Fetch safety notes attached to each component ─────────────────
-  // Notes can be attached to components via cross-namespace has_notes edges
-  const notesByComponent = new Map<number, ConceptInstanceData[]>();
-  if (rawSafetyNotes.length > 0 && componentNodeIds.size > 0) {
-    const noteCompRows = await optional(
-      'notes-component link query',
-      () => db.runQuery(
-        `MATCH (comp:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(note:RIA_UNIV_ConceptInstance)
-         WHERE comp.node_id IN $nodeIds AND r.relationship = 'has_notes' AND note.concept = 'safety_note'
-         RETURN comp.node_id AS comp_node_id, note.node_id AS note_node_id,
-                note.namespace AS note_namespace, note.concept AS note_concept,
-                note.metamodel AS note_metamodel, note.attributes AS note_attributes`,
-        { nodeIds: Array.from(componentNodeIds) },
-      ),
-      [] as Record<string, unknown>[],
-    );
-    for (const row of noteCompRows) {
-      const compId = Number(row.comp_node_id);
-      if (!notesByComponent.has(compId)) notesByComponent.set(compId, []);
-      notesByComponent.get(compId)!.push({
-        node_id: Number(row.note_node_id),
-        namespace: str(row.note_namespace),
-        concept: str(row.note_concept),
-        metamodel: str(row.note_metamodel),
-        attributes: parseAttrs(row.note_attributes),
-      });
     }
   }
 
@@ -605,54 +615,59 @@ export async function aggregateExportData(
     return componentAccumulators.get(compId)!;
   }
 
+  const UNASSIGNED = -1;
+  componentInfoById.set(UNASSIGNED, { nodeId: UNASSIGNED, name: 'Unassigned safety data',
+    uuid: '', componentType: 'unassigned', namespace });
+  // Notes and tags can be the only authored records on an element.
+  for (const compId of componentNodeIds) {
+    if (!getOrCreateAccumulator(compId)) throw new Error(`Cannot resolve export element ${compId}`);
+  }
   for (const em of enrichedMalfunctions) {
     const oa = em.oa;
-    if (!oa) continue; // Skip orphaned malfunctions (no occurs_at)
-
-    if (oa.portKind) {
-      // Port-level MF
-      const compId = oa.ownerNodeId;
-      if (compId == null) continue;
-      const acc = getOrCreateAccumulator(compId);
-      if (!acc) continue;
-      if (oa.portKind === 'receiver') {
-        acc.receiverPortMFs.push(em);
-      } else {
-        acc.providerPortMFs.push(em);
-      }
-    } else {
-      // Functional MF
-      const compId = oa.targetNodeId;
-      if (compId == null) continue;
-      const acc = getOrCreateAccumulator(compId);
-      if (!acc) continue;
-      acc.functionalMFs.push(em);
-    }
+    const compId = (oa?.portKind ? oa.ownerNodeId ?? oa.targetNodeId : oa?.targetNodeId) ?? UNASSIGNED;
+    const acc = getOrCreateAccumulator(compId);
+    if (!acc) throw new Error(`Cannot resolve export element ${compId} for malfunction ${em.raw.node_id}`);
+    if (oa?.portKind === 'receiver') acc.receiverPortMFs.push(em);
+    else if (oa?.portKind === 'provider') acc.providerPortMFs.push(em);
+    else acc.functionalMFs.push(em);
+  }
+  const usedTasks = new Set(enrichedMalfunctions.flatMap(em => tasksByFm.get(em.raw.node_id) ?? []));
+  const usedRequirements = new Set(enrichedMalfunctions.flatMap(em => em.linkedReqIds));
+  const usedNotes = new Set([...notesByComponent.values()].flat().map(note => note.node_id));
+  const usedTags = new Set([...tagsByComponent.values()].flat().map(tag => tag.nodeId));
+  const unlinkedTasks = rawSafetyTasks.filter(task => !usedTasks.has(task.node_id));
+  const unlinkedRequirements = rawRequirements.filter(req => !usedRequirements.has(req.node_id));
+  const unlinkedNotes = rawSafetyNotes.filter(note => !usedNotes.has(note.node_id));
+  const unlinkedTags = [...tagById.values()].filter(tag => !usedTags.has(tag.nodeId));
+  if (unlinkedTasks.length || unlinkedRequirements.length || unlinkedNotes.length || unlinkedTags.length ||
+      functionalInsufficiencies.unlinked.length || triggeringConditions.unlinked.length || unlinkedReviews.length) {
+    getOrCreateAccumulator(UNASSIGNED);
+    notesByComponent.set(UNASSIGNED, unlinkedNotes);
+    tagsByComponent.set(UNASSIGNED, unlinkedTags);
   }
 
   // ── Step 11: Assign Sphinx-Needs IDs and build ComponentExportData ─────────
 
   const components: ComponentExportData[] = [];
 
+  const prefixByComponent = new Map<number, string>();
+  const usedPrefixes = new Set<string>();
+  const mfIdMap = new Map<number, string>();
   for (const [compId, acc] of componentAccumulators) {
-    const prefix = normalizeComponentName(acc.info.name);
+    const base = normalizeComponentName(acc.info.name) || 'COMPONENT';
+    let prefix = base;
+    while (usedPrefixes.has(prefix)) prefix = `${prefix}_N${Math.abs(compId)}`;
+    usedPrefixes.add(prefix);
+    prefixByComponent.set(compId, prefix);
+    for (const [suffix, malfunctions] of [
+      ['MF', acc.functionalMFs], ['MF_RP', acc.receiverPortMFs], ['MF_PP', acc.providerPortMFs],
+    ] as const) {
+      malfunctions.forEach((em, i) => mfIdMap.set(em.raw.node_id, `${prefix}_${suffix}_${pad(i + 1, 3)}`));
+    }
+  }
 
-    // Build a nodeId → Sphinx-Needs ID map for all MFs in this component
-    // (needed to resolve causation IDs and task/req cross-references)
-    const mfIdMap = new Map<number, string>();
-
-    let funcCounter = 1;
-    for (const em of acc.functionalMFs) {
-      mfIdMap.set(em.raw.node_id, `${prefix}_MF_${pad(funcCounter++, 3)}`);
-    }
-    let rpCounter = 1;
-    for (const em of acc.receiverPortMFs) {
-      mfIdMap.set(em.raw.node_id, `${prefix}_MF_RP_${pad(rpCounter++, 3)}`);
-    }
-    let ppCounter = 1;
-    for (const em of acc.providerPortMFs) {
-      mfIdMap.set(em.raw.node_id, `${prefix}_MF_PP_${pad(ppCounter++, 3)}`);
-    }
+  for (const [compId, acc] of componentAccumulators) {
+    const prefix = prefixByComponent.get(compId)!;
 
     // Build requirement ID map for this component
     // Collect all requirement nodeIds referenced by MFs in this component
@@ -661,6 +676,7 @@ export async function aggregateExportData(
       for (const reqId of em.linkedReqIds) allReqNodeIds.add(reqId);
     }
 
+    if (compId === UNASSIGNED) for (const req of unlinkedRequirements) allReqNodeIds.add(req.node_id);
     const reqIdMap = new Map<number, string>();
     let reqCounter = 1;
     for (const reqNodeId of allReqNodeIds) {
@@ -674,6 +690,7 @@ export async function aggregateExportData(
       for (const taskId of tasks) allTaskNodeIds.add(taskId);
     }
 
+    if (compId === UNASSIGNED) for (const task of unlinkedTasks) allTaskNodeIds.add(task.node_id);
     const taskIdMap = new Map<number, string>();
     let taskCounter = 1;
     for (const taskNodeId of allTaskNodeIds) {
@@ -748,6 +765,8 @@ export async function aggregateExportData(
         reqIds,
         riskRating,
         reviews: reviewsByFm.get(em.raw.node_id) ?? [],
+        functionalInsufficiencies: functionalInsufficiencies.byFm.get(em.raw.node_id) ?? [],
+        triggeringConditions: triggeringConditions.byFm.get(em.raw.node_id) ?? [],
       };
     }
 
@@ -761,7 +780,7 @@ export async function aggregateExportData(
     // Collect the missing node IDs and fetch them in one query.
     const missingReqNodeIds = [...allReqNodeIds].filter(id => !requirementById.has(id));
     if (missingReqNodeIds.length > 0) {
-      const missingRows = await optional(
+      const missingRows = await required(
         'fetch imported requirements',
         () => db.runQuery(
           `MATCH (r:RIA_UNIV_ConceptInstance)
@@ -771,7 +790,6 @@ export async function aggregateExportData(
                   r.attributes AS attributes`,
           { nodeIds: missingReqNodeIds },
         ),
-        [] as Record<string, unknown>[],
       );
       for (const row of missingRows) {
         requirementById.set(Number(row.node_id), {
@@ -787,7 +805,7 @@ export async function aggregateExportData(
     const requirements: RequirementExportData[] = [];
     for (const [reqNodeId, reqSphinxId] of reqIdMap) {
       const rawReq = requirementById.get(reqNodeId);
-      if (!rawReq) continue;
+      if (!rawReq) throw new Error(`Cannot resolve exported requirement ${reqNodeId}`);
       const attrs = parseAttrs(rawReq.attributes);
       // Support both safety-authored requirements (req_name, req_id, req_text, req_asil)
       // and imported requirements from other namespaces (e.g. sphinx-needs: id, title/content)
@@ -804,6 +822,7 @@ export async function aggregateExportData(
         reqText,
         reqAsil,
         reqLinkedTo,
+        originatingTask: str(attrs.originating_task) || undefined,
       });
     }
 
@@ -845,7 +864,10 @@ export async function aggregateExportData(
       providerPortMFs.length > 0 ||
       requirements.length > 0 ||
       safetyTasks.length > 0 ||
-      safetyNotes.length > 0;
+      safetyNotes.length > 0 ||
+      (tagsByComponent.get(compId)?.length ?? 0) > 0 ||
+      (compId === UNASSIGNED && (functionalInsufficiencies.unlinked.length > 0 ||
+        triggeringConditions.unlinked.length > 0 || unlinkedReviews.length > 0));
 
     if (!hasSafetyElements) continue; // Exclude components with zero safety elements
 
@@ -864,7 +886,11 @@ export async function aggregateExportData(
       safetyNotes,
       portCount: portCountByNodeId.get(compId) ?? 0,
       ports: (portsByComponent.get(compId) ?? []).map(p => ({ nodeId: p.nodeId, name: p.name, kind: p.kind })),
-      tags: tagsByComponent.get(compId) ?? [],
+      tags: (tagsByComponent.get(compId) ?? []).map(tag => tag.name),
+      tagDetails: tagsByComponent.get(compId) ?? [],
+      unlinkedFunctionalInsufficiencies: compId === UNASSIGNED ? functionalInsufficiencies.unlinked : [],
+      unlinkedTriggeringConditions: compId === UNASSIGNED ? triggeringConditions.unlinked : [],
+      unlinkedReviews: compId === UNASSIGNED ? unlinkedReviews : [],
     });
   }
 

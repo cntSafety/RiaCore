@@ -387,9 +387,22 @@ export function buildElkInput(
   portConstraints: 'FIXED_SIDE' | 'FIXED_POS' = 'FIXED_SIDE',
   frameSizes?: ElkLayoutResult['sizes'],
 ): ElkLayoutInput {
-  const sourcePorts = new Set(graph.edges.map(edge => `${edge.source}|${portIdFromHandle(edge.sourceHandle)}`));
-  const targetPorts = new Set(graph.edges.map(edge => `${edge.target}|${portIdFromHandle(edge.targetHandle)}`));
   const tiles = new Map(graph.tiles.map(tile => [tile.id, tile]));
+
+  // Only *peer* edges are counted. The `psrc-`/`ptgt-` anchors exist so a peer route
+  // can leave on the right and arrive on the left; `endpointPort` returns the port's
+  // own anchor for every delegation, so a delegation can never attach to one. Built
+  // from all edges, a port carrying nothing but delegations still had an extra anchor
+  // declared on its opposite border — one ELK orders its ports around and reserves
+  // border space for, while no route ever lands on it.
+  //
+  // Latent until bindings were projected. A frame's own ports delegate inward, and
+  // `bind child.p = framePort` puts the *destination* first, so `references_source`
+  // lands on the child — which made every child input a "source" and hung a stray
+  // east anchor off it. On a frame like `ClsLoopMtrControl` that is 24 of them.
+  const peerEdges = graph.edges.filter((edge) => !isDelegation(edge, tiles));
+  const sourcePorts = new Set(peerEdges.map(edge => `${edge.source}|${portIdFromHandle(edge.sourceHandle)}`));
+  const targetPorts = new Set(peerEdges.map(edge => `${edge.target}|${portIdFromHandle(edge.targetHandle)}`));
   const endpointPort = (
     tileId: string, handle: string, role: 'source' | 'target', delegation: boolean,
   ) => {

@@ -39,6 +39,7 @@ import type { SafetyExportData } from './safety-export-types.js';
 import type { LlmSettings, LlmSaveSettingsInput, LlmStartReviewInput, LlmStartReviewResult, LlmCancelReviewInput, LlmTestConnectionResult, LlmDryRunInput, LlmDryRunResult } from './llm-types.js';
 import type { MetamodelProfileMetadata, MetamodelRenderingConfig } from './metamodel-types.js';
 import type { NamespaceConnectionGraph, ConnectionEntry, DisconnectResult, CrossNsLinkSettings } from './namespace-connection-types.js';
+import type { ExportSettings } from './export-settings-types.js';
 import type { LayoutRecord, DiagramLayout, ViewLayoutSourceRef } from './canvas-layout-types.js';
 import type { ViewDefinition, CreateViewParams, UpdateViewParams, EvaluateViewParams, EvaluationResult, MaterializeViewParams, MaterializeResult } from './view-types.js';
 import type { ConceptPresentation, GetPresentationInput } from './presentation-types.js';
@@ -323,7 +324,14 @@ export interface IpcChannelMap {
   'safety.unlinkDirectRequirementFromFm': { input: { failureModeNodeId: number; requirementNodeId: number }; output: void };
   'safety.getDirectRequirementsForFm': { input: { failureModeNodeId: number }; output: ConceptInstanceData[] };
   'safety.searchRequirementsAcrossNamespaces': { input: { query: string }; output: ConceptInstanceData[] };
-  'safety.exportSphinxNeeds': { input: { namespace: string; outputDir: string }; output: { exportedFiles: string[]; outputDir: string } };
+  /**
+   * `includeRiskRatings` mirrors {@link ExportSettings.includeRiskRatings}. It is
+   * passed in the payload rather than read from the store inside the handler
+   * because the store lives in the Electron main process (`app.getPath('userData')`)
+   * and is not injected into worker / CLI dependencies. Omitted → `true`, so
+   * existing callers keep the historical output.
+   */
+  'safety.exportSphinxNeeds': { input: { namespace: string; outputDir: string; includeRiskRatings?: boolean }; output: { exportedFiles: string[]; outputDir: string } };
   'safety.exportXlsx': { input: { namespace: string; outputPath: string }; output: { outputPath: string } };
   'safety.getSafetyData': { input: { namespace: string }; output: SafetyExportData };
 
@@ -392,6 +400,15 @@ export interface IpcChannelMap {
    */
   'crossNsLinkSettings.getSettings':  { input: void;                 output: CrossNsLinkSettings };
   'crossNsLinkSettings.saveSettings': { input: CrossNsLinkSettings;  output: void };
+
+  /**
+   * Global (per-user, workspace-independent) report-export preferences —
+   * currently whether the semi-quantitative risk-rating values (Severity,
+   * Occurrence, Detection, RPN) are written into exported reports.
+   * See `ExportSettings`.
+   */
+  'exportSettings.getSettings':  { input: void;            output: ExportSettings };
+  'exportSettings.saveSettings': { input: ExportSettings;  output: void };
 
   // --- Canvas layout channels ---
   /**
@@ -772,6 +789,9 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'namespaceConnections:countDependents',
   'crossNsLinkSettings.getSettings',
   'crossNsLinkSettings.saveSettings',
+  // report-export settings channels
+  'exportSettings.getSettings',
+  'exportSettings.saveSettings',
   // canvas layout channels
   'canvasLayout:getLayout',
   'canvasLayout:setRecords',

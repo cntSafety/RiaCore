@@ -1143,7 +1143,7 @@ export function registerSafetyChannels(
   // ── Sphinx-Needs RST Export ──────────────────────────────────────────────────
 
   registry.register('safety.exportSphinxNeeds', async (payload, deps, _ctx) => {
-    const { namespace, outputDir } = payload;
+    const { namespace, outputDir, includeRiskRatings } = payload;
 
     // Validate namespace
     if (!namespace || !namespace.trim()) {
@@ -1157,8 +1157,9 @@ export function registerSafetyChannels(
       throw new Error('No Sphinx-Needs data available to export.');
     }
 
-    // Generate RST
-    const { files } = generateSphinxNeedsRst(exportData);
+    // Generate RST. `includeRiskRatings` comes from the caller (renderer reads
+    // the persisted ExportSettings; CLI takes a flag) — see the channel docs.
+    const { files } = generateSphinxNeedsRst(exportData, { includeRiskRatings });
 
     // Write files
     const resolvedOutputDir = path.resolve(outputDir);

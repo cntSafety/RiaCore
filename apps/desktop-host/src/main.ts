@@ -37,6 +37,7 @@ import { getRecentWorkspaces, addRecentWorkspace } from './recent-workspaces.js'
 // direct path-import keeps the main process free of the native bindings.
 import { LlmSettingsStore } from '@riacore/app-core/dist/llm/llm-settings-store.js';
 import { CrossNsLinkSettingsStore } from '@riacore/app-core/dist/settings/cross-ns-link-settings-store.js';
+import { ExportSettingsStore } from '@riacore/app-core/dist/settings/export-settings-store.js';
 // Pure path helpers, no native deps — safe to load in the main process.
 import { toWorkspaceRelative } from '@riacore/importer-sdk';
 import {
@@ -80,6 +81,14 @@ export let llmSettingsStore: LlmSettingsStore;
  * `safeStorage` dependency (this store holds no secrets).
  */
 export let crossNsLinkSettingsStore: CrossNsLinkSettingsStore;
+
+/**
+ * File-backed store for the report-export preferences (currently whether the
+ * semi-quantitative risk-rating values are written into exported reports).
+ * Main-process resident for the same reason as `crossNsLinkSettingsStore`:
+ * it needs `app.getPath('userData')`.
+ */
+export let exportSettingsStore: ExportSettingsStore;
 
 /** Build the "Open Recent" submenu items from the persisted list. */
 function buildRecentSubmenu(): Electron.MenuItemConstructorOptions[] {
@@ -567,6 +576,9 @@ async function bootstrap(): Promise<void> {
   crossNsLinkSettingsStore = new CrossNsLinkSettingsStore({
     userDataDir: () => app.getPath('userData'),
   });
+  exportSettingsStore = new ExportSettingsStore({
+    userDataDir: () => app.getPath('userData'),
+  });
 
   // Spawn the utility process and wait for the "ready" handshake.
   // Requirements: 1.1, 1.2
@@ -577,7 +589,7 @@ async function bootstrap(): Promise<void> {
   // Register IPC relay — delegates every channel to the utility process.
   // llm.getSettings and llm.saveSettings are handled in main (require safeStorage).
   // Requirement: 1.3, 11.2, 12.4
-  registerIpcRelay(manager, llmSettingsStore, crossNsLinkSettingsStore);
+  registerIpcRelay(manager, llmSettingsStore, crossNsLinkSettingsStore, exportSettingsStore);
 
   // Wire load-progress push events from the worker to all renderer windows.
   // Requirements: 16.3, 16.4
