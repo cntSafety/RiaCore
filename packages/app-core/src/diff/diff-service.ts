@@ -45,6 +45,7 @@ import type {
   EdgeModification,
   CrossNsEdgeModification,
   CrossNsEdgeSnapshot,
+  EdgeEndpointPresentation,
 } from '@riacore/app-contracts';
 import { loadLiveNamespace, loadSnapshotNamespace } from './namespace-loader.js';
 import { diffNodes } from './diff-nodes.js';
@@ -52,6 +53,7 @@ import { diffEdges } from './diff-edges.js';
 import { filterToSubtree } from './subtree-filter.js';
 import type { SerializedNamespace } from './diff-types.js';
 import { extractNodeName } from '../dispatch/utils/node-name.js';
+import { resolveStableIdFromMeta } from '../persistor/stable-id.js';
 
 // ── Large-dataset threshold ────────────────────────────────────────────────────
 
@@ -100,8 +102,10 @@ export function createDiffService(dbModule: IDbModule): IDiffService {
     async diffFromPaths({ leftDir, leftNs, rightDir, rightNs, opts }) {
       const left = loadSnapshotNamespace(leftDir, leftNs);
       const right = loadSnapshotNamespace(rightDir, rightNs);
+      // No DB available here, so cross-NS targets that live outside the two
+      // compared namespaces stay unresolved — runDiff has already labelled
+      // everything that the two loaded namespaces can account for.
       const { summary, result } = runDiff(left, right, opts);
-      enrichCrossNsSourceLabels(result, left, right);
       return { summary, result };
     },
 
@@ -116,44 +120,110 @@ export function createDiffService(dbModule: IDbModule): IDiffService {
   };
 }
 
-// ── Cross-NS label enrichment ─────────────────────────────────────────────────
+// ── Edge endpoint label enrichment ────────────────────────────────────────────
 
-/**
- * Build a stablePath → human-readable label map from a serialized namespace's
- * concept instances. Used to resolve source-side labels for cross-NS edges.
- */
-function buildSourceLabelMap(ns: SerializedNamespace): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const ci of ns.conceptInstances) {
-    const stablePath = (() => {
-      try {
-        const attrs = typeof ci.attributes === 'object' && ci.attributes !== null
-          ? ci.attributes as Record<string, unknown>
-          : JSON.parse(String(ci.attributes ?? '{}')) as Record<string, unknown>;
-        return typeof attrs.stable_path === 'string' ? attrs.stable_path : '';
-      } catch { return ''; }
-    })();
-    if (!stablePath) continue;
-    const attrs = (() => {
-      try {
-        return typeof ci.attributes === 'object' && ci.attributes !== null
-          ? ci.attributes as Record<string, unknown>
-          : JSON.parse(String(ci.attributes ?? '{}')) as Record<string, unknown>;
-      } catch { return {}; }
-    })();
-    const label = extractNodeName(attrs, String(ci.concept ?? ''));
-    if (label) map.set(stablePath, label);
-  }
-  return map;
+interface EndpointInfo {
+  label: string;
+  conceptType: string;
 }
 
-/** Apply source labels to all cross-NS edge snapshots using the pre-built map. */
-function applySourceLabels(edges: CrossNsEdgeSnapshot[], sourceLabelMap: Map<string, string>): void {
-  for (const edge of edges) {
-    if (!edge.sourceLabel && edge.sourceStableId) {
-      const label = sourceLabelMap.get(edge.sourceStableId);
-      if (label) edge.sourceLabel = label;
+/** A stableId → endpoint presentation index over *every* node of a namespace. */
+type EndpointIndex = Map<string, EndpointInfo>;
+
+function parseAttrs(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'object' && raw !== null) return raw as Record<string, unknown>;
+  try { return JSON.parse(String(raw ?? '{}')) as Record<string, unknown>; }
+  catch { return {}; }
+}
+
+/**
+ * Index every concept instance of a namespace by its stable ID.
+ *
+ * Keyed with `resolveStableIdFromMeta` — the same function `namespace-loader`
+ * uses to build its `node_id → stableId` map before substituting stable IDs
+ * into edge endpoints. Sharing that function is what guarantees the keys here
+ * match an edge's `source_stable_id` / `target_stable_id` by construction,
+ * rather than relying on `stable_path` happening to be present.
+ *
+ * Crucially this covers *all* nodes, not only the ones that appear as changes,
+ * so an edge between two unchanged elements still gets readable endpoints.
+ */
+function buildEndpointIndex(ns: SerializedNamespace): EndpointIndex {
+  const index: EndpointIndex = new Map();
+  for (const ci of ns.conceptInstances) {
+    const concept = String(ci.concept ?? '');
+    let stableId = '';
+    try {
+      stableId = resolveStableIdFromMeta(
+        typeof ci.attributes === 'string' ? ci.attributes : JSON.stringify(ci.attributes ?? {}),
+        concept,
+        ns.nodeKeyAttrs,
+      );
+    } catch {
+      // Concept type has no declared identity attribute — nothing to key on.
     }
+    if (!stableId || index.has(stableId)) continue;
+    const label = extractNodeName(parseAttrs(ci.attributes), concept);
+    index.set(stableId, { label, conceptType: concept });
+  }
+  return index;
+}
+
+/**
+ * Fill in endpoint presentation on one edge-like record, preferring `primary`
+ * (the side the record was taken from) over `secondary`.
+ *
+ * Only ever writes a field that is still empty, so a label already supplied by
+ * a more knowledgeable pass — e.g. the DB-backed cross-NS target lookup — wins.
+ */
+function applyEndpointPresentation(
+  edge: EdgeEndpointPresentation & { sourceStableId: string; targetStableId: string },
+  primary: EndpointIndex,
+  secondary: EndpointIndex,
+): void {
+  const source = primary.get(edge.sourceStableId) ?? secondary.get(edge.sourceStableId);
+  const target = primary.get(edge.targetStableId) ?? secondary.get(edge.targetStableId);
+  if (source) {
+    if (!edge.sourceLabel && source.label) edge.sourceLabel = source.label;
+    if (!edge.sourceConceptType && source.conceptType) edge.sourceConceptType = source.conceptType;
+  }
+  if (target) {
+    if (!edge.targetLabel && target.label) edge.targetLabel = target.label;
+    if (!edge.targetConceptType && target.conceptType) edge.targetConceptType = target.conceptType;
+  }
+}
+
+/**
+ * Label every edge endpoint the two compared namespaces can account for.
+ *
+ * Synchronous and DB-free, so all three entry points (live, snapshot, hybrid)
+ * get the same treatment. Added and modified edges resolve against the right
+ * namespace first (that is where they exist); deleted edges resolve against the
+ * left. Cross-NS targets that live in a third namespace stay unresolved here
+ * and are picked up by `enrichCrossNsLabels` when a DB is available.
+ */
+export function enrichEdgeEndpoints(
+  result: NamespaceDiffResult,
+  left: SerializedNamespace,
+  right: SerializedNamespace,
+): void {
+  const leftIndex = buildEndpointIndex(left);
+  const rightIndex = buildEndpointIndex(right);
+
+  for (const edge of result.addedEdges) applyEndpointPresentation(edge, rightIndex, leftIndex);
+  for (const edge of result.deletedEdges) applyEndpointPresentation(edge, leftIndex, rightIndex);
+  for (const mod of result.modifiedEdges) {
+    applyEndpointPresentation(mod, rightIndex, leftIndex);
+    applyEndpointPresentation(mod.leftSnapshot, leftIndex, rightIndex);
+    applyEndpointPresentation(mod.rightSnapshot, rightIndex, leftIndex);
+  }
+
+  for (const edge of result.addedCrossNsEdges) applyEndpointPresentation(edge, rightIndex, leftIndex);
+  for (const edge of result.deletedCrossNsEdges) applyEndpointPresentation(edge, leftIndex, rightIndex);
+  for (const mod of result.modifiedCrossNsEdges) {
+    applyEndpointPresentation(mod, rightIndex, leftIndex);
+    applyEndpointPresentation(mod.leftSnapshot, leftIndex, rightIndex);
+    applyEndpointPresentation(mod.rightSnapshot, rightIndex, leftIndex);
   }
 }
 
@@ -174,38 +244,24 @@ function extractLabelWithConfig(
 }
 
 /**
- * Enrich cross-NS edge snapshots with human-readable labels by querying the DB.
- * Source labels come from the loaded namespace data; target labels are DB-resolved.
+ * Resolve cross-NS edge targets that live outside the two compared namespaces.
+ *
+ * `runDiff` has already labelled every endpoint the two loaded namespaces can
+ * account for (see `enrichEdgeEndpoints`). What remains is the cross-NS target
+ * in a *third* namespace, which only the DB can supply. Runs after runDiff and
+ * only fills fields that are still empty.
  */
 async function enrichCrossNsLabels(
   result: NamespaceDiffResult,
-  left: SerializedNamespace,
-  right: SerializedNamespace,
+  _left: SerializedNamespace,
+  _right: SerializedNamespace,
   dbModule: IDbModule,
 ): Promise<void> {
-  // Build source label maps from both namespace datasets
-  const leftMap = buildSourceLabelMap(left);
-  const rightMap = buildSourceLabelMap(right);
-  const sourceLabelMap = new Map([...leftMap, ...rightMap]);
-
   const allEdges: CrossNsEdgeSnapshot[] = [
     ...result.addedCrossNsEdges,
     ...result.deletedCrossNsEdges,
     ...result.modifiedCrossNsEdges.map(m => m.rightSnapshot ?? m.leftSnapshot),
   ];
-
-  applySourceLabels(allEdges, sourceLabelMap);
-  // Also apply to the individual snapshots inside modifiedCrossNsEdges
-  for (const mod of result.modifiedCrossNsEdges) {
-    if (mod.leftSnapshot && !mod.leftSnapshot.sourceLabel) {
-      const label = sourceLabelMap.get(mod.leftSnapshot.sourceStableId);
-      if (label) mod.leftSnapshot.sourceLabel = label;
-    }
-    if (mod.rightSnapshot && !mod.rightSnapshot.sourceLabel) {
-      const label = sourceLabelMap.get(mod.rightSnapshot.sourceStableId);
-      if (label) mod.rightSnapshot.sourceLabel = label;
-    }
-  }
 
   // Collect unique target stable IDs that need resolution
   const targetIds = new Set<string>();
@@ -236,8 +292,8 @@ async function enrichCrossNsLabels(
     return attrs;
   }
 
-  // Resolve each target node label individually (cross-NS target counts are typically small)
-  const targetLabelMap = new Map<string, string>();
+  // Resolve each target node individually (cross-NS target counts are typically small)
+  const targetInfoMap = new Map<string, EndpointInfo>();
   for (const stableId of targetIds) {
     try {
       const rows = await dbModule.runQuery(
@@ -249,54 +305,29 @@ async function enrichCrossNsLabels(
       for (const row of rows) {
         const attrs = JSON.parse(String(row.attributes ?? '{}')) as Record<string, unknown>;
         if (attrs.stable_path !== stableId) continue;
+        const concept = String(row.concept ?? '');
         const displayAttrs = await getDisplayAttrs(String(row.metamodel ?? ''));
-        const label = extractLabelWithConfig(attrs, String(row.concept ?? ''), displayAttrs);
-        if (label) { targetLabelMap.set(stableId, label); break; }
+        const label = extractLabelWithConfig(attrs, concept, displayAttrs);
+        if (label) { targetInfoMap.set(stableId, { label, conceptType: concept }); break; }
       }
     } catch {
       // Non-critical: leave label empty if lookup fails
     }
   }
 
-  // Apply target labels
-  for (const edge of allEdges) {
-    if (edge.targetStableId && !edge.targetLabel) {
-      const label = targetLabelMap.get(edge.targetStableId);
-      if (label) edge.targetLabel = label;
-    }
-  }
-  for (const mod of result.modifiedCrossNsEdges) {
-    for (const snap of [mod.leftSnapshot, mod.rightSnapshot]) {
-      if (snap && snap.targetStableId && !snap.targetLabel) {
-        const label = targetLabelMap.get(snap.targetStableId);
-        if (label) snap.targetLabel = label;
-      }
-    }
-  }
-}
+  const applyTarget = (edge: CrossNsEdgeSnapshot | CrossNsEdgeModification): void => {
+    if (!edge.targetStableId) return;
+    const info = targetInfoMap.get(edge.targetStableId);
+    if (!info) return;
+    if (!edge.targetLabel) edge.targetLabel = info.label;
+    if (!edge.targetConceptType) edge.targetConceptType = info.conceptType;
+  };
 
-/**
- * Snapshot-only variant: enrich only source labels (no DB access for targets).
- */
-function enrichCrossNsSourceLabels(
-  result: NamespaceDiffResult,
-  left: SerializedNamespace,
-  right: SerializedNamespace,
-): void {
-  const sourceLabelMap = new Map([...buildSourceLabelMap(left), ...buildSourceLabelMap(right)]);
-  const allEdges: CrossNsEdgeSnapshot[] = [
-    ...result.addedCrossNsEdges,
-    ...result.deletedCrossNsEdges,
-    ...result.modifiedCrossNsEdges.map(m => m.rightSnapshot ?? m.leftSnapshot),
-  ];
-  applySourceLabels(allEdges, sourceLabelMap);
+  for (const edge of allEdges) applyTarget(edge);
   for (const mod of result.modifiedCrossNsEdges) {
-    for (const snap of [mod.leftSnapshot, mod.rightSnapshot]) {
-      if (snap && !snap.sourceLabel) {
-        const label = sourceLabelMap.get(snap.sourceStableId);
-        if (label) snap.sourceLabel = label;
-      }
-    }
+    applyTarget(mod);
+    applyTarget(mod.leftSnapshot);
+    applyTarget(mod.rightSnapshot);
   }
 }
 
@@ -450,6 +481,12 @@ function runDiff(
     skippedNodes: nodeDiff.skippedNodes,
     scope,
   };
+
+  // Resolve human-readable endpoints for every edge change. Indexes the
+  // *unfiltered* namespaces on purpose: endpoints that are not themselves
+  // changes — and, under a sub-tree scope, endpoints outside the scope — still
+  // need to render as names rather than raw stable IDs.
+  enrichEdgeEndpoints(result, left, right);
 
   const totalChanged =
     result.addedNodes.length +

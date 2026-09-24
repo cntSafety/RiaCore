@@ -318,6 +318,19 @@ export interface SysmlElementInfo {
 export interface SysmlModel {
   elements: SysmlElementInfo[];
   skippedElements: Map<string, number>;
+  /**
+   * Conjugated port definition id → the port definition it conjugates.
+   *
+   * `ConjugatedPortDefinition` is not an imported concept: the export derives one
+   * for *every* port definition whether or not the model conjugates anything, so
+   * emitting them would double the port definitions in the graph with `~X` nodes
+   * nothing references. But a port usage written `: ~P` is typed by that derived
+   * definition, and the definition carries no features of its own — it inherits
+   * them from `originalPortDefinition`. That link is the only way to reach the
+   * directions such a port conveys, so it is kept here rather than discarded with
+   * the element. See `resolvePortDirections`.
+   */
+  conjugatedPortDefinitions: Map<string, string>;
 }
 
 interface RawIdentity {
@@ -521,12 +534,29 @@ function parseRecord(record: RawRecord, enabled: SysmlEnabledCategories, skipped
   };
 }
 
+/**
+ * Record `conjugated → original` for a `ConjugatedPortDefinition` record.
+ *
+ * Runs alongside `parseRecord` rather than inside it: the type is deliberately
+ * unsupported, so it must keep counting as skipped, and only this one field of it
+ * survives.
+ */
+function harvestPortConjugation(record: RawRecord, conjugatedPortDefinitions: Map<string, string>): void {
+  const payload = record.payload;
+  if (!payload || typeof payload !== 'object') return;
+  if (stringField(payload, '@type') !== 'ConjugatedPortDefinition') return;
+  const id = firstNonEmpty(record.identity?.['@id'], stringField(payload, '@id'), stringField(payload, 'elementId'));
+  const original = refId(payload.originalPortDefinition);
+  if (id && original) conjugatedPortDefinitions.set(id, original);
+}
+
 export function parseSysmlProject(
   enabled: SysmlEnabledCategories,
   files: string[],
 ): SysmlModel {
   const elementsById = new Map<string, SysmlElementInfo>();
   const skippedElements = new Map<string, number>();
+  const conjugatedPortDefinitions = new Map<string, string>();
 
   for (const file of files) {
     let parsed: unknown;
@@ -543,6 +573,7 @@ export function parseSysmlProject(
     }
 
     for (const entry of parsed) {
+      harvestPortConjugation(entry as RawRecord, conjugatedPortDefinitions);
       const element = parseRecord(entry as RawRecord, enabled, skippedElements);
       if (!element) continue;
       elementsById.set(element.id, element);
@@ -552,5 +583,6 @@ export function parseSysmlProject(
   return {
     elements: [...elementsById.values()],
     skippedElements,
+    conjugatedPortDefinitions,
   };
 }

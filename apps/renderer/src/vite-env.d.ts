@@ -462,6 +462,7 @@ declare global {
         computeHybrid(params: { liveNs: string; snapshotDir: string; snapshotNs: string; liveIsLeft: boolean; workingDir: string; opts?: DiffOptions }): Promise<DiffSummary>;
         getDiffResult(params: { diffId: string }): Promise<NamespaceDiffResult | null>;
         getResultPage(params: { diffId: string; section: DiffResultSection; offset: number; limit: number; filterText?: string; filterConceptType?: string; filterRelationshipType?: string }): Promise<DiffResultPage>;
+        exportHtml(params: { diffId: string; outputPath: string; targetNamespace?: string; sourceRef?: string; sourceCommit?: string; selectedChangeIds?: string[] }): Promise<{ outputPath: string; bytesWritten: number }>;
         applyMerge(params: { diffId: string; targetNs: string; direction: 'left-into-right' | 'right-into-left'; selectionIds?: string[]; workingDir: string }): Promise<MergeResult>;
         computeThreeWay(params: { baseNs: string; leftNs: string; rightNs: string; workingDir: string; opts?: DiffOptions }): Promise<ThreeWayDiffSummary>;
         getThreeWayResult(params: { diffId: string }): Promise<ThreeWayDiffResult | null>;

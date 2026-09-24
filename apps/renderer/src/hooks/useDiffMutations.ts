@@ -118,6 +118,28 @@ export function useThreeWayDiffResult(diffId: string | null) {
   });
 }
 
+// ── Export an HTML report of the change set ───────────────────────────────────
+
+/**
+ * Write a standalone HTML report of a computed diff, for archiving a reviewed
+ * change set.
+ *
+ * No cache invalidation: this only reads the stored diff result and writes a
+ * file outside the workspace data, so no query becomes stale.
+ */
+export function useExportDiffHtml() {
+  return useMutation({
+    mutationFn: async (params: {
+      diffId: string;
+      outputPath: string;
+      targetNamespace?: string;
+      sourceRef?: string;
+      sourceCommit?: string;
+      selectedChangeIds?: string[];
+    }) => api.diff.exportHtml(params),
+  });
+}
+
 // ── Apply merge ───────────────────────────────────────────────────────────────
 
 export function useApplyMerge() {

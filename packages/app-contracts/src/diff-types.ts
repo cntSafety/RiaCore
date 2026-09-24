@@ -42,7 +42,34 @@ export interface NodeSnapshot {
   attributes: Record<string, unknown>;
 }
 
-export interface EdgeSnapshot {
+/**
+ * Human-readable endpoint presentation for an edge change.
+ *
+ * Populated by the diff service from the *complete* node set of both compared
+ * namespaces — not just the changed nodes — so an edge whose endpoints are
+ * themselves unchanged still renders readable names instead of raw stable IDs.
+ *
+ * Presentation only. These fields must stay top-level and must never be folded
+ * into `attributes`: the merge service reads an edge's `sourceStableId`,
+ * `targetStableId`, `relationshipType`, and `attributes` and nothing else, so
+ * keeping them outside `attributes` is what guarantees a label can never leak
+ * into a persisted edge or make an unchanged edge look modified.
+ *
+ * Every field is optional — a consumer falls back to the stable ID when a label
+ * could not be resolved.
+ */
+export interface EdgeEndpointPresentation {
+  /** Human-readable label for the source node. */
+  sourceLabel?: string;
+  /** Human-readable label for the target node. */
+  targetLabel?: string;
+  /** Concept type of the source node, e.g. `malfunction`. */
+  sourceConceptType?: string;
+  /** Concept type of the target node, e.g. `functional_insufficiency`. */
+  targetConceptType?: string;
+}
+
+export interface EdgeSnapshot extends EdgeEndpointPresentation {
   sourceStableId: string;
   targetStableId: string;
   relationshipType: string;
@@ -50,17 +77,13 @@ export interface EdgeSnapshot {
   attributes: Record<string, unknown>;
 }
 
-export interface CrossNsEdgeSnapshot {
+export interface CrossNsEdgeSnapshot extends EdgeEndpointPresentation {
   sourceStableId: string;
   sourceNamespace: string;
   targetStableId: string;
   targetNamespace: string;
   relationshipType: string;
   attributes: Record<string, unknown>;
-  /** Human-readable label for the source node, resolved from the source namespace. */
-  sourceLabel?: string;
-  /** Human-readable label for the target node, resolved from the target namespace. */
-  targetLabel?: string;
 }
 
 // ── Modification records (both sides plus the delta) ─────────────────────────
@@ -75,7 +98,7 @@ export interface NodeModification {
   rightSnapshot: NodeSnapshot;
 }
 
-export interface EdgeModification {
+export interface EdgeModification extends EdgeEndpointPresentation {
   sourceStableId: string;
   targetStableId: string;
   relationshipType: string;
@@ -85,7 +108,7 @@ export interface EdgeModification {
   rightSnapshot: EdgeSnapshot;
 }
 
-export interface CrossNsEdgeModification {
+export interface CrossNsEdgeModification extends EdgeEndpointPresentation {
   sourceStableId: string;
   sourceNamespace: string;
   targetStableId: string;

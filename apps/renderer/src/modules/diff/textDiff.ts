@@ -18,19 +18,19 @@
  *
  */
 /**
- * Safety metamodel display labels — re-exported from app-contracts.
+ * Word-level text diff — re-exported from app-contracts.
  *
- * The vocabulary lives in `@riacore/app-contracts` (diff-presentation.ts) so the
- * on-screen review, the archived HTML report generated in app-core, and the CLI
- * all name concepts, attributes, and relationships identically.
+ * The implementation lives in `@riacore/app-contracts` (diff-presentation.ts)
+ * because the archived HTML report is generated in app-core and must highlight
+ * changes identically to this screen. This module stays as the renderer-local
+ * import point so diff UI code keeps a stable path.
  */
 
 export {
-  conceptTypeLabels,
-  attributeKeyLabels,
-  relationshipTypeLabels,
-  labelConceptType,
-  labelAttributeKey,
-  labelRelationshipType,
-  isSafetyFamilyMetamodel,
+  diffWords,
+  diffPropertyValues,
+  MAX_LCS_CELLS,
+  type Segment,
+  type SegmentKind,
+  type WordDiff,
 } from '@riacore/app-contracts';

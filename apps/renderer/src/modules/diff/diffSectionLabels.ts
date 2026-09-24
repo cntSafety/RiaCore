@@ -18,19 +18,15 @@
  *
  */
 /**
- * Safety metamodel display labels — re-exported from app-contracts.
+ * Change-set section vocabulary — re-exported from app-contracts.
  *
- * The vocabulary lives in `@riacore/app-contracts` (diff-presentation.ts) so the
- * on-screen review, the archived HTML report generated in app-core, and the CLI
- * all name concepts, attributes, and relationships identically.
+ * Shared with the archived HTML report so a chip on screen and a heading in the
+ * exported document never disagree.
  */
 
 export {
-  conceptTypeLabels,
-  attributeKeyLabels,
-  relationshipTypeLabels,
-  labelConceptType,
-  labelAttributeKey,
-  labelRelationshipType,
-  isSafetyFamilyMetamodel,
+  SECTION_CHIP_LABELS,
+  SECTION_HEADING_LABELS,
+  labelSectionChip,
+  labelSectionHeading,
 } from '@riacore/app-contracts';

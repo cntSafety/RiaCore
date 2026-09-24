@@ -46,18 +46,14 @@ import {
   DownCircleOutlined,
 } from '@ant-design/icons';
 import type { NodeSnapshot, NodeModification, DiffResultSection } from '@riacore/app-contracts';
-import { useDiffResultPage } from '../../hooks/useDiffMutations';
+import { useDiffResultPage, useDiffResult } from '../../hooks/useDiffMutations';
 import { useDiffStore } from '../../store/diffStore';
 import { NodeDiffDetail } from './NodeDiffDetail';
+import { labelSectionHeading } from './diffSectionLabels';
+import { labelConceptType } from './safetyDiffLabels';
 
 const { useToken } = theme;
 const { Text } = Typography;
-
-const SECTION_LABELS: Record<string, string> = {
-  addedNodes:   'Added Nodes',
-  deletedNodes: 'Deleted Nodes',
-  modifiedNodes:'Modified Nodes',
-};
 
 const SECTION_ICON: Record<string, React.ReactNode> = {
   addedNodes:   <PlusCircleOutlined style={{ color: '#52c41a' }} />,
@@ -83,6 +79,11 @@ export function DiffNodeList({ diffId, section }: Props) {
   } = useDiffStore();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Metamodel drives which domain vocabulary applies to concept types and
+  // attribute keys. Already cached by the endpoint-label path in DiffEdgeList.
+  const { data: fullResult } = useDiffResult(diffId);
+  const metamodel = fullResult?.metamodel ?? '';
 
   const { data: page, isLoading, isError } = useDiffResultPage(
     diffId,
@@ -152,7 +153,7 @@ export function DiffNodeList({ diffId, section }: Props) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
       {/* Filter bar */}
       <div
         style={{
@@ -164,7 +165,7 @@ export function DiffNodeList({ diffId, section }: Props) {
         }}
       >
         <Text strong style={{ fontSize: 12, alignSelf: 'center' }}>
-          {SECTION_ICON[section]} {SECTION_LABELS[section] ?? section}
+          {SECTION_ICON[section]} {labelSectionHeading(section)}
           {' '}
           <Text type="secondary" style={{ fontWeight: 400 }}>({totalCount})</Text>
         </Text>
@@ -187,8 +188,11 @@ export function DiffNodeList({ diffId, section }: Props) {
         />
       </div>
 
-      {/* List body */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      {/* List body — the scroll container. minHeight: 0 is what lets it shrink
+          below its content height so `overflow: auto` actually has something to
+          scroll; without it the rows push the whole panel taller than the
+          available space and the overflow is clipped by an ancestor instead. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
             <Spin size="small" />
@@ -250,7 +254,9 @@ export function DiffNodeList({ diffId, section }: Props) {
                   {displayName || stableId}
                 </Text>
                 {conceptType && (
-                  <Tag style={{ fontSize: 10, margin: 0 }}>{conceptType}</Tag>
+                  <Tag style={{ fontSize: 10, margin: 0 }} title={conceptType}>
+                    {labelConceptType(conceptType, metamodel)}
+                  </Tag>
                 )}
                 {isModifiedSection && (
                   <Text type="secondary" style={{ fontSize: 10 }}>
@@ -260,7 +266,7 @@ export function DiffNodeList({ diffId, section }: Props) {
               </div>
               {isExpanded && isModifiedSection && (
                 <div style={{ padding: '0 12px 8px 32px' }}>
-                  <NodeDiffDetail modification={item as NodeModification} />
+                  <NodeDiffDetail modification={item as NodeModification} metamodel={metamodel} />
                 </div>
               )}
             </div>

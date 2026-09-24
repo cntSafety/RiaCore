@@ -34,6 +34,7 @@ export * from './safety-export-types.js';
 export * from './check-types.js';
 export * from './arxml-types.js';
 export * from './diff-types.js';
+export * from './diff-presentation.js';
 export * from './cache-invalidation.js';
 export * from './show-in-tree.js';
 export * from './namespace-connection-types.js';
@@ -50,6 +51,38 @@ export * from './llm-types.js';
 export { SWC_COMPONENT_CONCEPTS, SYSML_ELEMENT_CONCEPTS } from './llm-types.js';
 export { DEFAULT_AUTO_COMMIT_TEMPLATE } from './git-types.js';
 export { resolveActionPriority } from './action-priority-types.js';
+// Same rule for the diff presentation vocabulary: these are runtime values, so
+// the `export *` above is not enough for a bundler to see them. Omitting any of
+// them here produces `X is not a function` in the renderer at runtime while
+// `tsc` and Vitest both pass — types resolve through the star, and Node's CJS
+// `require` executes `__exportStar` happily; only static analysis cannot follow
+// it. Enforced by `src/__tests__/runtime-export-coverage.test.ts`.
+export {
+  SECTION_CHIP_LABELS,
+  SECTION_HEADING_LABELS,
+  labelSectionChip,
+  labelSectionHeading,
+  isSafetyFamilyMetamodel,
+  conceptTypeLabels,
+  attributeKeyLabels,
+  relationshipTypeLabels,
+  labelConceptType,
+  labelAttributeKey,
+  labelRelationshipType,
+  MAX_LCS_CELLS,
+  diffWords,
+  diffPropertyValues,
+  splitChangedTextForDisplay,
+} from './diff-presentation.js';
+// The remaining runtime values of this package, for the same reason. These were
+// previously reachable only through the star re-export — latent breakage waiting
+// for the first bundled module to import one of them. (The renderer carries its
+// own copy of `shouldBroadcast` in lib/cache-invalidation-subscriber.ts, which
+// is very likely a workaround for exactly that.)
+export { shouldBroadcast, broadcastPolicy } from './cache-invalidation.js';
+export { resolveAttributeKey, resolveAttributeLabel } from './check-types.js';
+export { IPC_CHANNELS } from './ipc.js';
+export { WorkspaceConfigSchema } from './workspace.js';
 export type {
   GitSemanticDiffParams,
   GitSemanticDiffResult,

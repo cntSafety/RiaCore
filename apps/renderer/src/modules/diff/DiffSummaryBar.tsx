@@ -23,9 +23,10 @@
  * Displays a warning banner when the dataset is very large.
  */
 
-import { Alert, Badge, Space, Tag, theme, Typography } from 'antd';
+import { Alert, Badge, Tag, theme, Typography } from 'antd';
 import type { DiffSummary, DiffResultSection, ThreeWayDiffSummary } from '@riacore/app-contracts';
 import { useDiffStore } from '../../store/diffStore';
+import { labelSectionChip } from './diffSectionLabels';
 
 const { useToken } = theme;
 const { Text } = Typography;
@@ -50,16 +51,21 @@ function getSections(summary: DiffSummary | ThreeWayDiffSummary): SectionEntry[]
   const deletedNodes  = tw.deletedNodesCount  ?? (th.leftDeletedNodesCount  ?? 0) + (th.rightDeletedNodesCount  ?? 0);
   const modifiedNodes = tw.modifiedNodesCount ?? (th.leftModifiedNodesCount ?? 0) + (th.rightModifiedNodesCount ?? 0);
 
+  // Labels come from the shared section vocabulary so a chip and the list
+  // heading it selects always read the same.
+  const entry = (key: DiffResultSection, count: number, color: string): SectionEntry =>
+    ({ key, label: labelSectionChip(key), count, color });
+
   return [
-    { key: 'addedNodes',          label: '+ Nodes',   count: addedNodes,                       color: '#52c41a' },
-    { key: 'deletedNodes',        label: '− Nodes',   count: deletedNodes,                     color: '#ff4d4f' },
-    { key: 'modifiedNodes',       label: '~ Nodes',   count: modifiedNodes,                    color: '#fa8c16' },
-    { key: 'addedEdges',          label: '+ Edges',   count: tw.addedEdgesCount       ?? 0,    color: '#1677ff' },
-    { key: 'deletedEdges',        label: '− Edges',   count: tw.deletedEdgesCount     ?? 0,    color: '#722ed1' },
-    { key: 'modifiedEdges',       label: '~ Edges',   count: tw.modifiedEdgesCount    ?? 0,    color: '#13c2c2' },
-    { key: 'addedCrossNsEdges',   label: '+ CrossNS', count: tw.addedCrossNsEdgesCount   ?? 0, color: '#52c41a' },
-    { key: 'deletedCrossNsEdges', label: '− CrossNS', count: tw.deletedCrossNsEdgesCount ?? 0, color: '#ff4d4f' },
-    { key: 'modifiedCrossNsEdges',label: '~ CrossNS', count: tw.modifiedCrossNsEdgesCount ?? 0,color: '#fa8c16' },
+    entry('addedNodes',           addedNodes,                              '#52c41a'),
+    entry('modifiedNodes',        modifiedNodes,                           '#fa8c16'),
+    entry('deletedNodes',         deletedNodes,                            '#ff4d4f'),
+    entry('addedEdges',           tw.addedEdgesCount          ?? 0,        '#1677ff'),
+    entry('modifiedEdges',        tw.modifiedEdgesCount       ?? 0,        '#13c2c2'),
+    entry('deletedEdges',         tw.deletedEdgesCount        ?? 0,        '#722ed1'),
+    entry('addedCrossNsEdges',    tw.addedCrossNsEdgesCount   ?? 0,        '#52c41a'),
+    entry('modifiedCrossNsEdges', tw.modifiedCrossNsEdgesCount ?? 0,       '#fa8c16'),
+    entry('deletedCrossNsEdges',  tw.deletedCrossNsEdgesCount ?? 0,        '#ff4d4f'),
   ];
 }
 

@@ -23,6 +23,7 @@ import { resolveFiles, DEFAULT_ENABLED_CATEGORIES, type SysmlImportConfig } from
 import { parseSysmlProject } from './sysml-v2-parser.js';
 import { mapModelToConceptBatches, mapModelToRelationshipBatches } from './sysml-v2-mapper.js';
 import { materializeConnectorEndpoints } from './sysml-v2-endpoints.js';
+import { resolvePortDirections } from './sysml-v2-port-directions.js';
 
 export function createSysmlV2Runtime(): ImporterRuntime {
   return {
@@ -56,6 +57,17 @@ export function createSysmlV2Runtime(): ImporterRuntime {
         total: files.length,
       });
       const model = parseSysmlProject({ ...DEFAULT_ENABLED_CATEGORIES, ...config.elements }, files);
+      // Before endpoint synthesis, so the ports the connectors resolve to already
+      // carry their effective direction rather than being back-filled afterwards.
+      const directedPorts = resolvePortDirections(model);
+      if (directedPorts > 0) {
+        diagnostics.push({
+          level: 'info',
+          message: `Resolved the direction of ${directedPorts} port(s) from the features their ` +
+            'definitions carry. A port declares no direction of its own, so without this every ' +
+            'typed port would project as bidirectional.',
+        });
+      }
       // Before the batches are built, so the synthetic endpoint features are
       // written as ordinary concepts and relationships rather than needing a
       // second pass over the graph.

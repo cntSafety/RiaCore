@@ -678,6 +678,16 @@ export const api = {
         diffId, section, offset, limit, filterText, filterConceptType, filterRelationshipType,
       }),
 
+    exportHtml: (params: {
+      diffId: string;
+      outputPath: string;
+      targetNamespace?: string;
+      sourceRef?: string;
+      sourceCommit?: string;
+      selectedChangeIds?: string[];
+    }): Promise<{ outputPath: string; bytesWritten: number }> =>
+      window.riacore.diff.exportHtml(params),
+
     applyMerge: (
       diffId: string, targetNs: string,
       direction: 'left-into-right' | 'right-into-left',

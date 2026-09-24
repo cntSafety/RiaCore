@@ -54,18 +54,13 @@ import type {
 } from '@riacore/app-contracts';
 import { useDiffResultPage, useDiffResult } from '../../hooks/useDiffMutations';
 import { useDiffStore } from '../../store/diffStore';
+import { labelSectionHeading } from './diffSectionLabels';
+import { labelAttributeKey, labelConceptType, labelRelationshipType } from './safetyDiffLabels';
+import { diffPropertyValues, type WordDiff } from './textDiff';
+import { InlineTextDiff } from './InlineTextDiff';
 
 const { useToken } = theme;
 const { Text } = Typography;
-
-const SECTION_LABELS: Record<string, string> = {
-  addedEdges:           'Added Edges',
-  deletedEdges:         'Deleted Edges',
-  modifiedEdges:        'Modified Edges',
-  addedCrossNsEdges:    'Added Cross-NS Edges',
-  deletedCrossNsEdges:  'Deleted Cross-NS Edges',
-  modifiedCrossNsEdges: 'Modified Cross-NS Edges',
-};
 
 const SECTION_ICON: Record<string, React.ReactNode> = {
   addedEdges:           <PlusCircleOutlined style={{ color: '#52c41a' }} />,
@@ -77,6 +72,17 @@ const SECTION_ICON: Record<string, React.ReactNode> = {
 };
 
 type EdgeItem = EdgeSnapshot | EdgeModification | CrossNsEdgeSnapshot | CrossNsEdgeModification;
+
+/** Row in the expanded attribute table of a modified edge. */
+type EdgeChangeRow = PropertyChange & { key: string; wordDiff: WordDiff | null };
+
+/** Endpoint presentation is optional on every edge shape — read it uniformly. */
+type EdgeEndpointFields = {
+  sourceLabel?: string;
+  targetLabel?: string;
+  sourceConceptType?: string;
+  targetConceptType?: string;
+};
 
 function getEdgeKey(item: EdgeItem): string {
   return `${item.sourceStableId}::${item.targetStableId}::${item.relationshipType}`;
@@ -110,8 +116,11 @@ export function DiffEdgeList({ diffId, section }: Props) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const { data: fullResult } = useDiffResult(diffId);
+  const metamodel = fullResult?.metamodel ?? '';
 
-  // Build a stableId → display name lookup from all node snapshots in the diff result
+  // Fallback lookup for endpoints the backend could not label. Covers only the
+  // nodes that are themselves changes in this diff — which is exactly why the
+  // backend now supplies sourceLabel / targetLabel from the full node set.
   const nodeNameMap = (() => {
     if (!fullResult) return new Map<string, string>();
     const map = new Map<string, string>();
@@ -151,6 +160,21 @@ export function DiffEdgeList({ diffId, section }: Props) {
     return stableId.length > 16 ? stableId.slice(0, 8) + '…' : stableId;
   };
 
+  /**
+   * Tooltip carrying the full identity of both endpoints: the domain concept
+   * when known, and always the raw stable ID so a row stays traceable back to
+   * the model even when a label is present.
+   */
+  const buildEndpointTooltip = (item: EdgeItem): string => {
+    const ep = item as EdgeEndpointFields;
+    const describe = (stableId: string, conceptType?: string): string => {
+      const concept = conceptType ? labelConceptType(conceptType, metamodel) : '';
+      return concept ? `${concept} (${stableId})` : stableId;
+    };
+    return `${describe(item.sourceStableId, ep.sourceConceptType)}` +
+      ` → ${describe(item.targetStableId, ep.targetConceptType)}`;
+  };
+
   const { data: page, isLoading, isError } = useDiffResultPage(
     diffId,
     section,
@@ -171,7 +195,7 @@ export function DiffEdgeList({ diffId, section }: Props) {
   const isModifiedSection = section.startsWith('modified');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
       {/* Filter bar */}
       <div
         style={{
@@ -183,7 +207,7 @@ export function DiffEdgeList({ diffId, section }: Props) {
         }}
       >
         <Text strong style={{ fontSize: 12, alignSelf: 'center' }}>
-          {SECTION_ICON[section]} {SECTION_LABELS[section] ?? section}
+          {SECTION_ICON[section]} {labelSectionHeading(section)}
           {' '}
           <Text type="secondary" style={{ fontWeight: 400 }}>({totalCount})</Text>
         </Text>
@@ -206,8 +230,11 @@ export function DiffEdgeList({ diffId, section }: Props) {
         />
       </div>
 
-      {/* List body */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      {/* List body — the scroll container. minHeight: 0 is what lets it shrink
+          below its content height so `overflow: auto` actually has something to
+          scroll; without it the rows push the whole panel taller than the
+          available space and the overflow is clipped by an ancestor instead. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
             <Spin size="small" />
@@ -260,14 +287,16 @@ export function DiffEdgeList({ diffId, section }: Props) {
                 )}
                 <Text
                   style={{ fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={`${item.sourceStableId} → ${item.targetStableId}`}
+                  title={buildEndpointTooltip(item)}
                 >
-                  {resolveEndpointLabel(item.sourceStableId, (item as CrossNsEdgeSnapshot).sourceLabel)}
+                  {resolveEndpointLabel(item.sourceStableId, (item as EdgeEndpointFields).sourceLabel)}
                   <span style={{ color: token.colorTextSecondary }}> → </span>
-                  {resolveEndpointLabel(item.targetStableId, (item as CrossNsEdgeSnapshot).targetLabel)}
+                  {resolveEndpointLabel(item.targetStableId, (item as EdgeEndpointFields).targetLabel)}
                 </Text>
                 {relType && (
-                  <Tag style={{ fontSize: 10, margin: 0 }}>{relType}</Tag>
+                  <Tag style={{ fontSize: 10, margin: 0 }} title={relType}>
+                    {labelRelationshipType(relType, metamodel)}
+                  </Tag>
                 )}
                 {isModifiedSection && changes.length > 0 && (
                   <Text type="secondary" style={{ fontSize: 10 }}>
@@ -278,9 +307,13 @@ export function DiffEdgeList({ diffId, section }: Props) {
 
               {isExpanded && isModifiedSection && changes.length > 0 && (
                 <div style={{ padding: '0 12px 8px 32px' }}>
-                  <Table<PropertyChange & { key: string }>
+                  <Table<EdgeChangeRow>
                     size="small"
-                    dataSource={changes.map((c, i) => ({ ...c, key: `${c.attribute}-${i}` }))}
+                    dataSource={changes.map((c, i) => ({
+                      ...c,
+                      key: `${c.attribute}-${i}`,
+                      wordDiff: diffPropertyValues(c.changeKind, c.leftValue, c.rightValue),
+                    }))}
                     pagination={false}
                     columns={[
                       {
@@ -295,23 +328,39 @@ export function DiffEdgeList({ diffId, section }: Props) {
                             >
                               {row.changeKind}
                             </Tag>
-                            <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{val}</Text>
+                            <Text style={{ fontSize: 11 }} title={val}>
+                              {labelAttributeKey(val, metamodel)}
+                            </Text>
+                            {row.wordDiff?.whitespaceOnly && (
+                              <Tag
+                                style={{ fontSize: 9, marginLeft: 4 }}
+                                title="The values differ only in whitespace (spaces, tabs, or line breaks). Changed whitespace is shown as · ⇥ ↵ ␍."
+                              >
+                                whitespace only
+                              </Tag>
+                            )}
                           </span>
                         ),
                       },
                       {
                         title: 'Left',
                         dataIndex: 'leftValue',
-                        render: (v: unknown) => v !== undefined && v !== null
-                          ? <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{String(v)}</Text>
-                          : <Text type="secondary" italic>—</Text>,
+                        render: (v: unknown, row) => {
+                          if (row.wordDiff) return <InlineTextDiff segments={row.wordDiff.left} whitespaceOnly={row.wordDiff.whitespaceOnly} />;
+                          return v !== undefined && v !== null
+                            ? <Text style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{String(v)}</Text>
+                            : <Text type="secondary" italic>—</Text>;
+                        },
                       },
                       {
                         title: 'Right',
                         dataIndex: 'rightValue',
-                        render: (v: unknown) => v !== undefined && v !== null
-                          ? <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{String(v)}</Text>
-                          : <Text type="secondary" italic>—</Text>,
+                        render: (v: unknown, row) => {
+                          if (row.wordDiff) return <InlineTextDiff segments={row.wordDiff.right} whitespaceOnly={row.wordDiff.whitespaceOnly} />;
+                          return v !== undefined && v !== null
+                            ? <Text style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{String(v)}</Text>
+                            : <Text type="secondary" italic>—</Text>;
+                        },
                       },
                     ]}
                   />

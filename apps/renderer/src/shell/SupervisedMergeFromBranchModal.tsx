@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  App as AntdApp,
   Button,
   Modal,
   Select,
@@ -50,6 +51,7 @@ import {
   BranchesOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  FileTextOutlined,
   MergeCellsOutlined,
   TagOutlined,
 } from '@ant-design/icons';
@@ -59,7 +61,7 @@ import type { BranchInfo, TagInfo } from '@riacore/git-service';
 import { api } from '../api/riacore';
 import { useDiffStore } from '../store/diffStore';
 import { useWorkspaceStore } from '../store/workspaceStore';
-import { useDiffResult } from '../hooks/useDiffMutations';
+import { useDiffResult, useExportDiffHtml } from '../hooks/useDiffMutations';
 import { DiffSummaryBar } from '../modules/diff/DiffSummaryBar';
 import { DiffResultView } from '../modules/diff/DiffResultView';
 import { invalidateAfterContentChange } from '../hooks/workspaceCacheReset';
@@ -104,6 +106,8 @@ interface Props {
 export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, onClose }: Props) {
   const { token } = useToken();
   const queryClient = useQueryClient();
+  const { message } = AntdApp.useApp();
+  const exportHtml = useExportDiffHtml();
 
   const {
     setLeftNs,
@@ -329,6 +333,41 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
     onClose();
   };
 
+  // ── Export the change set as an archivable HTML document ───────────────────
+
+  const handleExportHtml = async () => {
+    if (phase.kind !== 'diff_ready') return;
+
+    // Filename carries the namespace, branch and date so archived reports stay
+    // distinguishable without opening them.
+    const stamp = new Date().toISOString().slice(0, 10);
+    const safeRef = (selectedRef ?? 'branch').replace(/[^\w.-]+/g, '-');
+    const defaultName = `${ns.name}-changes-${safeRef}-${stamp}.html`;
+
+    const outputPath = await api.dialog.saveFile({
+      title: 'Export Change Set',
+      defaultPath: defaultName,
+      filters: [{ name: 'HTML document', extensions: ['html'] }],
+    });
+    if (!outputPath) return; // user cancelled
+
+    try {
+      const result = await exportHtml.mutateAsync({
+        diffId: phase.diffSummary.diffId,
+        outputPath,
+        targetNamespace: ns.name,
+        sourceRef: selectedRef ?? undefined,
+        sourceCommit: phase.resolvedShortHash,
+        selectedChangeIds: Array.from(selectedChangeIds),
+      });
+      message.success(`Change set exported to ${result.outputPath}`);
+    } catch (err) {
+      message.error(
+        `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   // ── Preview Changes ────────────────────────────────────────────────────────
 
   const handlePreviewChanges = () => {
@@ -400,7 +439,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
     >
       {/* ── Branch select phase ──────────────────────────────────────────── */}
       {phase.kind === 'branch_select' && (
-        <div style={{ flex: 1, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ fontSize: 13 }}>
             Select a branch or tag to preview merging into <strong>{ns.name}</strong>:
           </div>
@@ -452,6 +491,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -472,7 +512,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
 
       {/* ── Up-to-date phase ─────────────────────────────────────────────── */}
       {phase.kind === 'up_to_date' && (
-        <div style={{ flex: 1, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Alert
             type="success"
             showIcon
@@ -495,7 +535,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
 
       {/* ── Error phase ──────────────────────────────────────────────────── */}
       {phase.kind === 'error' && (
-        <div style={{ flex: 1, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Alert
             type="error"
             showIcon
@@ -518,7 +558,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
 
       {/* ── Done phase ───────────────────────────────────────────────────── */}
       {phase.kind === 'done' && (
-        <div style={{ flex: 1, padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Alert
             type="success"
             showIcon
@@ -614,8 +654,11 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
             </div>
           )}
 
-          {/* Main diff result area */}
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {/* Main diff result area. minHeight: 0 lets this shrink to the space
+              the fixed header/summary/footer leave over, so a long change list
+              scrolls inside the list body instead of overflowing the modal body
+              and being clipped. */}
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {phase.kind === 'applying' ? (
               <div
                 style={{
@@ -683,6 +726,15 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
                 })()}
               </Text>
               <Space>
+                <Button
+                  icon={<FileTextOutlined />}
+                  onClick={() => void handleExportHtml()}
+                  loading={exportHtml.isPending}
+                  disabled={phase.kind !== 'diff_ready'}
+                  title="Save this change set as a standalone HTML document for archiving"
+                >
+                  Export HTML…
+                </Button>
                 <Button
                   icon={<CloseCircleOutlined />}
                   onClick={handleCancel}

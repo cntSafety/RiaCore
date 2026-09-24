@@ -27,9 +27,11 @@
  */
 
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import type { DiffResultPage, DiffResultSection } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
 import { createDiffService, createThreeWayDiffService } from '../../diff/diff-service.js';
+import { renderDiffHtmlReport } from '../../diff/diff-html-report.js';
 import { createMergeService } from '../../diff/merge-service.js';
 import { createPersistorService, createImportLogger, createDiffMergeLogger } from '../../index.js';
 import { deleteNamespace } from '../../persistor/persistor-helpers.js';
@@ -163,6 +165,42 @@ export function registerDiffChannels(registry: Registry): void {
       hasMore: offset + limit < totalCount,
       section: section as DiffResultSection,
     } satisfies DiffResultPage;
+  }, {
+    requiresWorkspace: false,
+    category: 'diff',
+  });
+
+  // ── diff.exportHtml ────────────────────────────────────────────────────────
+  registry.register('diff.exportHtml', async (payload, _deps, ctx) => {
+    const { diffId, outputPath, targetNamespace, sourceRef, sourceCommit, selectedChangeIds } = payload;
+
+    const result = ctx.getDiffResult(diffId);
+    if (!result) {
+      throw new Error(
+        `No diff result found for diffId '${diffId}'. Compute a diff first, and ` +
+        `note that a result is disposed once its merge has been applied.`,
+      );
+    }
+
+    // Guard the extension rather than silently writing HTML to an arbitrary
+    // name: the output is meant to be opened in a browser, and a mistyped
+    // destination is far easier to notice here than later in an archive.
+    const ext = path.extname(outputPath).toLowerCase();
+    if (ext !== '.html' && ext !== '.htm') {
+      throw new Error(`Export path must end in .html or .htm, got '${outputPath}'`);
+    }
+
+    const html = renderDiffHtmlReport(result, {
+      targetNamespace,
+      sourceRef,
+      sourceCommit,
+      selectedChangeIds,
+    });
+
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, html, 'utf-8');
+
+    return { outputPath, bytesWritten: Buffer.byteLength(html, 'utf-8') };
   }, {
     requiresWorkspace: false,
     category: 'diff',

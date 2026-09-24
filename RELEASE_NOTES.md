@@ -1,1 +1,1 @@
-Faster SysML-v2 rendering and bug-fixes including LLM config UI.
+Improved diff and merge UI for clearer change review and merge handling. Improved SysML conjugated-port handling, including port directions during import.

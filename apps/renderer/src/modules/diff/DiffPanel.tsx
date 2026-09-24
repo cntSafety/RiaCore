@@ -91,8 +91,10 @@ export function DiffPanel({ onBack }: DiffPanelProps) {
         </div>
       )}
 
-      {/* Main content */}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      {/* Main content. minHeight: 0 lets this shrink to the space the fixed
+          header, summary bar, and merge panel leave over, so a long change list
+          scrolls inside the list body rather than overflowing and being clipped. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {hasResult ? (
           <>
             <DiffResultView />

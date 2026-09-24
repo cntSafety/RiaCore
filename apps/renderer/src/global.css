@@ -80,16 +80,6 @@ html, body {
   min-height: 100%;
 }
 
-/* ── Diff view: make Ant Design Tabs content fill the available height ─────── */
-/* Ant Design's .ant-tabs-tabpane does not have height:100% by default, which   */
-/* breaks children that use height:100% (e.g. the Cytoscape graph container).   */
-.diff-result-tabs .ant-tabs-content-holder,
-.diff-result-tabs .ant-tabs-content,
-.diff-result-tabs .ant-tabs-tabpane {
-  height: 100%;
-  overflow: hidden;
-}
-
 /* 5. No pointer on tree and menu items unless they're true actions */
 .ant-menu-item,
 .ant-menu-submenu-title {

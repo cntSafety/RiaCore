@@ -411,6 +411,8 @@ contextBridge.exposeInMainWorld('riacore', {
       ipcRenderer.invoke('diff.getDiffResult', params),
     getResultPage: (params: { diffId: string; section: DiffResultSection; offset: number; limit: number; filterText?: string; filterConceptType?: string; filterRelationshipType?: string }) =>
       ipcRenderer.invoke('diff.getResultPage', params),
+    exportHtml: (params: { diffId: string; outputPath: string; targetNamespace?: string; sourceRef?: string; sourceCommit?: string; selectedChangeIds?: string[] }) =>
+      ipcRenderer.invoke('diff.exportHtml', params),
     applyMerge: (params: { diffId: string; targetNs: string; direction: 'left-into-right' | 'right-into-left'; selectionIds?: string[]; workingDir: string }) =>
       ipcRenderer.invoke('diff.applyMerge', params),
     computeThreeWay: (params: { baseNs: string; leftNs: string; rightNs: string; workingDir: string; opts?: DiffOptions }) =>

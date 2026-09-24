@@ -255,8 +255,8 @@ async function main(): Promise<void> {
   assert('PerceptionSystem stable path correct',
     percDef?.stablePath === '/TigerDetectionSystemExample/PerceptionSystem');
 
-  const percUsage = elements.find(e => e.name === 'perception' && e.kind === 'part_usage');
-  assert('"perception" part_usage found', percUsage !== undefined);
+  const percUsage = elements.find(e => e.name === 'perceptionSystem' && e.kind === 'part_usage');
+  assert('"perceptionSystem" part_usage found', percUsage !== undefined);
 
   const portDefs = byKind.get('port_definition') ?? [];
   assert('Port definitions extracted (≥4)', portDefs.length >= 4);

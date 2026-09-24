@@ -553,6 +553,22 @@ export interface IpcChannelMap {
     };
     output: DiffResultPage;
   };
+  /**
+   * Write a standalone HTML report of a computed diff to `outputPath`, for
+   * archiving a reviewed change set. Generated server-side from the stored diff
+   * result so the CLI and the UI produce byte-identical documents.
+   */
+  'diff.exportHtml': {
+    input: {
+      diffId: string;
+      outputPath: string;
+      targetNamespace?: string;
+      sourceRef?: string;
+      sourceCommit?: string;
+      selectedChangeIds?: string[];
+    };
+    output: { outputPath: string; bytesWritten: number };
+  };
   /** Apply a merge: write the diff changes to the target namespace in the live DB. */
   'diff.applyMerge': {
     input: {
@@ -826,6 +842,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'diff.computeHybrid',
   'diff.getDiffResult',
   'diff.getResultPage',
+  'diff.exportHtml',
   'diff.applyMerge',
   'diff.computeThreeWay',
   'diff.getThreeWayResult',

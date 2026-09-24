@@ -18,18 +18,23 @@
  *
  */
 /**
- * DiffResultView — tabs between List and Graph views,
- * and routes the list content based on the selected section.
+ * DiffResultView — renders the change list for the selected diff section.
+ *
+ * Previously a List/Graph tab pair. The Graph tab was removed because it showed
+ * nothing useful; with a single view left, a one-tab tab bar was pure chrome.
+ * `DiffGraphView` is still in the module and still unit-tested — re-adding a
+ * tab bar here is the only wiring needed to bring it back.
+ *
+ * Layout contract: this is a flex item of a height-bounded column parent, and a
+ * column flex container for the list below it. `minHeight: 0` is required at
+ * both ends — see `__tests__/diff-layout.conformance.test.ts` for why a missing
+ * one silently stops the change list from scrolling.
  */
 
-import { Tabs, theme } from 'antd';
 import { useDiffStore } from '../../store/diffStore';
 import { DiffNodeList } from './DiffNodeList';
 import { DiffEdgeList } from './DiffEdgeList';
-import { DiffGraphView } from './DiffGraphView';
 import type { DiffResultSection } from '@riacore/app-contracts';
-
-const { useToken } = theme;
 
 const NODE_SECTIONS = new Set<DiffResultSection>(['addedNodes', 'deletedNodes', 'modifiedNodes']);
 const EDGE_SECTIONS = new Set<DiffResultSection>([
@@ -38,8 +43,7 @@ const EDGE_SECTIONS = new Set<DiffResultSection>([
 ]);
 
 export function DiffResultView() {
-  const { token } = useToken();
-  const { activeSummary, activeThreeWaySummary, mode, selectedSection, resultTab, setResultTab } = useDiffStore();
+  const { activeSummary, activeThreeWaySummary, mode, selectedSection } = useDiffStore();
 
   const summary = mode === 'two-way' ? activeSummary : activeThreeWaySummary;
   if (!summary) return null;
@@ -53,37 +57,8 @@ export function DiffResultView() {
       : null;
 
   return (
-    <Tabs
-      activeKey={resultTab}
-      onChange={key => setResultTab(key as 'list' | 'graph')}
-      size="small"
-      className="diff-result-tabs"
-      style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-      tabBarStyle={{ marginBottom: 0, paddingLeft: 12, flexShrink: 0, background: token.colorBgContainer }}
-      items={[
-        {
-          key: 'list',
-          label: 'List',
-          children: (
-            <div style={{ height: '100%', overflow: 'hidden' }}>
-              {listContent}
-            </div>
-          ),
-        },
-        {
-          key: 'graph',
-          label: 'Graph',
-          // Only mount when the tab is active so that DiffGraphView's useEffect
-          // always fires with the container already visible and measurable.
-          // TanStack Query caches the diff result (staleTime: Infinity), so
-          // re-mounting on tab switch never causes a redundant IPC round-trip.
-          children: (
-            <div style={{ height: '100%', overflow: 'hidden' }}>
-              {resultTab === 'graph' && <DiffGraphView diffId={diffId} />}
-            </div>
-          ),
-        },
-      ]}
-    />
+    <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {listContent}
+    </div>
   );
 }

@@ -72,9 +72,6 @@ interface DiffStore {
   // Three-way conflict resolutions
   conflictResolutions: ConflictResolution[];
 
-  // View tab (for result display)
-  resultTab: 'list' | 'graph';
-
   // Actions
   setMode: (mode: DiffMode) => void;
   setLeftNs: (ns: string) => void;
@@ -93,7 +90,6 @@ interface DiffStore {
   setMergeDirection: (dir: 'left-into-right' | 'right-into-left') => void;
   setConflictResolution: (resolution: ConflictResolution) => void;
   clearConflictResolutions: () => void;
-  setResultTab: (tab: 'list' | 'graph') => void;
   reset: () => void;
 }
 
@@ -115,7 +111,6 @@ export const useDiffStore = create<DiffStore>((set) => ({
   selectedChangeIds: new Set(),
   mergeDirection: 'left-into-right',
   conflictResolutions: [],
-  resultTab: 'list',
 
   setMode: (mode) => set({ mode, activeSummary: null, activeThreeWaySummary: null }),
   setLeftNs: (leftNs) => set({ leftNs }),
@@ -179,8 +174,6 @@ export const useDiffStore = create<DiffStore>((set) => ({
     }),
 
   clearConflictResolutions: () => set({ conflictResolutions: [] }),
-
-  setResultTab: (resultTab) => set({ resultTab }),
 
   reset: () =>
     set({
