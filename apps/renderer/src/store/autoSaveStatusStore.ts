@@ -32,7 +32,14 @@
  */
 import { create } from 'zustand';
 
-export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'failed';
+/**
+ * `needs_decision` is deliberately distinct from `failed`: `ria-data/` changed on
+ * disk, so the save was REFUSED rather than broken. Nothing is lost and nothing
+ * is wrong — the user has to choose between storing over the files and loading
+ * from them (docs/coreSpecs/RiaDataChangeDetection.md §4.4). Reporting it as a
+ * failure both alarms the user and misdescribes what happened.
+ */
+export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'failed' | 'needs_decision';
 
 interface AutoSaveStatusStore {
   status: SaveStatus;

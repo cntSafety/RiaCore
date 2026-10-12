@@ -30,7 +30,15 @@ export interface ActiveRun {
   jobId: string;
 }
 
+export interface ImportImpactResult { sourceName: string; runId: string }
+
 interface ImportRunStore {
+  // Dialog results survive content remounts, but never a workspace session.
+  session: number;
+  lastImportRunId: string | null;
+  importAllResults: ImportImpactResult[] | null;
+  setLastImportRunId: (runId: string | null, session: number) => void;
+  setImportAllResults: (results: ImportImpactResult[] | null, session: number) => void;
   activeRuns: Map<string, ActiveRun>;
 
   startRun: (sourceId: string, sourceName: string) => void;
@@ -41,6 +49,15 @@ interface ImportRunStore {
 }
 
 export const useImportRunStore = create<ImportRunStore>((set, get) => ({
+  session: 0,
+  lastImportRunId: null,
+  importAllResults: null,
+  setLastImportRunId: (runId, session) => {
+    if (session === get().session) set({ lastImportRunId: runId });
+  },
+  setImportAllResults: (results, session) => {
+    if (session === get().session) set({ importAllResults: results });
+  },
   activeRuns: new Map(),
 
   startRun: (sourceId, sourceName) => {
@@ -110,6 +127,6 @@ export const useImportRunStore = create<ImportRunStore>((set, get) => ({
       clearTimeout(timer);
     }
     finishTimers.clear();
-    set({ activeRuns: new Map() });
+    set((s) => ({ activeRuns: new Map(), session: s.session + 1, lastImportRunId: null, importAllResults: null }));
   },
 }));

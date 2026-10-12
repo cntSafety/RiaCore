@@ -45,6 +45,9 @@ function displayFor(status: SaveStatus, token: ReturnType<typeof useToken>['toke
       return { label: 'Saving…', color: token.colorTextTertiary };
     case 'saved':
       return { label: 'Saved changes', color: token.colorSuccess };
+    case 'needs_decision':
+      // Warning, not error: saving is paused pending a user decision.
+      return { label: 'Saving paused — files changed on disk', color: token.colorWarning };
     case 'failed':
       return { label: 'Auto-save failed', color: token.colorError };
     case 'idle':
@@ -80,6 +83,9 @@ export function SaveStatusIndicator() {
     </span>
   );
 
+  // `needs_decision` needs no tooltip and no click target: SnapshotDriftDialog is
+  // modal and cannot be dismissed, so the decision is already in front of the
+  // user. This is purely the status-bar echo of it.
   return status === 'failed' && lastError ? (
     <Tooltip title={lastError}>{content}</Tooltip>
   ) : (

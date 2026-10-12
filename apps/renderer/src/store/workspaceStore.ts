@@ -84,6 +84,33 @@ export interface NavigationHistorySnapshot {
 interface WorkspaceStore {
   workingDir: string | null;
   projectName: string | null;
+  /**
+   * Incremented by `resetWorkspaceState()` — i.e. by every workspace transition
+   * and every mutation that rebuilds DB content and reassigns node IDs (ria-data
+   * load, merge, import, re-import, namespace delete, update-from-branch).
+   *
+   * Combined with `workingDir` it forms the identity of the content currently on
+   * screen, and is used as a React `key` on the workspace subtree so that React
+   * discards all of its local component state when that identity changes.
+   *
+   * Why this exists: workspace-scoped state is duplicated between Zustand and
+   * component-local `useState`, and the local copies are seeded once and never
+   * resynced — so no store reset can reach them. That produced three separate
+   * trapped-UI bugs (stale namespace header after close, a malfunction editor with
+   * no home button after a ria-data load, an editor showing ids that no longer
+   * existed). Remounting is React's own answer to "local state must not outlive an
+   * identity change", and unlike per-component reset effects it also covers the
+   * state nobody enumerated: scroll offsets, uncommitted form drafts, antd
+   * internals.
+   *
+   * Mirrors `dbModule`'s `generation`, which the backend already bumps on close so
+   * `assertGeneration` can abort work belonging to a previous generation.
+   *
+   * MUST NOT be bumped for ordinary edits. Auto-save stores content without
+   * reassigning node IDs, so bumping there would remount the editor on every
+   * keystroke-triggered save.
+   */
+  contentGeneration: number;
   activeNamespace: NamespaceContext | null;
   // editor overrides: namespaceId → owningApplication override
   editorOverrides: Record<string, string>;
@@ -151,6 +178,7 @@ interface WorkspaceStore {
 export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   workingDir: null,
   projectName: null,
+  contentGeneration: 0,
   activeNamespace: null,
   editorOverrides: {},
   sidebarWidth: 240,
@@ -200,5 +228,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   exitPlacement: () => set({ placement: null }),
 
   resetWorkspaceState: () =>
-    set({ activeNamespace: null, editorOverrides: {}, safetyTreeState: {}, navigationHistory: null, pendingPropagationSource: {}, pendingCheckAutoRun: {}, copiedMalfunction: null, autoLayoutActive: false, placement: null }),
+    set((s) => ({
+      activeNamespace: null, editorOverrides: {}, safetyTreeState: {}, navigationHistory: null,
+      pendingPropagationSource: {}, pendingCheckAutoRun: {}, copiedMalfunction: null,
+      autoLayoutActive: false, placement: null,
+      // Bumped here rather than at each call site: every workspace transition and
+      // every node-ID-reassigning mutation already calls this function, so the
+      // React-key identity stays correct with no new discipline to remember.
+      contentGeneration: s.contentGeneration + 1,
+    })),
 }));

@@ -30,6 +30,8 @@ import { DiffPanel } from './modules/diff/DiffPanel';
 import { GitCommitModal } from './components/git/GitCommitModal';
 import { EmptyDirConfirmDialog } from './shell/EmptyDirConfirmDialog';
 import { useWorkspaceStore, type NamespaceContext } from './store/workspaceStore';
+import { isViewStale, resolveEffectiveView, type View } from './shell/viewRouting';
+import { useContentIdentity } from './hooks/useContentIdentity';
 import { useKeepImportSourcesSynced } from './hooks/useKeepImportSourcesSynced';
 import { api } from './api/riacore';
 import { useWorkspaceState } from './hooks/useWorkspaceState';
@@ -52,11 +54,8 @@ const queryClient = appQueryClient;
 
 // ── View types ────────────────────────────────────────────────────────────────
 
-type View =
-  | { type: 'canvas' }
-  | { type: 'namespace'; ns: NamespaceContext }
-  | { type: 'imports' }
-  | { type: 'diff' };
+// `View` and the staleness rules live in ./shell/viewRouting so the rules can be
+// unit-tested — see the comment there on why they exist.
 
 // ── Root app — view router ────────────────────────────────────────────────────
 
@@ -340,6 +339,43 @@ function RootApp() {
     setActiveNamespace(null);
   };
 
+  // ── A workspace-scoped view must not outlive what it is showing ───────────
+  //
+  // `view` is plain local state, and it is the SECOND source of truth for "which
+  // namespace is open" — `workspaceStore.activeNamespace` is the first. Two
+  // separate symptoms came from them drifting apart:
+  //
+  //  - Closing a workspace left the namespace editor mounted. The tree emptied
+  //    (its queries were dropped) but the "NAMESPACE x / Malfunction 12825"
+  //    header stayed, because the editor holds its selection in its own
+  //    `useState` and no store reset can reach it.
+  //
+  //  - Resolving snapshot drift with "Load from ria-data" left the editor mounted
+  //    with NO way out: a ria-data load calls `resetWorkspaceState()` (it rebuilds
+  //    the DB and reassigns node IDs), which nulls `activeNamespace` — and TopBar
+  //    gates both the home button and the namespace breadcrumb on exactly that.
+  //    The user was stuck in an editor whose only escape was a force reload.
+  //
+  // Returning home used to be wired per call site, so every new caller had to
+  // remember it. These two derivations make it structural instead.
+  // React key for workspace-scoped subtrees — see hooks/useContentIdentity.ts.
+  const contentIdentity = useContentIdentity();
+
+  const viewContext = {
+    workspaceGone: wsState.phase === 'no_workspace',
+    activeNamespace,
+  };
+  const viewIsStale = isViewStale(view, viewContext);
+  const effectiveView = resolveEffectiveView(view, viewContext);
+
+  // The derived value fixes the current render; this clears the stale state so a
+  // *subsequent* open cannot land back inside a namespace that no longer applies.
+  useEffect(() => {
+    if (viewIsStale) {
+      setView((current) => (current.type === 'canvas' ? current : { type: 'canvas' }));
+    }
+  }, [viewIsStale]);
+
   const openNamespace = (ns: NamespaceContext) => {
     setActiveNamespace(ns);
     setView({ type: 'namespace', ns });
@@ -383,30 +419,38 @@ function RootApp() {
 
   return (
     <AppShell
-      showTopBar={view.type !== 'canvas'}
-      showSidebar={view.type === 'namespace' && view.ns.owningApplication !== 'Safety-Analysis'}
+      showTopBar={effectiveView.type !== 'canvas'}
+      showSidebar={effectiveView.type === 'namespace' && effectiveView.ns.owningApplication !== 'Safety-Analysis'}
       onSelectNamespace={openNamespace}
       onNavigateHome={navigateHome}
       onOpenAppLogs={openAppLogs}
       onOpenWorkspaceLogs={openWorkspaceLogs}
     >
-      {view.type === 'canvas' && (
+      {/* Rendered from `effectiveView`, never raw `view`, so no workspace-scoped
+          view can survive a workspace close. See the derivation above. */}
+      {/* `key={contentIdentity}` on each workspace-scoped view: when the workspace
+          changes, or any mutation rebuilds DB content and reassigns node IDs, React
+          remounts the subtree and discards its local state. Without it, state held
+          in `useState` (tree selection, active tab, scroll) survives a rebuild and
+          points at ids that may no longer exist. See hooks/useContentIdentity.ts. */}
+      {effectiveView.type === 'canvas' && (
         <WorkspaceCanvas
+          key={contentIdentity}
           onEditNamespace={openNamespace}
           onCheckNamespace={openNamespaceWithCheck}
           onRunImporter={openImports}
         />
       )}
 
-      {view.type === 'namespace' && (
-        <NamespaceRouter ns={view.ns} />
+      {effectiveView.type === 'namespace' && (
+        <NamespaceRouter key={contentIdentity} ns={effectiveView.ns} />
       )}
 
-      {view.type === 'imports' && (
-        <ImportManager />
+      {effectiveView.type === 'imports' && (
+        <ImportManager key={contentIdentity} />
       )}
 
-      {view.type === 'diff' && (
+      {effectiveView.type === 'diff' && (
         <DiffPanel onBack={navigateHome} />
       )}
 

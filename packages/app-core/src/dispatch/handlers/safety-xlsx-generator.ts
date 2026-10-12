@@ -42,7 +42,12 @@
  */
 
 import ExcelJS from 'exceljs';
-import { formatReviews, formatSotifDetails } from './safety-export-format.js';
+import {
+  formatReviewsPlain,
+  formatSotifDetails,
+  verdictLabel,
+  authorStatusLabel,
+} from './safety-export-format.js';
 import type {
   SafetyExportData,
   ComponentExportData,
@@ -233,6 +238,11 @@ interface NoteRow {
   sheetName: string;
   id: string;
   noteText: string;
+  /**
+   * What the note was authored on within the component: a malfunction ID, a port
+   * name, or empty for a note on the component itself.
+   */
+  attachedTo: string;
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
@@ -324,7 +334,22 @@ export async function generateSafetyXlsx(data: SafetyExportData): Promise<Buffer
         sheetName,
         id: note.id,
         noteText: note.noteText,
+        attachedTo: note.appliesTo ?? '',
       });
+    }
+
+    // Notes authored on a malfunction hang off the malfunction, not the
+    // component, so they are not in `component.safetyNotes`.
+    for (const mf of [...component.functionalMFs, ...component.receiverPortMFs, ...component.providerPortMFs]) {
+      for (const note of mf.safetyNotes ?? []) {
+        noteRows.push({
+          componentName: component.name,
+          sheetName,
+          id: note.id,
+          noteText: note.noteText,
+          attachedTo: mf.id,
+        });
+      }
     }
   }
 
@@ -474,7 +499,7 @@ function buildComponentSheet(
       mf.propagatesToIds.join(', '),
       mf.taskIds.join(', '),
       mf.reqIds.join(', '),
-      formatReviews(mf.reviews),
+      formatReviewsPlain(mf.reviews),
       ...(includeSotifDetails ? [
         formatSotifDetails(mf.functionalInsufficiencies),
         formatSotifDetails(mf.triggeringConditions),
@@ -618,11 +643,11 @@ function buildNotesSheet(workbook: ExcelJS.Workbook, noteRows: NoteRow[]): void 
     views: [{ state: 'frozen', ySplit: 1 }],
   });
 
-  const header = sheet.addRow(['Note ID', 'Component', 'Note']);
+  const header = sheet.addRow(['Note ID', 'Component', 'Attached To', 'Note']);
   styleHeaderRow(header);
 
   for (const note of noteRows) {
-    const row = sheet.addRow([note.id, note.componentName, note.noteText]);
+    const row = sheet.addRow([note.id, note.componentName, note.attachedTo, note.noteText]);
     row.alignment = { vertical: 'top', wrapText: true };
     const compCell = row.getCell(2);
     compCell.value = { text: note.componentName, hyperlink: internalLink(note.sheetName, 'A1') };
@@ -633,8 +658,8 @@ function buildNotesSheet(workbook: ExcelJS.Workbook, noteRows: NoteRow[]): void 
     sheet.addRow(['No safety notes recorded.']).getCell(1).font = { italic: true };
   }
 
-  setColumnWidths(sheet, [18, 24, 70]);
-  sheet.autoFilter = { from: 'A1', to: 'C1' };
+  setColumnWidths(sheet, [18, 24, 22, 70]);
+  sheet.autoFilter = { from: 'A1', to: 'D1' };
 }
 
 // ── Tags sheet ──────────────────────────────────────────────────────────────
@@ -673,15 +698,18 @@ function buildUnlinkedDetailsSheet(workbook: ExcelJS.Workbook, components: Compo
       rows.push(['Triggering condition', component.name, detail.name, detail.description, detail.source]);
     }
     for (const review of component.unlinkedReviews ?? []) {
-      rows.push(['Review', component.name, review.name, '', '', review.status,
-        review.reviewerComment, review.authorStatus ?? '', review.authorComment, review.verdict]);
+      // The legacy `review_status` field is not reported — it is hardcoded to
+      // `open` at creation. Verdict and author status carry the real state.
+      rows.push(['Review', component.name, review.name, '', '',
+        verdictLabel(review.verdict), review.reviewerComment,
+        authorStatusLabel(review.authorStatus), review.authorComment]);
     }
   }
   if (!rows.length) return;
   const sheet = workbook.addWorksheet('Unlinked Details', { views: [{ state: 'frozen', ySplit: 1 }] });
-  styleHeaderRow(sheet.addRow(['Kind', 'Group', 'Name', 'Description', 'Source', 'Review Status',
-    'Reviewer Comment', 'Author Status', 'Author Comment', 'Verdict']));
+  styleHeaderRow(sheet.addRow(['Kind', 'Group', 'Name', 'Description', 'Source', 'Verdict',
+    'Reviewer Comment', 'Author Status', 'Author Comment']));
   for (const values of rows) sheet.addRow(values).alignment = { vertical: 'top', wrapText: true };
-  setColumnWidths(sheet, [26, 28, 35, 60, 18, 18, 60, 18, 60, 18]);
-  sheet.autoFilter = { from: 'A1', to: 'J1' };
+  setColumnWidths(sheet, [26, 28, 35, 60, 18, 18, 60, 18, 60]);
+  sheet.autoFilter = { from: 'A1', to: 'I1' };
 }

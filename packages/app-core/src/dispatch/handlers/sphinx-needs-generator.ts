@@ -27,7 +27,7 @@
  * No I/O, no side effects. Deterministic: same input → same output.
  */
 
-import { formatReviews, formatSotifDetails } from './safety-export-format.js';
+import { renderReviewsRst, formatSotifDetails } from './safety-export-format.js';
 
 import type {
   SafetyExportData,
@@ -308,13 +308,26 @@ function renderMalfunctionDirective(
   }
 
   for (const [label, content] of [
-    ['Reviews', formatReviews(mf.reviews)],
     ['Functional Insufficiencies', formatSotifDetails(mf.functionalInsufficiencies)],
     ['Triggering Conditions', formatSotifDetails(mf.triggeringConditions)],
   ]) {
     if (content) lines.push('', ...renderDirectiveField(label, content));
   }
   lines.push('');
+
+  // The review thread follows the malfunction as a sibling container rather than
+  // sitting in the directive body. Inside the body, docutils merges the review
+  // fields into a single run-together paragraph; as a sibling it can be styled
+  // as a footer pane of the need card.
+  const reviews = renderReviewsRst(mf.reviews);
+  if (reviews) lines.push(reviews, '');
+
+  // Notes authored on this malfunction follow it as sibling needs — the reader
+  // wants the note next to the malfunction it explains rather than in the
+  // component-level Safety Information section.
+  for (const note of mf.safetyNotes ?? []) {
+    lines.push('', renderSafetyNoteDirective(note, mf.id));
+  }
   return lines.join('\n');
 }
 
@@ -393,12 +406,26 @@ function renderSafetyTaskDirective(task: SafetyTaskExportData): string {
 
 // ── Safety note directive rendering ─────────────────────────────────────────
 
-function renderSafetyNoteDirective(note: SafetyNoteExportData): string {
+/**
+ * Render a safety note.
+ *
+ * `linksTo` sets the generic sphinx-needs `:links:` option, used for notes
+ * authored on a malfunction so the note and the malfunction it annotates are
+ * traceable to each other instead of the note floating free in the document.
+ */
+function renderSafetyNoteDirective(note: SafetyNoteExportData, linksTo?: string): string {
   const noteText = note.noteText && note.noteText.trim().length > 0
     ? note.noteText
     : 'No note text provided.';
   const indented = noteText.replace(/\n/g, '\n   ');
-  return [`.. safetynote:: Safety Note`, `   :id: ${note.id}`, '', `   ${indented}`, ''].join('\n');
+  const lines = [`.. safetynote:: Safety Note`, `   :id: ${note.id}`];
+  if (linksTo) lines.push(`   :links: ${linksTo}`);
+  lines.push('');
+  // Name the port when the note was authored on one rather than on the component,
+  // since the reader only sees the owning component's document.
+  if (note.appliesTo) lines.push(`   **Applies to port:** ${note.appliesTo}`, '');
+  lines.push(`   ${indented}`, '');
+  return lines.join('\n');
 }
 
 // ── Analysis Statistics section ──────────────────────────────────────────────
@@ -529,18 +556,41 @@ function buildComponentRst(
   lines.push('');
   lines.push('');
 
+  // Tags read as tags: just the name, rendered as an inline literal so themes
+  // chip it. A tag's color is presentation metadata that means nothing in a text
+  // report, and its description is only emitted when the author wrote one —
+  // printing empty `Description:` / `Color:` lines for every tag was pure noise.
+  // Port scope survives, because a tag can be applied to one of the component's
+  // ports and ports have no document of their own.
+  const tagLines = (component.tagDetails ?? []).map(tag => {
+    const parts = [`\`\`${tag.name}\`\``];
+    if (tag.appliesTo) parts.push(`(port: ${flattenText(tag.appliesTo)})`);
+    const description = flattenText(tag.description ?? '');
+    if (description) parts.push(`— ${description}`);
+    return `| ${parts.join(' ')}`;
+  });
+  if (tagLines.length > 0) {
+    lines.push('Tags', repeatChar('-', 'Tags'.length), '', ...tagLines, '', '');
+  }
+
   for (const [label, content] of [
-    ['Tag Details', (component.tagDetails ?? []).map(tag =>
-      `Name: ${tag.name}\nDescription: ${tag.description}\nColor: ${tag.color}`).join('\n\n')],
     ['Unlinked Functional Insufficiencies', formatSotifDetails(component.unlinkedFunctionalInsufficiencies)],
     ['Unlinked Triggering Conditions', formatSotifDetails(component.unlinkedTriggeringConditions)],
-    ['Unlinked Reviews', formatReviews(component.unlinkedReviews)],
   ]) {
     if (content) {
       lines.push(label, repeatChar('-', label.length), '');
       // A line block preserves readable field boundaries without creating needs.
       lines.push(...content.split('\n').map(line => `| ${line}`), '', '');
     }
+  }
+
+  // Reviews whose reviewed element is not a malfunction of this component still
+  // belong in the report, rendered as the same thread shape used under a
+  // malfunction so the reader does not have to learn a second layout.
+  const unlinkedReviews = renderReviewsRst(component.unlinkedReviews);
+  if (unlinkedReviews) {
+    const label = 'Unlinked Reviews';
+    lines.push(label, repeatChar('-', label.length), '', unlinkedReviews, '', '');
   }
 
   // Analysis Statistics
@@ -555,7 +605,7 @@ function buildComponentRst(
     lines.push('   No safety notes recorded for this component.');
     lines.push('');
   } else {
-    lines.push(component.safetyNotes.map(renderSafetyNoteDirective).join('\n\n'));
+    lines.push(component.safetyNotes.map(note => renderSafetyNoteDirective(note)).join('\n\n'));
     lines.push('');
   }
   lines.push('');
@@ -756,12 +806,30 @@ interface ComponentDocument {
   docname: string;
 }
 
+/**
+ * Turn a component name into a Sphinx docname that is safe as a single path
+ * segment.
+ *
+ * Only `A-Z a-z 0-9 . _ -` survive; every other run of characters collapses to a
+ * single underscore. That keeps path separators out (so a name like `../Other`
+ * cannot escape `components/`) and leaves ordinary ARXML short names untouched.
+ * Leading dots are dropped so a docname is never a relative-path marker or a
+ * hidden file.
+ *
+ * Percent-encoding was used here before, which turned any component whose name
+ * contains a space — the aggregator's own `Unassigned safety data` bucket, for
+ * instance — into a file called `Unassigned%20safety%20data.rst`.
+ */
+function toDocname(name: string): string {
+  const slug = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+/, '');
+  return slug.length > 0 ? slug : 'Component';
+}
+
 /** One document per input entry, even when node IDs repeat. */
 function componentDocuments(components: ComponentExportData[]): ComponentDocument[] {
   const used = new Set<string>();
   return components.map(component => {
-    const base = encodeURIComponent(component.name) || 'Component';
-    let name = base;
+    let name = toDocname(component.name);
     while (used.has(name.toLowerCase())) name = `${name}_${Math.abs(component.nodeId)}`;
     used.add(name.toLowerCase());
     return { component, docname: name };

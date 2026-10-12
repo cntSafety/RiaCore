@@ -22,6 +22,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ImportSourceInfo, ImportConfigView, ImportConfigData, DiffSummary, NamespaceDiffResult, ArxmlTreeData } from '@riacore/app-contracts';
+import { describeDiffSummaryCounts } from '@riacore/app-contracts';
 import type { IGitService } from '@riacore/git-service';
 import { normalizeStoredPath, resolveWorkspacePath } from '@riacore/importer-sdk';
 import type { createRegistry } from '../channel-registry.js';
@@ -48,7 +49,8 @@ interface SourceConfigMeta {
 // ── Import git metadata file helpers ─────────────────────────────────────────
 
 interface ImportGitMetadataSource {
-  lastImportBranch: string;
+  /** Absent when the import ran from a detached HEAD (no branch to record). */
+  lastImportBranch?: string;
   lastImportCommitId: string;
   lastImportAt: string;
 }
@@ -83,17 +85,29 @@ function writeImportGitMetadata(workingDir: string, data: ImportGitMetadataFile)
  * Records the branch and commit provenance for a source after a successful
  * git-based import. Updates both the DB source config meta and the
  * ria-config/import-git-metadata.json file.
+ *
+ * Pass `null` for `branch`/`commitId` to CLEAR the recorded value. Clearing
+ * matters: stale provenance is not merely a wrong label on the card — it is the
+ * input to `imports.updateFromImportedBranch`, which would otherwise keep
+ * pulling from a branch the source is no longer pointed at.
  */
 async function recordGitImportProvenance(
   dbModule: { runQuery(q: string, p?: Record<string, unknown>): Promise<Record<string, unknown>[]> },
   sourceId: string,
-  branch: string,
-  commitId: string,
+  branch: string | null,
+  commitId: string | null,
   workingDir: string,
-  configRaw: unknown,
+  fallbackConfigRaw: unknown,
 ): Promise<void> {
-  // Update DB source config meta
-  const newMeta = serializeSourceConfigMeta(configRaw, {
+  // Import completion updates this metadata (including configDirty and
+  // lastAppliedAt). Re-read it here rather than merging into the snapshot that
+  // the import channel loaded before the import began.
+  const currentRows = await dbModule.runQuery(
+    `MATCH (s:RIA_SRC_Source) WHERE s.source_id = $sourceId RETURN s.config AS config`,
+    { sourceId },
+  );
+  const currentConfigRaw = currentRows[0]?.config ?? fallbackConfigRaw;
+  const newMeta = serializeSourceConfigMeta(currentConfigRaw, {
     lastImportBranch: branch,
     lastImportCommitId: commitId,
   });
@@ -105,15 +119,60 @@ async function recordGitImportProvenance(
   // Update the JSON provenance file (best-effort — do not throw if it fails)
   try {
     const meta = readImportGitMetadata(workingDir);
-    meta.sources[sourceId] = {
-      lastImportBranch: branch,
-      lastImportCommitId: commitId,
-      lastImportAt: new Date().toISOString(),
-    };
+    if (commitId === null) {
+      delete meta.sources[sourceId];
+    } else {
+      meta.sources[sourceId] = {
+        ...(branch !== null ? { lastImportBranch: branch } : {}),
+        lastImportCommitId: commitId,
+        lastImportAt: new Date().toISOString(),
+      };
+    }
     writeImportGitMetadata(workingDir, meta);
   } catch (err) {
     console.warn(`[recordGitImportProvenance] Failed to write import-git-metadata.json: ${String(err)}`);
   }
+}
+
+/**
+ * Captures provenance for a plain import run, which reads the source's working
+ * tree as-is rather than a caller-supplied ref. The branch is therefore whatever
+ * is currently checked out, not what was recorded by an earlier branch-based run.
+ *
+ * Best-effort by design: a plain import must keep working for sources that are
+ * not in a git repository at all, so every failure path clears the provenance
+ * instead of throwing. This is the one behavioural difference from the ref-based
+ * flows, which legitimately fail hard when git is unavailable.
+ */
+async function recordWorkingTreeProvenance(
+  deps: {
+    dbModule: { runQuery(q: string, p?: Record<string, unknown>): Promise<Record<string, unknown>[]> };
+    gitService?: IGitService;
+  },
+  sourceId: string,
+  projectDir: string,
+  workingDir: string,
+  configRaw: unknown,
+): Promise<void> {
+  let branch: string | null = null;
+  let commitId: string | null = null;
+
+  if (deps.gitService && projectDir) {
+    const rootResult = await deps.gitService.getRepoRoot(projectDir);
+    const gitRoot = rootResult.ok ? rootResult.data : null;
+    if (gitRoot) {
+      const branchResult = await deps.gitService.getCurrentBranch(gitRoot);
+      // null on a detached HEAD — record the commit, leave the branch unset.
+      if (branchResult.ok && branchResult.data) branch = branchResult.data;
+
+      const commitResult = await deps.gitService.getCommit(gitRoot, branch ?? 'HEAD');
+      if (commitResult.ok && commitResult.data) commitId = commitResult.data.hash;
+    }
+  }
+
+  await recordGitImportProvenance(
+    deps.dbModule, sourceId, branch, commitId, workingDir, configRaw,
+  );
 }
 
 function parseSourceConfigMeta(raw: unknown): SourceConfigMeta {
@@ -125,10 +184,23 @@ function parseSourceConfigMeta(raw: unknown): SourceConfigMeta {
   }
 }
 
-function serializeSourceConfigMeta(raw: unknown, patch: Partial<SourceConfigMeta>): string {
+/**
+ * Merges `patch` into the source's existing config meta so unrelated keys
+ * (digests, configDirty, lastAppliedAt) survive.
+ *
+ * `undefined` means "leave untouched"; `null` means "remove the key". The two
+ * are distinct on purpose — clearing stale git provenance requires actual
+ * removal, and a caller omitting a field must not silently wipe it.
+ */
+function serializeSourceConfigMeta(
+  raw: unknown,
+  patch: { [K in keyof SourceConfigMeta]?: SourceConfigMeta[K] | null },
+): string {
   const merged: Record<string, unknown> = { ...parseSourceConfigMeta(raw) };
   for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) merged[key] = value;
+    if (value === undefined) continue;
+    if (value === null) delete merged[key];
+    else merged[key] = value;
   }
   return JSON.stringify(merged);
 }
@@ -249,7 +321,17 @@ function parseAttributes(raw: unknown): Record<string, unknown> {
  * Returns the POSIX-relative path (forward slashes, no leading `..`).
  */
 function requireWithinRepo(absPath: string, repoDir: string, label: string): string {
-  const rel = path.relative(repoDir, absPath);
+  let rel = path.relative(repoDir, absPath);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    try {
+      // Git may return a long Windows path while TEMP uses its 8.3 alias.
+      // Canonicalize existing paths before declaring them to be unrelated.
+      rel = path.relative(fs.realpathSync.native(repoDir), fs.realpathSync.native(absPath));
+    } catch {
+      // Preserve the original relative path so the normal validation below
+      // produces the existing actionable error.
+    }
+  }
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(
       `${label} '${absPath}' is not within the git repository at '${repoDir}'. ` +
@@ -373,7 +455,7 @@ export function registerImportChannels(
     const result = await deps.orchestration.runImport(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.getStatus ────────────────────────────────────────────────────────
   registry.register('imports.getStatus', async (payload, deps, _ctx) => {
@@ -571,7 +653,7 @@ export function registerImportChannels(
         console.warn(`[imports.saveConfig] Could not write config file '${yamlPath}': ${String(err)}`);
       }
     }
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'full', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.getArxmlTree ─────────────────────────────────────────────────────
   registry.register('imports.getArxmlTree', async (payload, deps, _ctx) => {
@@ -789,7 +871,7 @@ export function registerImportChannels(
            s.config_path = '${e(filePath)}',
            s.updated_at = '${e(now)}'`,
     );
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'full', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.getImpactReport ────────────────────────────────────────────────────
   registry.register('imports.getImpactReport', async (payload, deps, _ctx) => {
@@ -808,7 +890,7 @@ export function registerImportChannels(
     if (!deps.orchestration) throw new Error('Orchestration service not available');
     const { entry, newImportedNodeId } = payload;
     return deps.orchestration.reconnectOrphanedEntry(entry, newImportedNodeId);
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: 'imports' });
 
   // ── Active import channels ────────────────────────────────────────────────────
 
@@ -865,11 +947,24 @@ export function registerImportChannels(
         },
       });
       if (!result.ok) throw new Error(result.error);
+
+      // Refresh git provenance from the working tree we just imported. A plain
+      // run reads whatever is checked out, so any branch/commit recorded by an
+      // earlier branch-based run is now wrong and must not be left in place.
+      const configuredProjectDir = typeof configData.project_dir === 'string' ? configData.project_dir : '';
+      await recordWorkingTreeProvenance(
+        deps,
+        sourceId,
+        configuredProjectDir ? resolveWorkspacePath(workingDir, configuredProjectDir) : '',
+        workingDir,
+        rows[0]['s.config'],
+      );
+
       return result.data;
     } finally {
       ctx.setActiveImportSourceId(null);
     }
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.deleteSource ──────────────────────────────────────────────────
   registry.register('imports.deleteSource', async (payload, deps, _ctx) => {
@@ -917,7 +1012,7 @@ export function registerImportChannels(
         console.warn(`[imports.deleteSource] Could not remove config file '${configPath}': ${String(err)}`);
       }
     }
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'full', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.runFromSourceAtRef ────────────────────────────────────────────
   // Runs the importer for a source against files at a specific git ref
@@ -980,7 +1075,7 @@ export function registerImportChannels(
       if (!result.ok) throw new Error(result.error);
 
       // Log and record provenance after a successful import
-      const logger = createImportLogger(path.join(workingDir, 'logs'));
+      const logger = deps.loggers.workspace(workingDir);
       logger.info('Import completed from git ref', {
         sourceId,
         branch: ref,
@@ -999,7 +1094,7 @@ export function registerImportChannels(
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
     }
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: 'imports' });
 
   // ── imports.updateFromImportedBranch ──────────────────────────────────────
   // UC-12 direct variant: checks if there is a newer commit on the branch
@@ -1064,7 +1159,7 @@ export function registerImportChannels(
 
     // New commit available — run import into a temp namespace to preserve
     // original data if the import fails. On success, auto-apply all changes.
-    const logger = createImportLogger(path.join(workingDir, 'logs'));
+    const logger = deps.loggers.workspace(workingDir);
     ctx.setActiveImportSourceId(sourceId);
     const originalNamespace = String(configData.namespace ?? '');
     if (!originalNamespace) throw new Error('Source config has no target namespace');
@@ -1137,10 +1232,13 @@ export function registerImportChannels(
         } catch { /* best-effort */ }
         throw diffErr;
       }
+      // Cross-NS counts are always 0 here by construction — this flow passes
+      // includeCrossNamespaceEdges: false because the temp namespace carries no
+      // authored annotations. Logged anyway so the record is uniform with the
+      // other diff logs and the zeros are visibly deliberate.
       logger.info('imports.updateFromImportedBranch: diff computed', {
         diffId: diffSummary.diffId, originalNamespace, tempNamespace,
-        addedNodes: diffSummary.addedNodesCount, deletedNodes: diffSummary.deletedNodesCount,
-        modifiedNodes: diffSummary.modifiedNodesCount,
+        ...describeDiffSummaryCounts(diffSummary),
       });
 
       // Step 3: Auto-apply ALL changes from temp into original namespace
@@ -1204,5 +1302,5 @@ export function registerImportChannels(
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
     }
-  }, { requiresWorkspace: true, category: 'imports' });
+  }, { mutates: 'self', requiresWorkspace: true, category: 'imports' });
 }

@@ -219,6 +219,58 @@ export interface DiffSummary {
   scope?: DiffScope;
 }
 
+/**
+ * Total number of changed elements described by a DiffSummary.
+ *
+ * THE BUG THIS EXISTS TO PREVENT
+ *
+ * Cross-namespace relationships are counted separately from intra-namespace
+ * ones (`*CrossNsEdgesCount` vs `*EdgesCount`). Every caller that hand-summed
+ * these counts summed only the six intra-namespace fields and silently dropped
+ * the three cross-NS ones. A diff whose *only* change was a cross-namespace
+ * relationship therefore totalled 0, and the supervised merge-from-branch modal
+ * reported "Already up to date — nothing to merge" while the diff result in fact
+ * held the change and `applyMerge` was perfectly able to apply it.
+ *
+ * Use this helper instead of summing fields by hand, so a future count field
+ * has exactly one place to be added.
+ */
+export function countDiffSummaryChanges(summary: DiffSummary): number {
+  return (
+    summary.addedNodesCount +
+    summary.deletedNodesCount +
+    summary.modifiedNodesCount +
+    summary.addedEdgesCount +
+    summary.deletedEdgesCount +
+    summary.modifiedEdgesCount +
+    summary.addedCrossNsEdgesCount +
+    summary.deletedCrossNsEdgesCount +
+    summary.modifiedCrossNsEdgesCount
+  );
+}
+
+/**
+ * Per-category counts of a DiffSummary, for structured logging.
+ *
+ * Keeps the cross-NS counters in the log record: the original diagnosis of the
+ * bug above was slowed down because the prepare handler logged only the six
+ * intra-namespace counts, so the log showed "all zero" for a diff that had
+ * found a real change.
+ */
+export function describeDiffSummaryCounts(summary: DiffSummary): Record<string, number> {
+  return {
+    addedNodes: summary.addedNodesCount,
+    deletedNodes: summary.deletedNodesCount,
+    modifiedNodes: summary.modifiedNodesCount,
+    addedEdges: summary.addedEdgesCount,
+    deletedEdges: summary.deletedEdgesCount,
+    modifiedEdges: summary.modifiedEdgesCount,
+    addedCrossNsEdges: summary.addedCrossNsEdgesCount,
+    deletedCrossNsEdges: summary.deletedCrossNsEdgesCount,
+    modifiedCrossNsEdges: summary.modifiedCrossNsEdgesCount,
+  };
+}
+
 // ── Section key for paginated access ─────────────────────────────────────────
 
 export type DiffResultSection =

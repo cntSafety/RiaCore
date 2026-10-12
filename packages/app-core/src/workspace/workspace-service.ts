@@ -27,6 +27,7 @@ import type { AppCoreLogger } from '../db/db-module.js';
 import type { IPersistorService } from '../persistor/persistor-types.js';
 import type { Manifest } from '../persistor/persistor-types.js';
 import { computeNamespaceHashFromFiles } from '../persistor/persistor.js';
+import { clearBaseline, stampBaseline } from './snapshot-baseline.js';
 import { migrateLegacyConnections } from './connection-migration.js';
 import { createLayoutService } from '../namespaces/layout-service.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
@@ -362,6 +363,12 @@ export function createWorkspaceService(
   let epoch = 0; // used by tasks 5.2/5.3
   let currentLoad: Promise<void> | null = null;
 
+  // Set by openLocked when it returns via the already-open fast path, so the
+  // public open() wrapper can skip re-stamping the snapshot baseline. Safe as
+  // closure state because openLocked and the wrapper run inside the same
+  // mutex-held critical section (RiaDataChangeDetection.md §4.1).
+  let lastOpenUsedFastPath = false;
+
   /**
    * Returns a promise that resolves when the current tracked load settles, or
    * immediately when no load is in flight (Requirement 6.2).
@@ -652,6 +659,9 @@ export function createWorkspaceService(
 
   async function openLocked(config: WorkspaceConfig): Promise<Result<WorkspaceInfo>> {
       logger?.info?.('Workspace open requested', { workingDir: config.workingDir });
+      // Reset for this attempt; the already-open fast path below sets it so the
+      // public open() wrapper knows not to re-stamp the snapshot baseline.
+      lastOpenUsedFastPath = false;
 
       // Step 1: Validate input with Zod
       const parsed = WorkspaceConfigSchema.safeParse(config);
@@ -695,6 +705,12 @@ export function createWorkspaceService(
         if (state.config?.workingDir === config.workingDir && state.dbPath && fs.existsSync(state.dbPath)) {
           if (!config.forceRecheck) {
             logger?.debug?.('Workspace already open with same directory — skipping re-open', { workingDir: config.workingDir });
+            // No data moved, so the existing snapshot baseline is still the
+            // correct one. Flag it so open() does NOT re-stamp: persistor.store
+            // calls open() implicitly before every save and lands here, and
+            // re-stamping would adopt drifted content as the baseline moments
+            // before the write fence is supposed to catch it.
+            lastOpenUsedFastPath = true;
             return {
               ok: true,
               data: {
@@ -1377,6 +1393,10 @@ export function createWorkspaceService(
 
   async function closeLocked(): Promise<void> {
       logger?.info?.('Workspace close requested', { workingDir: state.config?.workingDir ?? null, dbPath: state.dbPath });
+      // Drop the snapshot baseline: the next open re-establishes it, and a stale
+      // baseline from a previous session must never be compared against a
+      // freshly opened workspace.
+      if (state.config?.workingDir) clearBaseline(state.config.workingDir);
       // Supersede any in-flight Case B load (Req 4.2): bumping the epoch first
       // neutralises that load's completion closures (Req 7.3), then bound-await
       // it so the DB is not closed out from under an active load (Req 3.2). The
@@ -1396,11 +1416,32 @@ export function createWorkspaceService(
 
   return {
     open(config: WorkspaceConfig): Promise<Result<WorkspaceInfo>> {
-      return mutex.runExclusive(() => openLocked(config));
+      return mutex.runExclusive(async () => {
+        const result = await openLocked(config);
+        // Stamp the snapshot baseline whenever this open actually established or
+        // synchronised DB content — Case A create, Case B load, Case D
+        // consistent / reload / fresh load, and a forceRecheck open. One place
+        // rather than ten, because every one of those paths leaves `ria-data/`
+        // and the DB in a defined relationship by the time openLocked returns.
+        //
+        // Excluded: the already-open fast path, which moves no data (see
+        // `lastOpenUsedFastPath`). Also excluded: a failed open, which leaves no
+        // defined relationship to record.
+        if (result.ok && !lastOpenUsedFastPath) {
+          // 'open' starts the session clock. Stores and loads carry it forward so
+          // a save cannot overwrite "when I opened this".
+          stampBaseline(config.workingDir, logger, { reason: 'open' });
+        }
+        return result;
+      });
     },
 
     create(config: WorkspaceConfig): Promise<Result<WorkspaceInfo>> {
-      return mutex.runExclusive(() => createLocked(config));
+      return mutex.runExclusive(async () => {
+        const result = await createLocked(config);
+        if (result.ok) stampBaseline(config.workingDir, logger, { reason: 'create' });
+        return result;
+      });
     },
 
     close(): Promise<void> {

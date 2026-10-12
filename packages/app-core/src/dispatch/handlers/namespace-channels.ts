@@ -188,7 +188,7 @@ export function registerNamespaceChannels(
     if (!result.ok) throw new Error(result.error);
     return result.data;
   }, {
-    requiresWorkspace: true,
+    mutates: 'full', requiresWorkspace: true,
     category: 'namespaces',
   });
 
@@ -781,5 +781,5 @@ export function registerNamespaceChannels(
   registry.register('namespaces.delete', async (payload, deps, _ctx) => {
     const { namespace } = payload;
     await deleteNamespace(namespace, deps.dbModule);
-  }, { requiresWorkspace: true, category: 'namespaces' });
+  }, { mutates: 'full', requiresWorkspace: true, category: 'namespaces' });
 }

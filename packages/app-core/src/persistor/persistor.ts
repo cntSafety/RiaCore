@@ -44,6 +44,7 @@ import type {
 import { store } from './persistor-store.js';
 import { load } from './persistor-load.js';
 import { repairManifest } from './persistor-repair.js';
+import { stampBaseline } from '../workspace/snapshot-baseline.js';
 
 // ── Re-exports: types ──────────────────────────────────────────────────────────
 
@@ -146,14 +147,30 @@ export function createPersistorService(dbModule: IDbModule, logger: ImportLogger
     },
     async load(params: PersistorLoadParams): Promise<LoadResult> {
       try {
-        return await load(params, dbModule, logger);
+        const result = await load(params, dbModule, logger);
+        // The DB now holds exactly what is on disk, so the files become the new
+        // baseline.
+        //
+        // Without this, "Load from ria-data" could not resolve snapshot drift:
+        // the load rebuilt the DB but left the OLD baseline in place, so the very
+        // next drift check compared the (restored) files against a baseline they
+        // were never going to match, re-reported drift, and re-raised the dialog
+        // — an unbreakable loop. A load is deliberately NOT fenced, because it is
+        // the resolution for drift, not a writer of it.
+        stampBaseline(params.workingDir, undefined, { reason: 'load' });
+        return result;
       } catch (err) {
         logger.error(`load failed: ${err instanceof Error ? err.message : String(err)}`);
         throw err;
       }
     },
-    repairManifest(params: PersistorRepairParams): Promise<RepairManifestResult> {
-      return Promise.resolve(repairManifest(params, logger));
+    async repairManifest(params: PersistorRepairParams): Promise<RepairManifestResult> {
+      const result = await Promise.resolve(repairManifest(params, logger));
+      // Repair rewrites manifest.json to match the on-disk files, which changes
+      // the very hashes the baseline is compared against. Re-stamp for the same
+      // reason as load: otherwise accepting a repair immediately looks like drift.
+      stampBaseline(params.workingDir, undefined, { reason: 'repair' });
+      return result;
     },
   };
 }

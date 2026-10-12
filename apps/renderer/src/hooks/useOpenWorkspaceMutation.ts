@@ -25,6 +25,7 @@ import { useWorkspaceStore } from '../store/workspaceStore';
 import { useImportRunStore } from '../store/importRunStore';
 import { useJobStore } from '../store/jobStore';
 import { useDiffStore } from '../store/diffStore';
+import { useAutoSaveStatusStore } from '../store/autoSaveStatusStore';
 import { resetWorkspaceScopedQueries } from './workspaceCacheReset';
 
 /**
@@ -155,6 +156,12 @@ export function useOpenWorkspaceMutation() {
 
       // Clear diff store — namespace names and diff results are workspace-scoped.
       useDiffStore.getState().reset();
+
+      // Save status belongs to the workspace that produced it. Previously reset by
+      // a workspace-switch effect inside WorkspaceCanvas; moved here so lifecycle
+      // teardown lives in the lifecycle mutation rather than in a view component
+      // that happens to be mounted.
+      useAutoSaveStatusStore.getState().reset();
 
       // Remove ALL workspace-scoped TanStack Query caches so stale data from the
       // previous workspace is never visible after the transition. Everything

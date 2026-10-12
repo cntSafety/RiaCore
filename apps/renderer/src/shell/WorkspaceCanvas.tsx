@@ -36,6 +36,7 @@ import {
   LoadingOutlined,
   ApartmentOutlined,
   ImportOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { useRef, useState, useCallback, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
@@ -70,6 +71,15 @@ import { useWorkspaceStore, type NamespaceContext } from '../store/workspaceStor
 import { computeElkLayout } from '../modules/namespace/editors/safety-analysis/utils/elkLayout';
 import { resolveNodePosition } from './resolveNodePosition';
 import { buildAutoLayoutRecords } from './autoLayoutRecords';
+import { declaredDimensions } from './nodeDimensions';
+import { reconcileCanvasNodes, type ReconcilableNode } from './canvasNodeReconcile';
+import { decideViewportFit, VIEWPORT_FIT_DEADLINE_MS } from './viewportFitGate';
+import {
+  createUnmeasuredWatchState,
+  tickUnmeasuredWatch,
+  MEASUREMENT_GRACE_PERIOD_MS,
+  type UnmeasuredWatchState,
+} from './unmeasuredNodeWatch';
 import {
   createFallbackPlacementCache,
   ensureFallbackPosition,
@@ -105,11 +115,10 @@ import { ImporterConfigModal } from './ImporterConfigModal';
 import { NamespaceDeleteWithPreview } from './NamespaceDeleteWithPreview';
 import { api } from '../api/riacore';
 import { useNamespaces } from '../hooks/useNamespaces';
-import { useImportRunStore } from '../store/importRunStore';
-import { useJobStore } from '../store/jobStore';
 import { useAutoSaveStatusStore } from '../store/autoSaveStatusStore';
 import { useCanvasAutoSave } from '../hooks/useCanvasAutoSave';
 import { ImpactReportPanel } from '../modules/import/ImpactReportPanel';
+import { useImportRunStore, type ImportImpactResult } from '../store/importRunStore';
 import { UpdateFromBranchModal } from '../modules/import/UpdateFromBranchModal';
 import { useWorkspaceGitConfig } from '../api/git-hooks';
 import { MergeFromBranchModal } from './MergeFromBranchModal';
@@ -117,6 +126,7 @@ import { SupervisedMergeFromBranchModal } from './SupervisedMergeFromBranchModal
 import type { ImportSourceInfo, NamespaceInfo, NamespaceCheckSummary } from '@riacore/app-contracts';
 import { useLoadCheckSummary } from '../hooks/useChecks';
 import { getNamespaceDecorationBySourceType, getNamespaceDecorationByMetamodel } from '../lib/namespaceTypeDecoration';
+import { logOpEvent } from '../lib/opTrace';
 import { invalidateAfterContentChange } from '../hooks/workspaceCacheReset';
 
 const { useToken } = theme;
@@ -259,6 +269,98 @@ function StatusChip({
 }
 
 // ── Importer card ─────────────────────────────────────────────────────────────
+
+/**
+ * Git branch provenance line on an import source card.
+ *
+ * Truncation is left to CSS rather than a character count: a fixed
+ * `slice(0, 22)` cut names short even when the card had room for more, and it
+ * cut mid-glyph regardless of the actual font metrics. The full name stays
+ * reachable through the tooltip and the copy button.
+ */
+function BranchLabel({ branch }: { branch: string }) {
+  const { token } = useToken();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    void navigator.clipboard.writeText(branch).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  // The card is a React Flow node, so a bare click would also select it and
+  // begin a drag.
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    copy();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    e.stopPropagation();
+    copy();
+  };
+
+  // Revealed on focus as well as hover: the button stays in the tab order, so
+  // hiding it from a keyboard user who has focused it would be a trap.
+  const revealed = hovered || focused || copied;
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        minWidth: 0,
+        fontSize: 10,
+        color: token.colorPrimary,
+        marginBottom: 6,
+      }}
+    >
+      <span style={{ flexShrink: 0 }}>Branch:</span>
+      <Tooltip title={branch}>
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {branch}
+        </span>
+      </Tooltip>
+      <Tooltip title={copied ? 'Copied' : 'Copy branch name'}>
+        <CopyOutlined
+          role="button"
+          tabIndex={0}
+          aria-label={`Copy branch name ${branch}`}
+          onClick={handleClick}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={{
+            flexShrink: 0,
+            cursor: 'pointer',
+            color: copied ? token.colorSuccess : token.colorTextTertiary,
+            // Kept mounted and faded rather than conditionally rendered:
+            // appearing on hover would change the name's available width and
+            // re-truncate it under the cursor.
+            opacity: revealed ? 1 : 0,
+            transition: 'opacity 0.15s',
+          }}
+        />
+      </Tooltip>
+    </div>
+  );
+}
 
 function ImporterCardItem({
   source,
@@ -412,11 +514,7 @@ function ImporterCardItem({
             {namespaceStats.node_count.toLocaleString()} nodes · {namespaceStats.edge_count.toLocaleString()} edges
           </div>
         )}
-        {source.lastImportBranch && (
-          <div style={{ fontSize: 10, color: token.colorPrimary, marginBottom: 6 }}>
-            Branch: {source.lastImportBranch.length > 22 ? source.lastImportBranch.slice(0, 22) + '…' : source.lastImportBranch}
-          </div>
-        )}
+        {source.lastImportBranch && <BranchLabel branch={source.lastImportBranch} />}
         {!source.lastImportBranch && <div style={{ marginBottom: 6 }} />}
         <Space size={4} style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
           <StatusChip icon={StatusIcon} label={statusLabel[status]} color={statusColor[status]} />
@@ -805,7 +903,18 @@ function friendlyErrorMessage(raw: string): string {
 
 const CONNECTION_HANDLE_ID = 'namespace-connection';
 
+// Monotonic counter behind the sentinel fingerprint used when a per-element
+// fingerprint lookup misses (see `fingerprintFor` in the build effect). A miss
+// must produce a value that DIFFERS from the previous one so the node object is
+// rebuilt; a constant fallback would make every miss compare equal and leave a
+// stale card on screen — the exact failure mode Decision 4 exists to prevent.
+let fingerprintMissSeq = 0;
+
 interface ImporterNodeData extends Record<string, unknown> {
+  /** Per-Canvas_Element fingerprint (Decision 4) — the object-reuse test in
+   *  `reconcileCanvasNodes`. Covers every field that affects how THIS card
+   *  renders, so a changed card can never be reused unchanged. */
+  fingerprint: string;
   source: ImportSourceInfo;
   isRunning: boolean;
   anyRunning: boolean;
@@ -855,6 +964,8 @@ function ImporterNode({ data }: NodeProps<ImporterFlowNode>) {
 }
 
 interface AnalysisNodeData extends Record<string, unknown> {
+  /** Per-Canvas_Element fingerprint (Decision 4) — see `ImporterNodeData`. */
+  fingerprint: string;
   ns: AuthoredNsCardData;
   dbOpen: boolean;
   anyRunning: boolean;
@@ -907,11 +1018,6 @@ function AnalysisNode({ data }: NodeProps<AnalysisFlowNode>) {
 // Defined outside the component so React Flow does not re-register node types
 // on every render.
 const nodeTypes = { importerNode: ImporterNode, analysisNode: AnalysisNode };
-
-// Approximate node dimensions handed to ELK so it reserves non-overlapping room.
-// The cards render at width 270; analysis cards are a little taller (check badges).
-const IMPORTER_NODE_SIZE = { width: 290, height: 172 };
-const ANALYSIS_NODE_SIZE = { width: 290, height: 196 };
 
 // ── Layout_Key → layout_id encoding ────────────────────────────────────────
 // A Canvas_Element is identified by its Layout_Key (Element_Kind, Element_Key).
@@ -966,18 +1072,26 @@ function buildElkGraph(
   const importerNodeIds = new Set(importSources.map((s) => s.targetNamespace));
   const analysisNodeIds = new Set(authoredNamespaces.map((n) => n.name));
 
+  // Declared_Dimensions per Element_Kind, from the one table that also supplies
+  // React Flow's pre-measurement box for these same cards (`nodeDimensions.ts`).
+  // Deriving both from it is what stops ELK's idea of a card's footprint and the
+  // rendered card's from drifting apart (Req 4.5). Resolved once per kind rather
+  // than per node: the table is static.
+  const importerSize = declaredDimensions(IMPORTED_ELEMENT_KIND);
+  const analysisSize = declaredDimensions(ANALYSIS_ELEMENT_KIND);
+
   const elkNodes = [
     ...importSources.map((s) => ({
       id: s.targetNamespace,
-      width: IMPORTER_NODE_SIZE.width,
-      height: IMPORTER_NODE_SIZE.height,
+      width: importerSize.width,
+      height: importerSize.height,
       // Partition 0 → forced into the left layer(s).
       layoutOptions: { 'org.eclipse.elk.partitioning.partition': '0' },
     })),
     ...authoredNamespaces.map((n) => ({
       id: n.name,
-      width: ANALYSIS_NODE_SIZE.width,
-      height: ANALYSIS_NODE_SIZE.height,
+      width: analysisSize.width,
+      height: analysisSize.height,
       // Partition 1 → forced into the right layer(s).
       layoutOptions: { 'org.eclipse.elk.partitioning.partition': '1' },
     })),
@@ -992,26 +1106,88 @@ function buildElkGraph(
   return { elkNodes, elkEdges };
 }
 
+// Monotonic-where-available clock for the Fit_Deadline (same guarded pattern as
+// `lib/opTrace.ts`: jsdom and older embedders may not expose `performance.now`).
+function fitClockNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
 // Fits the viewport to the graph whenever the node set changes AND all nodes
 // have been measured by React Flow. Using useNodesInitialized() avoids the
 // race condition where fitView fires before React Flow has measured node
 // dimensions, which causes edge paths to be routed from unmeasured (0,0)
 // coordinates and appear visually disconnected from their handles.
 // `useNodesInitialized` returns true only after every currently-rendered node
-// has a known width/height — the correct moment to reposition the viewport.
-function GraphFitter({ signal }: { signal: string }) {
+// has a known width/height — the still-preferred moment to reposition the
+// viewport.
+//
+// Why the wait for that signal is BOUNDED (Decision 6, Req 3.3):
+// `useNodesInitialized` stays false for as long as ANY rendered node lacks
+// `measured`, and a dropped resize-observation notification means that
+// measurement may never arrive — so the old `if (!nodesInitialized) return;`
+// could suppress the fit for a pending Graph_Structure_Change forever, leaving a
+// freshly imported element outside the visible viewport with no way for the user
+// to find it. Abandoning the wait is safe because every node now carries
+// Declared_Dimensions from its first frame (Decision 1), so `getNodesBounds` has
+// usable geometry with no measurement at all: a deadline-triggered fit computes
+// correct bounds rather than a degenerate box. The Fit_Deadline therefore changes
+// only WHEN the fit runs, never whether it is correct.
+//
+// The decision itself lives in `viewportFitGate.ts` (pure, property-tested);
+// this component owns only the `lastFittedKey` bookkeeping, the elapsed-time
+// measurement, and the timer that lets the deadline fire without a further
+// render.
+function GraphFitter({ signal, placementActive }: { signal: string; placementActive: boolean }) {
   const { fitView } = useReactFlow();
   const nodesInitialized = useNodesInitialized();
   // Track the last signal value for which we already ran fitView, so we
-  // re-fit exactly once per structural change and only after nodes are measured.
+  // re-fit exactly once per structural change.
   const fittedForRef = useRef<string | null>(null);
+  // The signal whose change time is recorded below. Starts at a value no real
+  // structure key can equal, so the first effect pass records a timestamp.
+  const timedSignalRef = useRef<string | null>(null);
+  const signalChangedAtRef = useRef(fitClockNow());
+  // Bumped by the deadline timer to re-run the effect when nothing else will:
+  // `nodesInitialized` flipping causes a render, but if it never flips, only
+  // this makes the gate re-evaluate once the deadline has elapsed.
+  const [deadlineTick, setDeadlineTick] = useState(0);
 
   useEffect(() => {
-    if (!nodesInitialized) return;
-    if (fittedForRef.current === signal) return;
-    fittedForRef.current = signal;
-    void fitView({ padding: 0.2, duration: 200 });
-  }, [signal, nodesInitialized, fitView]);
+    if (timedSignalRef.current !== signal) {
+      timedSignalRef.current = signal;
+      signalChangedAtRef.current = fitClockNow();
+    }
+    const elapsed = fitClockNow() - signalChangedAtRef.current;
+
+    if (
+      decideViewportFit({
+        structureKey: signal,
+        lastFittedKey: fittedForRef.current,
+        nodesInitialized,
+        msSinceStructureKeyChanged: elapsed,
+        placementActive,
+      }).fit
+    ) {
+      fittedForRef.current = signal;
+      void fitView({ padding: 0.2, duration: 200 });
+      return;
+    }
+
+    // Not fitting. Of the three ways to be refused, only "the deadline has not
+    // elapsed yet" resolves on its own: an already-fitted key and active
+    // placement both need a real change (a new key, placement completing), and
+    // both of those re-render. So arm a timer for the remaining wait only in
+    // that one case — a single timeout per pending fit, no polling.
+    const waitingOnDeadline =
+      fittedForRef.current !== signal && !placementActive && !nodesInitialized;
+    if (!waitingOnDeadline) return;
+
+    const remaining = Math.max(0, VIEWPORT_FIT_DEADLINE_MS - elapsed);
+    const timer = window.setTimeout(() => setDeadlineTick((t) => t + 1), remaining + 1);
+    return () => window.clearTimeout(timer);
+  }, [signal, nodesInitialized, placementActive, fitView, deadlineTick]);
 
   return null;
 }
@@ -1029,29 +1205,23 @@ function RfInstanceCapture({
   instanceRef: React.MutableRefObject<ReturnType<typeof useReactFlow> | null>;
 }) {
   const rf = useReactFlow();
-  const updateNodeInternals = useUpdateNodeInternals();
   instanceRef.current = rf;
   // Dev/test only: expose a deterministic viewport fit for Playwright.
+  //
+  // This helper forces nothing. Measurement after a Node_Array_Rebuild is
+  // guaranteed on the production path by `NodeMeasurementKick`, and every node
+  // carries Declared_Dimensions from its first frame, so `getNodesBounds`
+  // returns a usable box whether or not `measured` has landed yet (Reqs 5.1,
+  // 5.2). What remains is purely a deterministic viewport fit: resolve the
+  // nodes, fit their bounds, and return only once the transform has settled
+  // (Req 5.3).
   if (typeof window !== 'undefined') {
     (window as unknown as Record<string, unknown>)['__riaFitView'] = async (nodeIds?: string[]) => {
-      let allNodes = rf.getNodes();
       const requestedIds = new Set(nodeIds ?? []);
 
-      // A controlled-node rebuild can temporarily discard React Flow's measured
-      // dimensions. Chromium may not emit another ResizeObserver event for an
-      // unchanged off-screen element, leaving its wrapper visibility:hidden.
-      // Force every small overview-card node through React Flow's supported
-      // measurement path before calculating endpoint bounds.
-      if (allNodes.length > 0) {
-        updateNodeInternals(allNodes.map((node) => node.id));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-      }
-
-      // Re-measuring can release GraphFitter's nodesInitialized gate and start
-      // its 200 ms whole-canvas animation. Wait for that transform to settle so
-      // it cannot overwrite the endpoint fit below.
+      // GraphFitter animates the whole canvas over 200 ms when it fits for a new
+      // structure key. Wait for that transform to settle so it cannot overwrite
+      // the endpoint fit below.
       const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
       if (viewport) {
         let previous = viewport.style.transform;
@@ -1066,17 +1236,11 @@ function RfInstanceCapture({
         }
       }
 
-      allNodes = rf.getNodes();
+      const allNodes = rf.getNodes();
       const nodes = requestedIds.size > 0
         ? allNodes.filter((node) => requestedIds.has(node.id))
         : allNodes;
       if (nodes.length === 0 || (requestedIds.size > 0 && nodes.length !== requestedIds.size)) {
-        return false;
-      }
-      if (nodes.some((node) =>
-        (node.measured?.width ?? node.width ?? 0) <= 0 ||
-        (node.measured?.height ?? node.height ?? 0) <= 0
-      )) {
         return false;
       }
       // Generous padding keeps connection handles outside React Flow's edge
@@ -1084,6 +1248,203 @@ function RfInstanceCapture({
       return rf.fitBounds(rf.getNodesBounds(nodes), { padding: 0.45, duration: 0 });
     };
   }
+  return null;
+}
+
+// Asks React Flow to measure the nodes it has not measured yet, once per
+// Node_Array_Rebuild (Decision 5, Reqs 1.6, 5.1, 5.2).
+//
+// Declared_Dimensions make a node VISIBLE from frame one, but not MEASURED:
+// exact edge geometry still wants the real box, and `useNodesInitialized`
+// (GraphFitter's gate) only releases once every node carries `measured`. A
+// controlled-node rebuild can discard those measurements, and Chromium may
+// never emit another ResizeObserver event for an unchanged off-screen element —
+// so rather than waiting for an observation that may never be delivered, we ask
+// React Flow to re-measure through its supported entry point. This kick used to
+// live only inside `window.__riaFitView`; it now sits on the path every user
+// takes, which is why the helper no longer forces anything (Req 5.1).
+//
+// Two guards keep the kick from becoming its own measurement loop: it targets
+// ONLY ids that lack `measured` (a measured node is never re-measured), and it
+// runs at most once per rebuild generation. Note that writing `measured` back
+// onto a node cannot re-arm this effect either — `graphFingerprint` folds in
+// position, status and stats, never `measured`, so a measurement result is not
+// a Rebuild_Trigger.
+//
+// Lives inside <ReactFlow> because `useUpdateNodeInternals` needs the React
+// Flow context, which the WorkspaceCanvas body (outside <ReactFlow>) does not
+// have — same reason as GraphFitter and RfInstanceCapture.
+function NodeMeasurementKick({ generation }: { generation: number }) {
+  const { getNodes } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
+  // Last generation actually kicked, so a re-run for the same generation is a
+  // no-op (same pattern as GraphFitter's `fittedForRef`). Set at the moment the
+  // work runs rather than on effect entry: under StrictMode the first pass is
+  // torn down before its frames fire, and a guard set on entry would suppress
+  // the surviving pass.
+  const kickedForRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Generation 0 means no rebuild has committed yet, and a rebuild that
+    // empties the canvas has nothing to measure.
+    if (generation === 0) return;
+    if (kickedForRef.current === generation) return;
+
+    // Two frames: React Flow can only measure a DOM node React has committed,
+    // and the commit carrying this generation's nodes lands on the next frame.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        kickedForRef.current = generation;
+        const unmeasured = getNodes()
+          .filter((node) => node.measured?.width === undefined || node.measured?.height === undefined)
+          .map((node) => node.id);
+        if (unmeasured.length === 0) return;
+        try {
+          updateNodeInternals(unmeasured);
+        } catch (err) {
+          // Rendering never depends on the kick succeeding — every node already
+          // has Declared_Dimensions. A throw is a diagnostic, not an error path.
+          logOpEvent(
+            'canvas.measurementKick',
+            'frontend',
+            'updateNodeInternals threw',
+            { generation, unmeasuredCount: unmeasured.length, error: String(err) },
+            'warn',
+          );
+        }
+      });
+    });
+
+    // Cancel both frames so a kick cannot fire after unmount.
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [generation, getNodes, updateNodeInternals]);
+
+  return null;
+}
+
+// How often the unmeasured-element watch samples the Node_Array. Deliberately
+// coarse relative to the 2000 ms Measurement_Grace_Period: the watch only needs
+// to notice that a deadline has passed, not when. One sample per second costs a
+// `getNodes()` walk and bounds the reporting lag to ~1 s.
+const UNMEASURED_WATCH_INTERVAL_MS = 1000;
+
+// Reports Canvas_Elements that are still running on their Declared_Dimensions
+// long after they entered the Node_Array (Decision 7, Reqs 6.1–6.4).
+//
+// WHY this exists: before Declared_Dimensions, a lost Measurement_Notification
+// hid the card outright — the user saw a hole in their workspace, and that is
+// the only reason the defect was ever found (it took a user screenshot; nothing
+// in the logs said anything). Declared_Dimensions fix the visible symptom, and
+// in doing so make the underlying condition completely invisible: the card sits
+// in the right place, nothing throws, nothing logs, and only `measured` is
+// missing — which merely leaves edge geometry approximate and keeps
+// `nodesInitialized` false so the Viewport_Fit runs on its deadline rather than
+// on measurement. A screenshot cannot reveal that. This log entry is the only
+// way anyone will ever know it happened, which is why it goes through
+// `logOpEvent` (host lifecycle log on disk) rather than the devtools console.
+//
+// Strictly observation-only (Req 6.4): it holds no state that feeds rendering,
+// never touches the Node_Array, never surfaces a user-facing error, and
+// swallows its own failures — a broken diagnostic must not break the canvas.
+//
+// Lives inside <ReactFlow> because it needs `useReactFlow().getNodes()` to see
+// `measured`, which the WorkspaceCanvas body does not have — same reason as
+// GraphFitter, RfInstanceCapture and NodeMeasurementKick.
+function UnmeasuredElementWatch({ enabled }: { enabled: boolean }) {
+  const { getNodes } = useReactFlow();
+  // One long-lived watch state for the whole mounted lifetime: the "report once
+  // per continuous unmeasured period" accounting is only meaningful if it spans
+  // ticks. Cleared whenever the watch is disabled (Workspace_Phase leaving
+  // `db_open`) so a reopened workspace restarts every grace period.
+  const stateRef = useRef<UnmeasuredWatchState | null>(null);
+
+  useEffect(() => {
+    if (!enabled) {
+      stateRef.current = null;
+      return;
+    }
+    const state = stateRef.current ?? createUnmeasuredWatchState();
+    stateRef.current = state;
+
+    const tick = (): void => {
+      try {
+        const nodes = getNodes();
+        const presentIds = nodes.map((node) => node.id);
+        const measuredIds = new Set(
+          nodes
+            .filter(
+              (node) =>
+                node.measured?.width !== undefined && node.measured?.height !== undefined,
+            )
+            .map((node) => node.id),
+        );
+
+        const { overdue, recovered } = tickUnmeasuredWatch(state, {
+          presentIds,
+          measuredIds,
+          now: fitClockNow(),
+        });
+        if (overdue.length === 0 && recovered.length === 0) return;
+
+        // The node id IS the Element_Key (importer nodes are keyed by
+        // `targetNamespace`, analysis nodes by `name`); the Element_Kind comes
+        // from the React Flow node type.
+        const elementKindOf = (id: string): string => {
+          const type = nodes.find((node) => node.id === id)?.type;
+          return type === 'analysisNode' ? ANALYSIS_ELEMENT_KIND
+            : type === 'importerNode' ? IMPORTED_ELEMENT_KIND
+            : 'unknown';
+        };
+
+        for (const id of overdue) {
+          logOpEvent(
+            'canvas.unmeasuredElement',
+            'frontend',
+            `Canvas_Element still has no measured dimensions after ${MEASUREMENT_GRACE_PERIOD_MS} ms — rendering on declared dimensions`,
+            {
+              elementKind: elementKindOf(id),
+              elementKey: id,
+              gracePeriodMs: MEASUREMENT_GRACE_PERIOD_MS,
+              nodeCount: presentIds.length,
+              measuredCount: measuredIds.size,
+            },
+            'warn',
+          );
+        }
+        for (const id of recovered) {
+          logOpEvent(
+            'canvas.unmeasuredElement',
+            'frontend',
+            'Measured dimensions arrived for a previously reported Canvas_Element',
+            {
+              elementKind: elementKindOf(id),
+              elementKey: id,
+              nodeCount: presentIds.length,
+            },
+          );
+        }
+      } catch (err) {
+        // A diagnostic that throws must stay a diagnostic.
+        logOpEvent(
+          'canvas.unmeasuredElement',
+          'frontend',
+          'unmeasured-element watch tick failed',
+          { error: String(err) },
+          'warn',
+        );
+      }
+    };
+
+    const timer = window.setInterval(tick, UNMEASURED_WATCH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [enabled, getNodes]);
+
   return null;
 }
 
@@ -1229,12 +1590,19 @@ export function WorkspaceCanvas({
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   // ── Import All aggregate results (issue #64) ──────────────────────────────
-  const [importAllResults, setImportAllResults] = useState<{ sourceName: string; runId: string }[] | null>(null);
+  // Import completion remounts the canvas. Publish results to the session store
+  // so the replacement canvas can show them; stale workspace callbacks are ignored.
+  const importSession = useImportRunStore((s) => s.session);
+  const importAllResults = useImportRunStore((s) => s.importAllResults);
+  const setImportAllResults = (results: ImportImpactResult[] | null) =>
+    useImportRunStore.getState().setImportAllResults(results, importSession);
 
   // ── DB stats — fast poll during load, slow poll otherwise ────────────────
   const [opError, setOpError] = useState<string | null>(null);
   const [lastFailedOp, setLastFailedOp] = useState<'load' | null>(null);
-  const [lastImportRunId, setLastImportRunId] = useState<string | null>(null);
+  const lastImportRunId = useImportRunStore((s) => s.lastImportRunId);
+  const setLastImportRunId = (runId: string | null) =>
+    useImportRunStore.getState().setLastImportRunId(runId, importSession);
   const saveMutation = useFullWorkspaceSaveMutation();
   const runSourceMutation = useRunImportSourceMutation(() =>
     wsState.phase !== 'no_workspace' ? wsState.workingDir : null,
@@ -1268,36 +1636,22 @@ export function WorkspaceCanvas({
   // Layout_Record. Recreated on workspace switch (below).
   const fallbackPlacementRef = useRef(createFallbackPlacementCache());
 
-  // Reset UI-local state when the workspace directory changes.
-  const prevWorkspaceKeyRef = useRef<string | null>(undefined as unknown as string | null);
-  const resetWorkspaceState = useWorkspaceStore((s) => s.resetWorkspaceState);
-  useEffect(() => {
-    const prev = prevWorkspaceKeyRef.current;
-    prevWorkspaceKeyRef.current = workspaceKey;
-    if (prev === undefined || prev === workspaceKey) return;
-    // Workspace switch: flush any pending Auto_Save against the workspace that
-    // produced it (the coordinator captured its working dir at schedule time)
-    // before the switch completes (Req 7.1).
-    void flushAutoSave();
-    setConfigSource(null);
-    setPostConfigPlacement(null);
-    setAddImporterOpen(false);
-    setAddAnalysisOpen(false);
-    setLastImportRunId(null);
-    setUpdateFromBranchSource(null);
-    setUpdatingFromRepoSourceId(null);
-    setSupervisedMergeFromBranchTarget(null);
-    setSelectedEdgeId(null);
-    setImportAllResults(null);
-    // Fallback slots are workspace-scoped (so is the stored Diagram_Layout).
-    fallbackPlacementRef.current = createFallbackPlacementCache();
-    // Reset workspace-scoped Zustand stores
-    useImportRunStore.getState().reset();
-    resetWorkspaceState();
-    useJobStore.getState().resetAll();
-    // Reset Auto_Save Save_Status to `idle` on workspace open/switch (Req 9.5).
-    useAutoSaveStatusStore.getState().reset();
-  }, [workspaceKey, resetWorkspaceState, flushAutoSave]);
+  // No workspace-switch reset effect here by design.
+  //
+  // This component is keyed on the content identity in App.tsx
+  // (`<WorkspaceCanvas key={contentIdentity} …>`), so a workspace switch — or any
+  // mutation that rebuilds DB content — remounts it and React discards all of the
+  // local state above, including `fallbackPlacementRef`. The previous hand-rolled
+  // effect listed ten setters by name and had to be extended whenever one was
+  // added; remounting cannot fall behind in that way.
+  //
+  // The two side effects it also performed are covered elsewhere:
+  //   - pending Auto_Save is flushed by the unmount cleanup below (Req 7.1, 7.3),
+  //     which the remount triggers;
+  //   - the workspace-scoped Zustand stores are reset by
+  //     `useOpenWorkspaceMutation` / `useCloseWorkspaceMutation`, where lifecycle
+  //     teardown belongs.
+  // See hooks/useContentIdentity.ts.
 
   // Flush pending Auto_Save on shutdown / force-reload (`beforeunload`) and on
   // Overview_Canvas unmount, so a change made right before the transition is
@@ -1457,7 +1811,9 @@ export function WorkspaceCanvas({
         // path previously skipped the safety caches entirely.
         await invalidateAfterContentChange(queryClient);
         void queryClient.invalidateQueries({ queryKey: ['workspace.status'] });
-        resetWorkspaceState();
+        // Also bumps contentGeneration, which remounts this subtree — correct here,
+        // because every local selection now refers to reassigned node IDs.
+        useWorkspaceStore.getState().resetWorkspaceState();
       }
     } catch (err) {
       void message.error(`Update from repo failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1589,68 +1945,124 @@ export function WorkspaceCanvas({
       .join('\u0002');
   }, [importSources, authoredNamespaces]);
 
-  // Fingerprint of everything that should trigger a node/edge rebuild. Includes
-  // per-importer status fields (so a card refreshes when its run status changes)
-  // and the connection edges. Control-character separators avoid collisions.
-  const graphFingerprint = useMemo(() => {
-    const importerPart = importSources
-      .map((s) =>
-        [
-          s.sourceId,
-          s.targetNamespace,
-          s.lastRunStatus ?? '',
-          s.configDirty ? 'D' : '',
-          s.lastImportBranch ?? '',
-          activeImportSourceId === s.sourceId || updatingFromRepoSourceId === s.sourceId ? 'R' : '',
-        ].join('\u0001'),
-      )
-      .join('\u0002');
-    const analysisPart = authoredNamespaces
-      .map((n) => [n.id, n.name, n.owningApplication, n.standard].join('\u0001'))
-      .join('\u0002');
-    const connectionPart = (connectionGraph?.connections ?? [])
-      .map((c) => `${c.source}\u0001${c.target}`)
-      .sort()
-      .join('\u0002');
-    // Stored Element_Positions: re-resolve node positions whenever the persisted
-    // Diagram_Layout changes (e.g. after a layout query-cache invalidation), so the
-    // rendered positions converge to the stored layout (Req 2.2, 2.5).
-    const layoutPart = (diagramLayout ?? [])
-      .map((r) => `${r.elementKind}\u0001${r.elementKey}\u0001${r.x}\u0001${r.y}`)
-      .sort()
-      .join('\u0002');
-    // Placement_Mode: while an element is being placed it is EXCLUDED from the
-    // committed canvas nodes (only the ghost preview follows the cursor), so a
-    // change in the active placement must rebuild the graph (Req 9.1).
-    const placementPart = placement
-      ? `${placement.elementKind}\u0001${placement.elementKey}`
-      : '';
-    const statsPart = namespaceStatsList
-      .map((s) => `${s.name}\u0001${s.node_count}\u0001${s.edge_count}`)
-      .sort()
-      .join('\u0002');
-    // Readiness: re-render cards when config loads or a mandatory field is filled.
-    const readinessPart = importSources
-      .map((s) => {
-        const ready = importSourcesReadiness.get(s.sourceId);
-        return `${s.sourceId}\u0001${ready === undefined ? '?' : ready ? '1' : '0'}`;
-      })
-      .join('\u0002');
-    return [
+  // ── Per-Canvas_Element fingerprints (Decision 4) ───────────────────────────
+  //
+  // There is exactly ONE fingerprint definition. Each Canvas_Element gets a
+  // fingerprint folding in every field that affects how THAT card renders, and
+  // `graphFingerprint` — the rebuild trigger for the build effect below — is the
+  // join of those same per-element strings plus the parts that belong to no
+  // single element. The per-element reuse test (task 5.2/5.3) and the rebuild
+  // trigger being the same definition is deliberate and is the point of
+  // Decision 4: a field that changes a card's appearance cannot be part of the
+  // rebuild trigger while being omitted from the reuse test, which is the failure
+  // mode that would leave a stale card on screen.
+  //
+  // Canvas-wide flags (`dbOpen`, `anyRunning`, `filesCorrupted`, whether a repo
+  // dir is resolved, `canOpen`, `canCheck`) are passed into EVERY card's `data`,
+  // so a change to any of them changes every card; they are folded into every
+  // element's fingerprint instead of being kept as a separate global part. With
+  // zero Canvas_Elements they appear nowhere, which is safe: the build emits
+  // empty node and edge arrays for any combination of those flags.
+  //
+  // Position: each element folds in ITS OWN resolved Element_Position rather than
+  // the whole Diagram_Layout, so dragging one card does not invalidate the
+  // object-reuse test for every other card. Resolution mirrors the build effect
+  // (stored Layout_Record → sticky fallback slot), but reads the fallback cache
+  // WITHOUT allocating: `ensureFallbackPosition` is sticky and hands out a grid
+  // slot on first call, and a memo must never consume one. An element whose slot
+  // has not been allocated yet fingerprints as `?`; the build effect allocates it
+  // and the next fingerprint recomputation picks up the real coordinate.
+  //
+  // Control-character separators avoid field collisions: `\u0001` within an
+  // element, `\u0002` between elements, `\u0003` between top-level parts.
+  const { graphFingerprint, nodeFingerprints } = useMemo(() => {
+    const flagsPart = [
       dbOpen ? '1' : '0',
       anyRunning ? '1' : '0',
       filesCorrupted ? '1' : '0',
       resolvedRepoDir ? '1' : '0',
       canOpen ? '1' : '0',
       canCheck ? '1' : '0',
-      importerPart,
-      analysisPart,
-      connectionPart,
-      layoutPart,
-      placementPart,
-      statsPart,
-      readinessPart,
-    ].join('\u0003');
+    ].join('\u0001');
+
+    const positionPart = (elementKind: string, elementKey: string): string => {
+      const layoutId = encodeLayoutId(elementKind, elementKey);
+      const point =
+        storedPositions.get(layoutId) ?? fallbackPlacementRef.current.positions.get(layoutId);
+      return point ? `${point.x}\u0001${point.y}` : '?';
+    };
+
+    const statsPart = (namespaceName: string): string => {
+      const stats = namespaceStatsMap.get(namespaceName);
+      return stats ? `${stats.node_count}\u0001${stats.edge_count}` : '';
+    };
+
+    const fingerprints = new Map<string, string>();
+
+    for (const s of importSources) {
+      fingerprints.set(
+        s.targetNamespace,
+        [
+          IMPORTED_ELEMENT_KIND,
+          s.sourceId,
+          s.targetNamespace,
+          s.lastRunStatus ?? '',
+          s.configDirty ? 'D' : '',
+          s.lastImportBranch ?? '',
+          activeImportSourceId === s.sourceId || updatingFromRepoSourceId === s.sourceId ? 'R' : '',
+          // Readiness: re-render the card when config loads or a mandatory field
+          // is filled. `?` = config not yet loaded.
+          (() => {
+            const ready = importSourcesReadiness.get(s.sourceId);
+            return ready === undefined ? '?' : ready ? '1' : '0';
+          })(),
+          statsPart(s.targetNamespace),
+          positionPart(IMPORTED_ELEMENT_KIND, s.targetNamespace),
+          flagsPart,
+        ].join('\u0001'),
+      );
+    }
+
+    for (const n of authoredNamespaces) {
+      fingerprints.set(
+        n.name,
+        [
+          ANALYSIS_ELEMENT_KIND,
+          n.id,
+          n.name,
+          n.owningApplication,
+          n.standard,
+          statsPart(n.name),
+          positionPart(ANALYSIS_ELEMENT_KIND, n.name),
+          flagsPart,
+        ].join('\u0001'),
+      );
+    }
+
+    // Sorted by node id so Map insertion order cannot affect the composed value.
+    const elementsPart = [...fingerprints.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([id, fingerprint]) => `${id}\u0001${fingerprint}`)
+      .join('\u0002');
+
+    // Edges belong to no single Canvas_Element, so the connection set stays a
+    // global part of the rebuild trigger.
+    const connectionPart = (connectionGraph?.connections ?? [])
+      .map((c) => `${c.source}\u0001${c.target}`)
+      .sort()
+      .join('\u0002');
+
+    // Placement_Mode: while an element is being placed it is EXCLUDED from the
+    // committed canvas nodes (only the ghost preview follows the cursor), so a
+    // change in the active placement must rebuild the graph (Req 9.1).
+    const placementPart = placement
+      ? `${placement.elementKind}\u0001${placement.elementKey}`
+      : '';
+
+    return {
+      graphFingerprint: [elementsPart, connectionPart, placementPart].join('\u0003'),
+      nodeFingerprints: fingerprints,
+    };
   }, [
     importSources,
     authoredNamespaces,
@@ -1663,11 +2075,27 @@ export function WorkspaceCanvas({
     resolvedRepoDir,
     canOpen,
     canCheck,
-    diagramLayout,
+    storedPositions,
     placement,
-    namespaceStatsList,
+    namespaceStatsMap,
     importSourcesReadiness,
   ]);
+
+  // Mirrored into a ref so the build effect — gated on `graphFingerprint`, not on
+  // this map's identity — can read the current per-element fingerprints without
+  // being listed as a dependency. Consumed by task 5.2.
+  const nodeFingerprintsRef = useRef(nodeFingerprints);
+  nodeFingerprintsRef.current = nodeFingerprints;
+
+  // ── Measurement kick arming (Decision 5) ─────────────────────────────────
+  // Monotonic Node_Array_Rebuild counter, incremented by the build effect below
+  // and mirrored into state so `NodeMeasurementKick` (inside <ReactFlow>, where
+  // the React Flow context exists) can observe it. The ref holds the authority;
+  // the state exists purely to trigger the dependent effect. The kick effect
+  // depends on this number ALONE — never on `rfNodes` — so a measurement result
+  // written back onto the node array cannot re-arm it.
+  const rebuildGenerationRef = useRef(0);
+  const [rebuildGeneration, setRebuildGeneration] = useState(0);
 
   // Build the graph whenever the fingerprint changes. Positions are RESOLVED,
   // never re-laid-out: each Canvas_Element renders at its stored Element_Position
@@ -1731,11 +2159,39 @@ export function WorkspaceCanvas({
         );
       }
 
+      // Declared_Dimensions per Element_Kind, resolved once per kind (the table is
+      // static). Same source as the footprint handed to Auto_Layout, so the two
+      // cannot drift (Req 4.5).
+      const importerSize = declaredDimensions(IMPORTED_ELEMENT_KIND);
+      const analysisSize = declaredDimensions(ANALYSIS_ELEMENT_KIND);
+
+      // Per-element fingerprints for THIS `graphFingerprint` value (Decision 4).
+      // Read through the ref for the same reason the effect reads `graphDataRef`:
+      // the effect is keyed on the fingerprint string, not on the map's identity.
+      // The ref is assigned during the render that produced this `graphFingerprint`,
+      // and the effect runs after that render, so the map read here is the one
+      // computed for the value that triggered this run.
+      const fingerprints = nodeFingerprintsRef.current;
+      const fingerprintFor = (nodeId: string): string =>
+        // A miss must never collapse to a constant: a value that compares equal to
+        // the previous one would let the reconcile reuse a card whose data just
+        // changed. The sentinel is unique per call, so a miss forces a rebuild.
+        fingerprints.get(nodeId) ?? `!${nodeId}:${Date.now()}:${fingerprintMissSeq++}`;
+
       const importerNodes: Node<ImporterNodeData>[] = d.importSources
         .filter((source) => !isPlacing(IMPORTED_ELEMENT_KIND, source.targetNamespace))
         .map((source) => ({
         id: source.targetNamespace,
         type: 'importerNode',
+        // Declared_Dimensions (Decision 1): consulted by React Flow ONLY while the
+        // node has no `measured` box, so a node is Rendered_Visible and routable
+        // from frame one without waiting for a Measurement_Notification, and the
+        // real box takes over as soon as measurement lands (Reqs 1.1, 1.4, 1.5, 2.5).
+        // Do NOT "simplify" these to `width` / `height`: React Flow 12 applies those
+        // as authoritative inline styles, which would freeze card height and break
+        // the analysis cards whose height grows with their check badges.
+        initialWidth: importerSize.width,
+        initialHeight: importerSize.height,
         // Stored Element_Position (Req 2.2) → sticky fallback (Req 2.3) → origin.
         position: resolveNodePosition(
           encodeLayoutId(IMPORTED_ELEMENT_KIND, source.targetNamespace),
@@ -1744,6 +2200,7 @@ export function WorkspaceCanvas({
           positions,
         ),
         data: {
+          fingerprint: fingerprintFor(source.targetNamespace),
           source,
           isRunning:
             d.activeImportSourceId === source.sourceId ||
@@ -1767,6 +2224,10 @@ export function WorkspaceCanvas({
         .map((ns) => ({
         id: ns.name,
         type: 'analysisNode',
+        // Declared_Dimensions (Decision 1) — see the importer node above for why
+        // this is `initialWidth`/`initialHeight` and never `width`/`height`.
+        initialWidth: analysisSize.width,
+        initialHeight: analysisSize.height,
         // Stored Element_Position (Req 2.2) → sticky fallback (Req 2.3) → origin.
         position: resolveNodePosition(
           encodeLayoutId(ANALYSIS_ELEMENT_KIND, ns.name),
@@ -1775,6 +2236,7 @@ export function WorkspaceCanvas({
           positions,
         ),
         data: {
+          fingerprint: fingerprintFor(ns.name),
           ns,
           dbOpen: d.dbOpen,
           anyRunning: d.anyRunning,
@@ -1796,7 +2258,34 @@ export function WorkspaceCanvas({
         ...analysisNodes.map((n) => n.id),
       ]);
 
-      setRfNodes([...importerNodes, ...analysisNodes] as Node[]);
+      const built = [...importerNodes, ...analysisNodes] as Node[];
+
+      // Reconcile rather than replace (Decision 3): carry each node's `measured`
+      // box across the rebuild and hand back the PREVIOUS object for every node
+      // that did not actually change, so `@xyflow/react` takes its `checkEquality`
+      // branch and keeps the internal record it already built — no re-observe, no
+      // re-measure, no contribution to the per-frame observation budget
+      // (Reqs 4.1, 4.2, 4.3, 4.4).
+      //
+      // The UPDATER form is required, not cosmetic: it is the only way the
+      // reconcile can read the previous array without `rfNodes` appearing in this
+      // effect's dependency list. Depending on `rfNodes` would make the effect
+      // self-triggering — every commit would schedule another run.
+      //
+      // The casts are the narrowest thing that works. `reconcileCanvasNodes` is
+      // generic over `ReconcilableNode`, and React Flow's `Node` is structurally
+      // compatible (`data` carries our `fingerprint`, plus `position`, `measured`,
+      // `hidden`, `type`), but the generic will not infer a single `T` across
+      // `Node<ImporterNodeData> | Node<AnalysisNodeData>` widened to `Node[]`,
+      // whose `data` is `Record<string, unknown>` without the required
+      // `fingerprint` member. Casting at the call boundary keeps `ReconcilableNode`
+      // strict and the node data interfaces untouched.
+      setRfNodes((prev) =>
+        reconcileCanvasNodes(
+          prev as unknown as ReconcilableNode[],
+          built as unknown as ReconcilableNode[],
+        ) as unknown as Node[],
+      );
       setRfEdges(
         elkEdges
           .filter((e) => renderedIds.has(e.source) && renderedIds.has(e.target))
@@ -1809,6 +2298,13 @@ export function WorkspaceCanvas({
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
         })),
       );
+
+      // Arm the measurement kick (Decision 5, Reqs 1.6, 5.1, 5.2). Only on this
+      // branch: the `!d.dbOpen` path above empties the canvas, and there is
+      // nothing to measure. Reconciliation carries `measured` across, so the kick
+      // will find only the nodes that genuinely need it.
+      rebuildGenerationRef.current += 1;
+      setRebuildGeneration(rebuildGenerationRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphFingerprint, canOpen, canCheck, nodeCallbacks, setRfNodes, setRfEdges]);
@@ -2434,8 +2930,15 @@ export function WorkspaceCanvas({
             connectionRadius={320}
             style={{ background: token.colorBgLayout }}
           >
-            <GraphFitter signal={graphStructureKey} />
+            <GraphFitter signal={graphStructureKey} placementActive={placement !== null} />
             <RfInstanceCapture instanceRef={rfInstanceRef} />
+            <NodeMeasurementKick generation={rebuildGeneration} />
+            {/* Observation-only diagnostics for elements that never acquire
+                Measured_Dimensions (Reqs 6.1–6.4). `enabled` is redundant with
+                this subtree only mounting while dbOpen, but it keeps the "reset
+                the watch when the Workspace_Phase leaves db_open" rule explicit
+                and independent of where the <ReactFlow> gate happens to sit. */}
+            <UnmeasuredElementWatch enabled={dbOpen} />
             {/* Auto_Layout_Button — rendered lower-right. It only appears while
                 the Workspace_Phase is db_open because the whole <ReactFlow> tree
                 is only mounted while dbOpen (Req 4.1). Pressing it re-tidies and

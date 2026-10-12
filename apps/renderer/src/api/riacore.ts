@@ -34,6 +34,7 @@ import type {
   WorkspaceConfig,
   WorkspaceInfo,
   WorkspaceStatus,
+  SnapshotDriftInfo,
   DbStatus,
   DbStats,
   NamespaceStats,
@@ -174,6 +175,8 @@ export const api = {
       window.riacore.workspace.close(),
     probe: (workingDir: string): Promise<{ hasDb: boolean; hasRiaData: boolean }> =>
       window.riacore.workspace.probe(workingDir),
+    getSnapshotDrift: (): Promise<SnapshotDriftInfo> =>
+      window.riacore.workspace.getSnapshotDrift(),
     openLogsDirectory: (workingDir: string): Promise<string> =>
       window.riacore.workspace.openLogsDirectory(workingDir),
     getRecent: (): Promise<string[]> =>

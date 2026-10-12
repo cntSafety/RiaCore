@@ -19,7 +19,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import type { WorkspaceConfig, RunImportParams, PersistorLoadParams, PersistorStoreParams, PersistorRepairParams, ProvisionConfigParams, SaveImportConfigParams, RunFromSourceParams, ExportConfigParams, ImportConfigParams, CreateAuthoredNamespaceParams, CreateMalfunctionParams, CreateRiskRatingParams, CreateTagParams, RendererLogEntry, GetPortConnectorsInput, GetNamespacePortConnectorsInput, GetComponentPortConnectorsInput, DiffOptions, DiffResultSection, ConflictResolution, WorkspaceGitConfig, GitSemanticDiffParams, SupervisedMergePrepareResult } from '@riacore/app-contracts';
-import type { ShowInTreePayload, NavigationRequest, CacheInvalidationOutbound, CacheInvalidationMessage, LoadProgressPushEvent } from '@riacore/app-contracts';
+import type { ShowInTreePayload, NavigationRequest, CacheInvalidationOutbound, CacheInvalidationMessage, LoadProgressPushEvent, SnapshotDriftInfo } from '@riacore/app-contracts';
 import type { LlmSaveSettingsInput, LlmStartReviewInput, LlmStartReviewResult, LlmCancelReviewInput, LlmStreamEvent, LlmSettings } from '@riacore/app-contracts';
 import type { LayoutRecord, ViewLayoutSourceRef } from '@riacore/app-contracts';
 import type { CrossNsLinkSettings, ExportSettings } from '@riacore/app-contracts';
@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('riacore', {
     getStatus: ()                         => ipcRenderer.invoke('workspace.getStatus'),
     close:     ()                         => ipcRenderer.invoke('workspace.close') as Promise<void>,
     probe:     (workingDir: string)       => ipcRenderer.invoke('workspace.probe', { workingDir }) as Promise<{ hasDb: boolean; hasRiaData: boolean }>,
+    getSnapshotDrift: ()                  => ipcRenderer.invoke('workspace.getSnapshotDrift') as Promise<SnapshotDriftInfo>,
     openLogsDirectory: (workingDir: string) => ipcRenderer.invoke('workspace.openLogsDirectory', workingDir) as Promise<string>,
     getRecent: () => ipcRenderer.invoke('workspace.getRecent') as Promise<string[]>,
     addRecent: (workingDir: string) => ipcRenderer.invoke('workspace.addRecent', workingDir) as Promise<string[]>,

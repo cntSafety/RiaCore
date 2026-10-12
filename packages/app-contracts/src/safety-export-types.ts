@@ -46,6 +46,14 @@ export interface MalfunctionExportData {
   riskRating: RiskRatingData | null;
   /** Review items attached to this malfunction. */
   reviews: ReviewExportData[];
+  /**
+   * Safety notes authored directly on this malfunction.
+   *
+   * A note on a malfunction is an intra-namespace record, so it never appears in
+   * the owning component's `safetyNotes` — it belongs to the malfunction it
+   * annotates and is reported next to it.
+   */
+  safetyNotes?: SafetyNoteExportData[];
   functionalInsufficiencies?: SafetyDetailExportData[];
   triggeringConditions?: SafetyDetailExportData[];
 }
@@ -76,6 +84,13 @@ export interface SafetyNoteExportData {
   nodeId: number;
   id: string;
   noteText: string;
+  /**
+   * Name of the sub-element the record was authored on, when that element is not
+   * the component itself — currently a port. Ports are reported under their
+   * owning component rather than as components of their own, so this preserves
+   * which port the reader should look at.
+   */
+  appliesTo?: string;
 }
 
 export interface ReviewExportData {
@@ -106,6 +121,8 @@ export interface TagExportData {
   name: string;
   description: string;
   color: string;
+  /** See `SafetyNoteExportData.appliesTo`. */
+  appliesTo?: string;
 }
 
 export interface PortExportData {

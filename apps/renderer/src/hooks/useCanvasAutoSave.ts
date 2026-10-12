@@ -50,6 +50,7 @@ import {
 import { useWorkspaceState } from './useWorkspaceState';
 import { useScopedSaveMutation } from './useScopedSaveMutation';
 import { useAutoSaveStatusStore } from '../store/autoSaveStatusStore';
+import { consumeSnapshotDriftError } from '../lib/snapshotDrift';
 import { diagramLayoutQueryKey } from './useDiagramLayout';
 import { namespaceConnectionsQueryKey } from './useNamespaceConnections';
 
@@ -130,7 +131,16 @@ export function useCanvasAutoSave(): CanvasAutoSaveApi {
       },
       readDb: () =>
         readCanvasDbSnapshot(queryClientRef.current, workingDirRef.current),
-      setStatus: (s, error) => setStatusRef.current(s, error),
+      setStatus: (s, error) => {
+        // A store refused because ria-data/ changed on disk is a pending user
+        // decision, not a failed save. Intercepting here covers the whole canvas
+        // path in one place — the coordinator reports every save outcome through
+        // this sink, so no individual canvas mutation has to know about drift.
+        if (s === 'failed' && consumeSnapshotDriftError(error, queryClientRef.current, workingDirRef.current)) {
+          return;
+        }
+        setStatusRef.current(s, error);
+      },
     });
   }
 

@@ -28,9 +28,10 @@ import type { IConnectionService } from '../namespaces/connection-service.js';
 import type { IInstanceService } from '../namespaces/instance-service.js';
 import type { ISafetyCommands } from '../safety/safety-commands.js';
 import type { IPersistorService } from '../persistor/persistor.js';
+import type { IAutoSaveCoordinator } from '../persistor/auto-save-coordinator.js';
 import type { IViewService } from '../views/view-service.js';
 import type { IMappingRegistry } from '../views/mapping-registry.js';
-import type { ImportLogger } from '../infra/logger.js';
+import type { LoggerFactory } from '../infra/logger.js';
 import type { NamespaceDiffResult, ThreeWayDiffResult, CheckAttributeEntry } from '@riacore/app-contracts';
 import type { IGitService } from '@riacore/git-service';
 import type { LlmSettingsStore } from '../llm/llm-settings-store.js';
@@ -73,10 +74,38 @@ export interface ServiceDependencies {
   viewService?: IViewService;
   /** Mapping_Registry backing viewService's evaluate/materialize — resolves a view's `mapping` attribute. */
   mappingRegistry?: IMappingRegistry;
-  /** Factory for creating per-operation loggers; receives workingDir */
-  createLogger?: (workingDir: string) => ImportLogger;
+  /**
+   * Per-operation loggers, supplied by the host.
+   *
+   * Required, deliberately. This replaced an optional `createLogger?` that
+   * covered only the workspace logger, which meant every call site carried a
+   * `deps.createLogger ? … : createImportLogger(…)` fallback — and the fallback
+   * is what let three sites bypass injection unnoticed and write to stdout
+   * regardless of the host. Making it required turns "route your logging
+   * through the host" from a convention into a compile error.
+   *
+   * Hosts that want the historical file+console behaviour pass
+   * `createFileLoggerFactory()`; the CLI passes one bound to `stderrLogSink`.
+   */
+  loggers: LoggerFactory;
   /** Git service for version control operations */
   gitService?: IGitService;
+  /**
+   * Auto_Save_Coordinator — keeps `ria-data/` in sync with the DB.
+   *
+   * The dispatcher calls `markDirty()` after any successful dispatch of a
+   * channel that declares {@link ChannelMeta.mutates}, so no handler and no
+   * renderer call site has to remember to save. Hosts that inject this get
+   * auto-save for free, including the CLI.
+   *
+   * Optional so that unit tests and tools which only read the graph can build a
+   * dependency set without a persistor. When absent, nothing is saved
+   * automatically — which is correct for a read-only consumer but would be a
+   * data-loss bug in an interactive host.
+   *
+   * @see packages/app-core/src/persistor/auto-save-coordinator.ts
+   */
+  autoSave?: IAutoSaveCoordinator;
   /**
    * Persistent store for {@link LlmSettings} and the encrypted
    * Bedrock_Credentials blob. Injected by the host process so that

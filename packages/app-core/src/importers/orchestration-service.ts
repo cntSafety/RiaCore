@@ -60,7 +60,8 @@ import { computeFileDigest } from './file-digest.js';
 import { parseLinkMLSchema } from './linkml-parser.js';
 import { createImportWriteService } from './import-write-service.js';
 import { createImporterRegistry } from './importer-registry.js';
-import { createImportLogger } from '../infra/logger.js';
+import { createFileLoggerFactory } from '../infra/logger.js';
+import type { LoggerFactory } from '../infra/logger.js';
 import { createImportCrossNsImpactService } from './import-crossns-impact-service.js';
 
 export interface IImporterOrchestrationService {
@@ -232,8 +233,16 @@ function loadConfigForDescriptor(
   return loadArxmlImportConfig(configPath);
 }
 
+/**
+ * @param loggers where import log lines go. Defaults to the file+console factory,
+ *   which is what tests want. Hosts that care about stdout must pass their own:
+ *   the CLI supplies a stderr-bound factory so `riacore import` keeps stdout free
+ *   for JSON. This is a constructor parameter rather than a per-call fallback on
+ *   purpose — there are three real hosts, and each names its choice once.
+ */
 export function createImporterOrchestrationService(
   dbModule: IDbModule,
+  loggers: LoggerFactory = createFileLoggerFactory(),
 ): IImporterOrchestrationService {
   // Keep run state scoped to this orchestration instance. This prevents separate
   // CLI/test/service instances in the same process from sharing report objects.
@@ -250,7 +259,7 @@ export function createImporterOrchestrationService(
 
   return {
     async runImport(params: RunImportParams): Promise<Result<ImportRunSummary>> {
-      const logger = createImportLogger(path.join(params.workingDir, 'logs'));
+      const logger = loggers.workspace(params.workingDir);
 
       // Step 1: Resolve importer — by configData sourceType if available, else by file path
       const descriptor = params.configData
@@ -412,11 +421,13 @@ export function createImporterOrchestrationService(
           workspaceRoot,
           projectDir: sourceDir,
           writeService,
+          // Importers log here rather than to the console, so their diagnostics
+          // land in the workspace log and respect the host's sink. The logger is
+          // closed by this service when the run ends, which is why
+          // ImporterLogger has no close().
+          logger,
           onProgress: (progress) => {
             publishProgress(session.runId, progress);
-            if (progress.message.startsWith('[SKIPPED_ELEMENTS]')) {
-              logger.warn(progress.message.replace('[SKIPPED_ELEMENTS] ', ''));
-            }
             (params as { onProgress?: (p: typeof progress) => void }).onProgress?.(progress);
           },
         });

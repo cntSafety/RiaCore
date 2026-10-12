@@ -152,7 +152,7 @@ export function registerGraphChannels(
     const rows = await deps.dbModule.runQuery(cypher);
     return buildGraphQueryResult(rows, 500, 2000);
   }, {
-    requiresWorkspace: true,
+    mutates: 'full', requiresWorkspace: true,
     category: 'graph',
   });
 

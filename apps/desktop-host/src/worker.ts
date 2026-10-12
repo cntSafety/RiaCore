@@ -26,8 +26,8 @@
  */
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
-import { createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createImportLogger, createCommandDispatcher, createLoadGate, createMappingRegistry, registerBuiltInMappings, createViewService } from '@riacore/app-core';
-import type { IDbModule, IWorkspaceService, IImporterOrchestrationService, IImporterRegistry, IProvisioningService, IProfileRegistry, INamespaceService, IInstanceService, ISafetyCommands, ICommandDispatcher, ServiceDependencies, LoadGate, IMappingRegistry, IViewService } from '@riacore/app-core';
+import { createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createCommandDispatcher, createLoadGate, createMappingRegistry, registerBuiltInMappings, createViewService, createFileLoggerFactory, createAutoSaveCoordinator } from '@riacore/app-core';
+import type { IDbModule, IWorkspaceService, IImporterOrchestrationService, IImporterRegistry, IProvisioningService, IProfileRegistry, INamespaceService, IInstanceService, ISafetyCommands, ICommandDispatcher, ServiceDependencies, LoadGate, IMappingRegistry, IViewService, IAutoSaveCoordinator } from '@riacore/app-core';
 import { createGitService } from '@riacore/git-service';
 import type { IGitService } from '@riacore/git-service';
 import type {
@@ -58,6 +58,7 @@ let viewService: IViewService;
 let dispatcher: ICommandDispatcher;
 let deps: ServiceDependencies;
 let gate: LoadGate;
+let autoSave: IAutoSaveCoordinator;
 
 function sendLog(level: WorkerLog['level'], message: string, context?: Record<string, unknown>): void {
   const logMessage: WorkerLog = { type: 'log', level, message, context };
@@ -75,16 +76,19 @@ async function initialize(): Promise<void> {
 
   sendLog('info', 'Worker initialization started', { pid: process.pid });
   dbModule = createDbModule(logger);
+  // Default sink: the worker's stdout/stderr are piped to the main process and
+  // surfaced in its log, so console output is wanted here.
+  const loggers = createFileLoggerFactory();
   workspaceService = createWorkspaceService(
     dbModule,
-    (workingDir) => createPersistorService(dbModule, createImportLogger(path.join(workingDir, 'logs'))),
+    (workingDir) => createPersistorService(dbModule, loggers.workspace(workingDir)),
     (event: LoadProgressPushEvent) => {
       const msg: WorkerLoadProgress = { type: 'loadProgress', event };
       process.send?.(msg);
     },
     logger,
   );
-  orchestration = createImporterOrchestrationService(dbModule);
+  orchestration = createImporterOrchestrationService(dbModule, loggers);
   registry = createImporterRegistry();
   provisioningService = createProvisioningService(registry, dbModule);
   profileRegistry = createProfileRegistry();
@@ -95,6 +99,16 @@ async function initialize(): Promise<void> {
   mappingRegistry = createMappingRegistry();
   registerBuiltInMappings(mappingRegistry);
   viewService = createViewService(mappingRegistry, dbModule, logger);
+  // Auto_Save: the dispatcher marks persisted content dirty after any channel
+  // that declares `mutates`, and this coordinator does the coalesced store. It
+  // replaces the per-call-site renderer trigger, so a mutation from any window —
+  // or from a path that forgot to pass triggerAutoSave — still reaches ria-data/.
+  autoSave = createAutoSaveCoordinator({
+    dbModule,
+    workspaceService,
+    persistorFactory: (workingDir) => createPersistorService(dbModule, loggers.workspace(workingDir)),
+    logger,
+  });
   sendLog('info', 'Worker initialization completed', { pid: process.pid });
 
   // Construct unified ServiceDependencies for the CommandDispatcher
@@ -114,7 +128,8 @@ async function initialize(): Promise<void> {
     gitService,
     mappingRegistry,
     viewService,
-    createLogger: (workingDir: string) => createImportLogger(path.join(workingDir, 'logs')),
+    autoSave,
+    loggers,
     llmStreamSink: {
       send(_channel: string, payload: unknown): void {
         const msg: WorkerLlmStream = { type: 'llmStream', event: payload as LlmStreamEvent };
@@ -147,10 +162,18 @@ function send(msg: WorkerMessage): void {
 function handleMessage(data: MainMessage): void {
   if (data.type === 'shutdown') {
     sendLog('info', 'Worker shutdown requested');
-    workspaceService.close().then(() => {
-      sendLog('info', 'Worker shutdown completed');
-      process.exit(0);
-    });
+    // Flush any debounced Auto_Save before releasing the DB handle, otherwise a
+    // mutation made within the debounce window of shutdown is lost. Never
+    // rejects — a failed flush must not block shutdown.
+    autoSave.flush()
+      .catch((err) => sendLog('warn', 'Auto-save flush on shutdown failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }))
+      .then(() => workspaceService.close())
+      .then(() => {
+        sendLog('info', 'Worker shutdown completed');
+        process.exit(0);
+      });
     return;
   }
 
@@ -184,7 +207,7 @@ function handleMessage(data: MainMessage): void {
             ?? (status?.state === 'open' ? status.info.workingDir : undefined);
 
           if (workingDir && existsSync(workingDir)) {
-            const workspaceLogger = createImportLogger(path.join(workingDir, 'logs'));
+            const workspaceLogger = deps.loggers.workspace(workingDir);
             try {
               workspaceLogger.error('Request failed', errorContext);
             } finally {

@@ -19,6 +19,7 @@
  */
 import type { createRegistry } from '../channel-registry.js';
 import { runAllCleanups } from '../../infra/cleanup-service.js';
+import { buildSnapshotDriftInfo } from '../../workspace/snapshot-baseline.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -58,16 +59,19 @@ export function registerWorkspaceChannels(
     // native use-after-free crash. For that path, workspace-service runs the
     // cleanup itself once the load has settled.
     if (result.data.lifecycleAction !== 'loading_from_ria_data') {
+      const logger = deps.loggers.workspace(payload.workingDir);
       try {
-        await runAllCleanups(deps.dbModule, (msg) => console.info(msg));
+        await runAllCleanups(deps.dbModule, (msg) => logger.info(msg));
       } catch (cleanupErr) {
-        console.warn(`[workspace.open] Post-open cleanup failed: ${String(cleanupErr)}`);
+        logger.warn('Post-open cleanup failed', { error: String(cleanupErr) });
+      } finally {
+        logger.close();
       }
     }
 
     return result.data;
   }, {
-    requiresWorkspace: false,
+    mutates: 'self', requiresWorkspace: false,
     category: 'workspace',
   });
 
@@ -81,15 +85,18 @@ export function registerWorkspaceChannels(
     // Run cleanup after the workspace is created to remove any artefacts
     // left over from previous sessions. Best-effort: failures are logged
     // but do not prevent the workspace from being created.
+    const logger = deps.loggers.workspace(payload.workingDir);
     try {
-      await runAllCleanups(deps.dbModule, (msg) => console.info(msg));
+      await runAllCleanups(deps.dbModule, (msg) => logger.info(msg));
     } catch (cleanupErr) {
-      console.warn(`[workspace.create] Post-create cleanup failed: ${String(cleanupErr)}`);
+      logger.warn('Post-create cleanup failed', { error: String(cleanupErr) });
+    } finally {
+      logger.close();
     }
 
     return result.data;
   }, {
-    requiresWorkspace: false,
+    mutates: 'self', requiresWorkspace: false,
     category: 'workspace',
   });
 
@@ -97,6 +104,33 @@ export function registerWorkspaceChannels(
     return await deps.workspaceService.getStatus();
   }, {
     requiresWorkspace: false,
+    category: 'workspace',
+  });
+
+  registry.register('workspace.getSnapshotDrift', async (_payload, deps, _ctx) => {
+    // Read-only. Reports whether ria-data/ still matches the snapshot the DB was
+    // loaded from, so the UI can offer the Store/Load decision instead of
+    // surfacing a failed save. See docs/coreSpecs/RiaDataChangeDetection.md §4.3.
+    const status = await deps.workspaceService.getStatus();
+    if (status.state !== 'open') {
+      return {
+        drifted: false,
+        changedNamespaces: [],
+        universeChanged: false,
+        dirtyNamespaces: [],
+        dbBranch: null,
+        diskBranch: null,
+        dbCommit: null,
+        diskCommit: null,
+        openedAt: null,
+        syncedAt: null,
+        syncedReason: null,
+        filesChangedAt: null,
+      };
+    }
+    return await buildSnapshotDriftInfo(status.info.workingDir, deps.dbModule);
+  }, {
+    requiresWorkspace: true,
     category: 'workspace',
   });
 
@@ -111,7 +145,7 @@ export function registerWorkspaceChannels(
     // open in the same session starts clean.
     ctx.setActiveImportSourceId(null);
   }, {
-    requiresWorkspace: false,
+    mutates: 'self', requiresWorkspace: false,
     category: 'workspace',
   });
 

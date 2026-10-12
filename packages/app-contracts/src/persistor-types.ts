@@ -29,6 +29,16 @@ export interface PersistorStoreParams {
    * Mutually exclusive with `namespace`.
    */
   scope?: 'universe';
+  /**
+   * Write even though `ria-data/` no longer matches the snapshot the database
+   * was loaded from.
+   *
+   * The escape hatch for the deliberate "port my work to this branch" flow: the
+   * user has been shown what changed and chose to overwrite it. NEVER a default,
+   * and never set by auto-save.
+   * See docs/coreSpecs/RiaDataChangeDetection.md §4.2.
+   */
+  allowSnapshotMismatch?: boolean;
 }
 
 export interface PersistorLoadParams {

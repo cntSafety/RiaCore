@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import type { createRegistry } from '../channel-registry.js';
 import { runAllCleanups } from '../../infra/cleanup-service.js';
+import { openWorkspaceLogger } from '../utils/open-workspace-logger.js';
 
 // Resolve the app version at module load time.
 //
@@ -69,8 +70,22 @@ export function registerAppChannels(
   // and can also be triggered explicitly at any time (e.g. from diagnostics UI).
   // All steps are idempotent; a clean database incurs minimal overhead.
   registry.register('app.cleanup', async (_payload, deps, _ctx) => {
-    return runAllCleanups(deps.dbModule, (msg) => console.info(msg));
+    // No workingDir in the payload — take it from the open workspace.
+    const logger = await openWorkspaceLogger(deps);
+    if (!logger) return runAllCleanups(deps.dbModule, () => { /* nowhere to log */ });
+    try {
+      return await runAllCleanups(deps.dbModule, (msg) => logger.info(msg));
+    } finally {
+      logger.close();
+    }
   }, {
+    // 'full' rather than 'self': runAllCleanups only mutates the DB, it never
+    // stores. Its `danglingViews` step deletes RIA_UNIV_View rows, which the
+    // persistor serializes — without a store the orphaned views stay in
+    // ria-data/ and return on the next load. A full store is appropriate for a
+    // rare, explicit diagnostic operation, and also prunes stale namespace
+    // directories left by the `tempNamespaces` step.
+    mutates: 'full',
     requiresWorkspace: true,
     category: 'app',
   });

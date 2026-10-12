@@ -19,10 +19,12 @@
  */
 import { useRef, useCallback, useEffect } from 'react';
 import { App } from 'antd';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/riacore';
 import { useWorkspaceState, isDbOpen } from './useWorkspaceState';
 import { useLifecycleHudStore } from '../store/lifecycleHudStore';
 import { useAutoSaveStatusStore } from '../store/autoSaveStatusStore';
+import { consumeSnapshotDriftError } from '../lib/snapshotDrift';
 
 /**
  * Returns `triggerAutoSave` (debounced, 500ms) and `flushAutoSave` (immediate).
@@ -41,6 +43,7 @@ export function useAutoSave(authoredNamespace: string | null) {
   const state = useWorkspaceState();
   const phase = state.phase;
   const workingDir = phase !== 'no_workspace' ? state.workingDir : null;
+  const queryClient = useQueryClient();
 
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
@@ -72,6 +75,13 @@ export function useAutoSave(authoredNamespace: string | null) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+
+      // A refused save is NOT a failure — ria-data/ changed under us and the user
+      // has to choose between storing over it and loading from it. Nothing is
+      // broken and nothing is lost, so the generic error toast would both alarm
+      // and mislead. The shared helper raises the drift dialog instead.
+      if (consumeSnapshotDriftError(err, queryClient, workingDir)) return;
+
       useLifecycleHudStore.getState().logActivity(
         `${ts} · Auto-save failed: ${msg}`,
         'error',
@@ -86,7 +96,7 @@ export function useAutoSave(authoredNamespace: string | null) {
         void runStore();
       }
     }
-  }, [workingDir, authoredNamespace, phase, message]);
+  }, [workingDir, authoredNamespace, phase, message, queryClient]);
 
   /** Debounced save — resets the timer on every call. Uses 0ms delay so it
    *  fires on the next event loop tick, batching rapid synchronous calls

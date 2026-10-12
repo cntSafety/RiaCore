@@ -60,21 +60,21 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.createMalfunction(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.updateMalfunction', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.updateMalfunction(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteMalfunction', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteMalfunction(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Occurs-At relationships ──────────────────────────────────────────────────
 
@@ -83,14 +83,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.attachOccursAt(payload.failureModeNodeId, payload.targetNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.detachOccursAt', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.detachOccursAt(payload.failureModeNodeId, payload.targetNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.moveOccursAt', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -99,7 +99,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Propagation ──────────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.removePropagation', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -119,7 +119,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getPropagations', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -327,7 +327,7 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.createRiskRating(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getRiskRating', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -341,14 +341,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateRiskRating(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteRiskRating', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteRiskRating(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Safety Tasks ─────────────────────────────────────────────────────────────
 
@@ -360,7 +360,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.linkSafetyTaskToFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -369,7 +369,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkSafetyTaskFromFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -378,7 +378,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getSafetyTasks', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -482,14 +482,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateSafetyTask(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteSafetyTask', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteSafetyTask(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── SOTIF: Functional Insufficiencies (shared node, 1-to-n to malfunctions) ──
 
@@ -500,7 +500,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.linkFunctionalInsufficiencyToFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -509,7 +509,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkFunctionalInsufficiencyFromFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -517,7 +517,7 @@ export function registerSafetyChannels(
       payload.failureModeNodeId, payload.functionalInsufficiencyNodeId,
     );
     if (!result.ok) throw new Error(result.error);
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getFunctionalInsufficiencies', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -563,14 +563,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateFunctionalInsufficiency(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteFunctionalInsufficiency', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteFunctionalInsufficiency(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── SOTIF: Triggering Conditions (shared node, 1-to-n to malfunctions) ───────
 
@@ -581,7 +581,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.linkTriggeringConditionToFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -590,7 +590,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkTriggeringConditionFromFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -598,7 +598,7 @@ export function registerSafetyChannels(
       payload.failureModeNodeId, payload.triggeringConditionNodeId,
     );
     if (!result.ok) throw new Error(result.error);
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getTriggeringConditions', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -641,14 +641,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateTriggeringCondition(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteTriggeringCondition', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteTriggeringCondition(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Requirements ─────────────────────────────────────────────────────────────
 
@@ -659,7 +659,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getRequirement', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -682,21 +682,21 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.updateRequirement', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.updateRequirement(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteRequirement', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteRequirement(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Safety Notes ─────────────────────────────────────────────────────────────
 
@@ -707,7 +707,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getSafetyNote', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -728,14 +728,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateSafetyNote(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteSafetyNote', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteSafetyNote(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Review Items ─────────────────────────────────────────────────────────────
 
@@ -746,7 +746,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getReviewItem', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -774,14 +774,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateReviewItem(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteReviewItem', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteReviewItem(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Direct-query handlers (ported from worker-dispatch.ts) ───────────────────
 
@@ -908,7 +908,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.linkDirectRequirementToFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -917,7 +917,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkDirectRequirementFromFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -925,7 +925,7 @@ export function registerSafetyChannels(
       payload.failureModeNodeId, payload.requirementNodeId,
     );
     if (!result.ok) throw new Error(result.error);
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getDirectRequirementsForFm', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -975,7 +975,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   // ── Element-scoped notes ─────────────────────────────────────────────────────
 
@@ -1022,7 +1022,7 @@ export function registerSafetyChannels(
     );
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getNoteParent', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -1061,7 +1061,7 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.createTag(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getTag', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -1082,28 +1082,28 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.updateTag(payload.nodeId, payload.updates);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.deleteTag', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.deleteTag(payload.nodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.linkTag', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.linkTag(payload.elementNodeId, payload.tagNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkTag', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.unlinkTag(payload.elementNodeId, payload.tagNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getTagsForElement', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
@@ -1124,14 +1124,14 @@ export function registerSafetyChannels(
     const result = await deps.safetyCommands.linkTagCrossNs(payload.tagNodeId, payload.importedElementNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.unlinkTagCrossNs', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');
     const result = await deps.safetyCommands.unlinkTagCrossNs(payload.tagNodeId, payload.importedElementNodeId);
     if (!result.ok) throw new Error(result.error);
     return result.data;
-  }, { requiresWorkspace: true, category: CATEGORY });
+  }, { mutates: 'namespace', requiresWorkspace: true, category: CATEGORY });
 
   registry.register('safety.getTagsForImportedElement', async (payload, deps, _ctx) => {
     if (!deps.safetyCommands) throw new Error('Safety commands not configured');

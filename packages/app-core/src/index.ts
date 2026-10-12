@@ -22,7 +22,39 @@ export type { IDbModule, AppCoreLogger } from './db/db-module.js';
 export { SCHEMA_VERSION, DB_SCHEMA_VERSION_TABLE, DB_SCHEMA_VERSION_NODE_ID } from './db/schema.js';
 export { createWorkspaceService } from './workspace/workspace-service.js';
 export type { IWorkspaceService } from './workspace/workspace-service.js';
-export { createImportLogger, createPersistorLoadLogger, createDiffMergeLogger } from './infra/logger.js';
+export {
+  SnapshotDriftError,
+  assertNoSnapshotDrift,
+  buildSnapshotDriftInfo,
+  clearAllBaselines,
+  clearBaseline,
+  describeDrift,
+  detectDrift,
+  findRepoRoot,
+  getBaseline,
+  readCurrentBranch,
+  readDirtyNamespaces,
+  readFilesChangedAt,
+  readHeadCommit,
+  readManifestHashes,
+  stampBaseline,
+} from './workspace/snapshot-baseline.js';
+export type {
+  ManifestHashes,
+  SnapshotBaseline,
+  SnapshotDriftDetails,
+} from './workspace/snapshot-baseline.js';
+export {
+  createImportLogger,
+  createPersistorLoadLogger,
+  createDiffMergeLogger,
+  createFileLoggerFactory,
+  createNullLoggerFactory,
+  consoleLogSink,
+  stderrLogSink,
+  silentLogSink,
+} from './infra/logger.js';
+export type { LogSink, LoggerFactory } from './infra/logger.js';
 export type { ImportLogger, PersistorLoadLogger } from './infra/logger.js';
 export { createImportWriteService } from './importers/import-write-service.js';
 export type { IImportWriteServiceExt, LinkMLSchema, LinkMLClass, LinkMLSlot, LinkMLAttribute, LinkMLEnum, LinkMLPermissibleValue } from './importers/import-write-service.js';
@@ -74,8 +106,11 @@ export type { ISafetyCommands, CreateMalfunctionParams, CreateTagParams, Malfunc
   CreateRiskRatingParams, ReviewItemData, DeleteImpactPreview } from './safety/safety-commands.js';
 export { createPersistorService, computeNamespaceHashFromFiles } from './persistor/persistor.js';
 export type { IPersistorService, StoreResult, LoadResult, LoadProgressEvent, OnLoadProgress, PersistorLoadParams, RepairManifestResult, Manifest } from './persistor/persistor.js';
+export { createAutoSaveCoordinator, DEFAULT_AUTO_SAVE_DEBOUNCE_MS } from './persistor/auto-save-coordinator.js';
+export type { IAutoSaveCoordinator, AutoSaveCoordinatorDeps, AutoSaveFlushResult } from './persistor/auto-save-coordinator.js';
 export { createCommandDispatcher } from './dispatch/index.js';
 export type { ICommandDispatcher, ServiceDependencies, ChannelMeta } from './dispatch/index.js';
+export type { MutationScope } from './dispatch/channel-registry.js';
 export { buildGraphQueryResult } from './dispatch/index.js';
 export { ensureSourceConfigData } from './dispatch/index.js';
 export { e } from './dispatch/index.js';

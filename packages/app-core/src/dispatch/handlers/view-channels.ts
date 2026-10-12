@@ -79,18 +79,18 @@ export function registerViewChannels(
     const result = await service(deps).createView(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data satisfies ViewDefinition;
-  }, { requiresWorkspace: true, category: 'views' });
+  }, { mutates: 'universe', requiresWorkspace: true, category: 'views' });
 
   registry.register('views.update', async (payload, deps, _ctx) => {
     const result = await service(deps).updateView(payload);
     if (!result.ok) throw new Error(result.error);
     return result.data satisfies ViewDefinition;
-  }, { requiresWorkspace: true, category: 'views' });
+  }, { mutates: 'universe', requiresWorkspace: true, category: 'views' });
 
   registry.register('views.delete', async (payload, deps, _ctx) => {
     const result = await service(deps).deleteView(payload.name);
     if (!result.ok) throw new Error(result.error);
-  }, { requiresWorkspace: true, category: 'views' });
+  }, { mutates: 'universe', requiresWorkspace: true, category: 'views' });
 
   registry.register('views.evaluate', async (payload, deps, _ctx) => {
     const workingDir = await currentWorkingDir(deps);
@@ -104,5 +104,5 @@ export function registerViewChannels(
     const result = await service(deps).materializeView(workingDir, payload);
     if (!result.ok) throw new Error(result.error);
     return result.data satisfies MaterializeResult;
-  }, { requiresWorkspace: true, category: 'views' });
+  }, { mutates: 'full', requiresWorkspace: true, category: 'views' });
 }

@@ -33,6 +33,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { type EnabledCategories, DEFAULT_ENABLED_CATEGORIES } from './config-loader.js';
+import type { ImporterLogger } from '@riacore/importer-sdk';
 
 // ── Minimal XML parser ────────────────────────────────────────────────────────
 // Handles the well-structured ARXML files without any external library.
@@ -1740,20 +1741,20 @@ function resetSeen(): void {
  * Detect and log the AUTOSAR schema version from the root element attributes.
  * Checks `xmlns` for R4.0 conformance and `xsi:schemaLocation` for XSD version.
  */
-function detectSchemaVersion(root: XmlNode, file: string): void {
+function detectSchemaVersion(root: XmlNode, file: string, logger?: ImporterLogger): void {
   const xmlns = root.attrs['xmlns'] ?? '';
   const schemaLocation = root.attrs['xsi:schemaLocation'] ?? '';
 
   // Check for non-R4.0 schema
   if (xmlns && !xmlns.includes('r4.0')) {
-    console.warn(`[parser] WARNING: Non-R4.0 schema detected in ${file} (xmlns="${xmlns}"). Attempting best-effort parsing.`);
+    logger?.warn('Non-R4.0 schema detected — attempting best-effort parsing', { file, xmlns });
   }
 
   // Detect XSD version from schemaLocation (e.g. "http://autosar.org/schema/r4.0 AUTOSAR_00048.xsd")
   if (schemaLocation) {
     const xsdMatch = schemaLocation.match(/AUTOSAR[_\-]?([\w.\-]+)\.xsd/i);
     if (xsdMatch) {
-      console.log(`[parser] Schema version detected: ${xsdMatch[0]} in ${file}`);
+      logger?.info('Schema version detected', { schema: xsdMatch[0], file });
     }
   }
 }
@@ -1769,6 +1770,13 @@ export function parseArxmlProject(
   exampleDir: string,
   categories: EnabledCategories = DEFAULT_ENABLED_CATEGORIES,
   fileList?: string[],
+  /**
+   * Where to report schema and file-level diagnostics. Optional so that unit
+   * tests can parse without wiring a logger; when omitted the messages are
+   * dropped rather than printed, because a parser has no business choosing an
+   * output stream. Production callers pass `context.logger`.
+   */
+  logger?: ImporterLogger,
 ): ArxmlModel {
   resetSeen();
 
@@ -1809,29 +1817,29 @@ export function parseArxmlProject(
         if (existsSync(f)) {
           files.push(f);
         } else {
-          console.warn(`[parser] File not found, skipping: ${f}`);
+          logger?.warn('File not found, skipping', { file: f });
         }
       } else {
-        console.warn(`[parser] Skipping non-ARXML file: ${f}`);
+        logger?.warn('Skipping non-ARXML file', { file: f });
       }
     }
-    console.log(`[parser] Processing ${files.length} .arxml file(s) from provided file list`);
+    logger?.info('Processing .arxml file(s) from provided file list', { count: files.length });
   } else {
     files = collectArxmlFiles(exampleDir);
-    console.log(`[parser] Scanning ${files.length} .arxml file(s) in ${exampleDir}`);
+    logger?.info('Scanning .arxml file(s)', { count: files.length, dir: exampleDir });
   }
 
   for (const file of files) {
     const source = readFileSync(file, 'utf-8');
     const tree   = parseXml(source);
     if (!tree) {
-      console.warn(`[parser] Could not parse ${file}`);
+      logger?.warn('Could not parse file', { file });
       continue;
     }
 
     // Detect and log schema version from AUTOSAR root element
     if (tree.tag === 'AUTOSAR') {
-      detectSchemaVersion(tree, file);
+      detectSchemaVersion(tree, file, logger);
     }
 
     // Root element is <AUTOSAR>, its direct child is <AR-PACKAGES>

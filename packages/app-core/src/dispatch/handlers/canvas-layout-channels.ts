@@ -20,6 +20,7 @@
 import type { DiagramLayout } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
 import { createLayoutService } from '../../namespaces/layout-service.js';
+import { openWorkspaceLogger } from '../utils/open-workspace-logger.js';
 
 /**
  * Register the canvas-layout channels:
@@ -63,18 +64,23 @@ export function registerCanvasLayoutChannels(
     // DIAGNOSTIC (temporary): correlate layout-write timestamps against
     // persistor.store timestamps to investigate the intermittent
     // missing-tile/missing-connection bug on reopen. Remove once root-caused.
-    console.log('[DIAG] canvasLayout:setRecords: requested', {
-      ts: new Date().toISOString(),
+    // Goes to the workspace log, not stdout — see CoreArchPrinciples.md.
+    const diag = await openWorkspaceLogger(deps);
+    diag?.info('[DIAG] canvasLayout:setRecords: requested', {
       records: records.map((r) => `${r.elementKind}/${r.elementKey}@(${r.x},${r.y})`),
     });
     const service = createLayoutService(deps.dbModule);
-    const result = await service.setRecords(records);
-    if (!result.ok) {
-      throw new Error(result.error);
+    try {
+      const result = await service.setRecords(records);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return result.data satisfies DiagramLayout;
+    } finally {
+      diag?.close();
     }
-    return result.data satisfies DiagramLayout;
   }, {
-    requiresWorkspace: true,
+    mutates: 'universe', requiresWorkspace: true,
     category: 'canvasLayout',
   });
 
@@ -106,7 +112,7 @@ export function registerCanvasLayoutChannels(
     }
     return result.data satisfies DiagramLayout;
   }, {
-    requiresWorkspace: true,
+    mutates: 'universe', requiresWorkspace: true,
     category: 'canvasLayout',
   });
 }

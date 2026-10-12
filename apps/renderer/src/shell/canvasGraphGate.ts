@@ -38,13 +38,21 @@
 // guarantees.
 
 import type { WorkspacePhase } from '../hooks/useWorkspaceState';
+import {
+  ANALYSIS_ELEMENT_KIND,
+  declaredDimensions,
+  IMPORTED_ELEMENT_KIND,
+  type NodeDimensions,
+} from './nodeDimensions';
 
 /** The Workspace_Phase discriminant. */
 export type CanvasPhase = WorkspacePhase['phase'];
 
-/** The two Element_Kinds positioned on the canvas today. */
-export const IMPORTED_ELEMENT_KIND = 'imported';
-export const ANALYSIS_ELEMENT_KIND = 'analysis';
+// The two Element_Kinds positioned on the canvas today. They are declared in
+// `nodeDimensions.ts` (which keys its Declared_Dimensions table by them) and
+// re-exported here, where they have always been imported from, so this module
+// can consume `declaredDimensions` without the two forming an import cycle.
+export { ANALYSIS_ELEMENT_KIND, IMPORTED_ELEMENT_KIND } from './nodeDimensions';
 
 // Layout_Key → layout_id encoding, mirroring `WorkspaceCanvas.tsx` and the
 // app-core persistence layer: `${elementKind}\u0000${elementKey}`. The NUL
@@ -87,6 +95,18 @@ export interface CanvasGraphNode {
   id: string;
   kind: typeof IMPORTED_ELEMENT_KIND | typeof ANALYSIS_ELEMENT_KIND;
   position: { x: number; y: number };
+  /**
+   * Declared_Dimensions for this node's Element_Kind, resolved from the one
+   * dimension table the real build and Auto_Layout also read
+   * (`nodeDimensions.ts`). The gate carries them so it mirrors the real build,
+   * where the same values become React Flow's `initialWidth` / `initialHeight`.
+   *
+   * Deliberately nested rather than flat `width` / `height`: React Flow 12
+   * treats top-level `width` / `height` on a node as authoritative inline
+   * styles, which would freeze card height, so naming them that way here would
+   * invite exactly the mistake the declared-dimension design avoids.
+   */
+  dimensions: NodeDimensions;
 }
 
 export interface CanvasGraphEdge {
@@ -109,7 +129,9 @@ export interface CanvasGraphResult {
  * When `phase === 'db_open'`, one node is produced per import source and per
  * authored namespace, and one edge per connection whose endpoints are both
  * present as nodes. Each node's position resolves to its stored Layout_Record
- * when present (Req 2.2), else an Auto_Layout fallback (Req 2.3), else origin.
+ * when present (Req 2.2), else an Auto_Layout fallback (Req 2.3), else origin,
+ * and each node carries the Declared_Dimensions for its Element_Kind so the gate
+ * mirrors the real build.
  */
 export function buildCanvasGraph(input: CanvasGraphInput): CanvasGraphResult {
   // ── db_open render gate (Req 2.4) ─────────────────────────────────────────
@@ -123,12 +145,17 @@ export function buildCanvasGraph(input: CanvasGraphInput): CanvasGraphResult {
   const importerNodeIds = new Set(input.importSources.map((s) => s.targetNamespace));
   const analysisNodeIds = new Set(input.authoredNamespaces.map((n) => n.name));
 
+  // Resolved once per Element_Kind rather than per node: the table is static.
+  const importedDimensions = declaredDimensions(IMPORTED_ELEMENT_KIND);
+  const analysisDimensions = declaredDimensions(ANALYSIS_ELEMENT_KIND);
+
   const importerNodes: CanvasGraphNode[] = input.importSources.map((s) => ({
     id: s.targetNamespace,
     kind: IMPORTED_ELEMENT_KIND,
     position:
       stored.get(encodeLayoutId(IMPORTED_ELEMENT_KIND, s.targetNamespace)) ??
       fallback.get(s.targetNamespace) ?? { x: 0, y: 0 },
+    dimensions: importedDimensions,
   }));
 
   const analysisNodes: CanvasGraphNode[] = input.authoredNamespaces.map((n) => ({
@@ -137,6 +164,7 @@ export function buildCanvasGraph(input: CanvasGraphInput): CanvasGraphResult {
     position:
       stored.get(encodeLayoutId(ANALYSIS_ELEMENT_KIND, n.name)) ??
       fallback.get(n.name) ?? { x: 0, y: 0 },
+    dimensions: analysisDimensions,
   }));
 
   const edges: CanvasGraphEdge[] = input.connections

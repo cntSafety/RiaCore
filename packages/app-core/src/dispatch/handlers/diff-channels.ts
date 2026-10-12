@@ -29,11 +29,12 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { DiffResultPage, DiffResultSection } from '@riacore/app-contracts';
+import { countDiffSummaryChanges, describeDiffSummaryCounts } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
 import { createDiffService, createThreeWayDiffService } from '../../diff/diff-service.js';
 import { renderDiffHtmlReport } from '../../diff/diff-html-report.js';
 import { createMergeService } from '../../diff/merge-service.js';
-import { createPersistorService, createImportLogger, createDiffMergeLogger } from '../../index.js';
+import { createPersistorService } from '../../index.js';
 import { deleteNamespace } from '../../persistor/persistor-helpers.js';
 import { runStoreCommitHook } from '../../git/store-commit-hook.js';
 
@@ -43,7 +44,7 @@ export function registerDiffChannels(registry: Registry): void {
 
   // ── diff.computeNamespaces ─────────────────────────────────────────────────
   registry.register('diff.computeNamespaces', async (payload, deps, ctx) => {
-    const logger = createDiffMergeLogger(path.join(payload.workingDir, 'logs'));
+    const logger = deps.loggers.diffMerge(payload.workingDir);
     logger.info('diff.computeNamespaces: start', {
       leftNs: payload.leftNs,
       rightNs: payload.rightNs,
@@ -54,12 +55,8 @@ export function registerDiffChannels(registry: Registry): void {
     ctx.storeDiffResult(summary.diffId, result);
     logger.info('diff.computeNamespaces: complete', {
       diffId: summary.diffId,
-      addedNodes: summary.addedNodesCount,
-      deletedNodes: summary.deletedNodesCount,
-      modifiedNodes: summary.modifiedNodesCount,
-      addedEdges: summary.addedEdgesCount,
-      deletedEdges: summary.deletedEdgesCount,
-      modifiedEdges: summary.modifiedEdgesCount,
+      ...describeDiffSummaryCounts(summary),
+      totalChanges: countDiffSummaryChanges(summary),
     });
     return summary;
   }, {
@@ -80,7 +77,7 @@ export function registerDiffChannels(registry: Registry): void {
 
   // ── diff.computeHybrid ─────────────────────────────────────────────────────
   registry.register('diff.computeHybrid', async (payload, deps, ctx) => {
-    const logger = createDiffMergeLogger(path.join(payload.workingDir, 'logs'));
+    const logger = deps.loggers.diffMerge(payload.workingDir);
     logger.info('diff.computeHybrid: start', {
       liveNs: payload.liveNs,
       snapshotNs: payload.snapshotNs,
@@ -93,12 +90,8 @@ export function registerDiffChannels(registry: Registry): void {
     ctx.storeDiffResult(summary.diffId, result);
     logger.info('diff.computeHybrid: complete', {
       diffId: summary.diffId,
-      addedNodes: summary.addedNodesCount,
-      deletedNodes: summary.deletedNodesCount,
-      modifiedNodes: summary.modifiedNodesCount,
-      addedEdges: summary.addedEdgesCount,
-      deletedEdges: summary.deletedEdgesCount,
-      modifiedEdges: summary.modifiedEdgesCount,
+      ...describeDiffSummaryCounts(summary),
+      totalChanges: countDiffSummaryChanges(summary),
     });
     return summary;
   }, {
@@ -209,7 +202,7 @@ export function registerDiffChannels(registry: Registry): void {
   // ── diff.applyMerge ────────────────────────────────────────────────────────
   registry.register('diff.applyMerge', async (payload, deps, ctx) => {
     const { diffId, targetNs, direction, selectionIds, workingDir } = payload;
-    const logger = createDiffMergeLogger(path.join(workingDir, 'logs'));
+    const logger = deps.loggers.diffMerge(workingDir);
     logger.info('diff.applyMerge: start', {
       diffId,
       targetNs,
@@ -289,9 +282,7 @@ export function registerDiffChannels(registry: Registry): void {
     // Persist the updated DB state to ria-data/ files so the merged content
     // is visible after restart and can be committed via git without a
     // separate explicit "Store" step.
-    const persistLogger = deps.createLogger
-      ? deps.createLogger(workingDir)
-      : createImportLogger(path.join(workingDir, 'logs'));
+    const persistLogger = deps.loggers.workspace(workingDir);
     logger.info('diff.applyMerge: persisting DB to ria-data/', { workingDir });
     try {
       const storeResult = await createPersistorService(deps.dbModule, persistLogger).store({ workingDir });
@@ -312,7 +303,7 @@ export function registerDiffChannels(registry: Registry): void {
 
     return mergeResult;
   }, {
-    requiresWorkspace: true,
+    mutates: 'self', requiresWorkspace: true,
     category: 'diff',
   });
 
@@ -338,7 +329,7 @@ export function registerDiffChannels(registry: Registry): void {
   // ── diff.applyThreeWayMerge ────────────────────────────────────────────────
   registry.register('diff.applyThreeWayMerge', async (payload, deps, ctx) => {
     const { diffId, targetNs, resolutions, workingDir } = payload;
-    const logger = createDiffMergeLogger(path.join(workingDir, 'logs'));
+    const logger = deps.loggers.diffMerge(workingDir);
     logger.info('diff.applyThreeWayMerge: start', {
       diffId,
       targetNs,
@@ -368,9 +359,7 @@ export function registerDiffChannels(registry: Registry): void {
     // Persist the updated DB state to ria-data/ files so the merged content
     // is visible after restart and can be committed via git without a
     // separate explicit "Store" step.
-    const persistLogger = deps.createLogger
-      ? deps.createLogger(workingDir)
-      : createImportLogger(path.join(workingDir, 'logs'));
+    const persistLogger = deps.loggers.workspace(workingDir);
     logger.info('diff.applyThreeWayMerge: persisting DB to ria-data/', { workingDir });
     try {
       await createPersistorService(deps.dbModule, persistLogger).store({ workingDir });
@@ -384,7 +373,7 @@ export function registerDiffChannels(registry: Registry): void {
 
     return mergeResult;
   }, {
-    requiresWorkspace: true,
+    mutates: 'self', requiresWorkspace: true,
     category: 'diff',
   });
 }

@@ -61,7 +61,23 @@ export function SafetyEditor({ ns }: SafetyEditorProps) {
 
   const qc = useQueryClient();
 
-  // Restore persisted selection from the workspace store
+  // Restore persisted selection from the workspace store.
+  //
+  // Seeded ONCE, deliberately. `safetyTreeState` is a restore point, not a live
+  // mirror: it is written only by the tree panels' unmount cleanups
+  // (`NamespaceTreePanel`, `ImportedTreePanel`) and read here on mount, and
+  // `SafetyAnalysisSpawnApp` relies on exactly that by writing a navigation target
+  // into it just before mounting this editor. The live selection is this local
+  // state plus the tree panel's own normalized state.
+  //
+  // Seeding once is only safe because this subtree is keyed on the content identity
+  // in App.tsx: a workspace switch, or any mutation that rebuilds DB content and
+  // reassigns node IDs, remounts the editor and re-seeds from a store that
+  // `resetWorkspaceState()` has just cleared. Before that key existed, a ria-data
+  // load left this holding node IDs that no longer existed — with TopBar's home
+  // button gone, because it is gated on the same `activeNamespace` that was
+  // cleared. Do not add a store→local sync effect here; the remount is the
+  // mechanism. See hooks/useContentIdentity.ts.
   const savedSnapshot = useWorkspaceStore((s) => s.safetyTreeState[ns.name]);
   const [selectedTreeElement, setSelectedTreeElement] = useState<SelectedTreeElement | null>(
     savedSnapshot?.selectedElement ?? null,

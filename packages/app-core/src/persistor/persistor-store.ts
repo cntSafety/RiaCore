@@ -33,6 +33,7 @@ import { replaceNodeIdsWithStableIds, resolveStableIdFromMeta } from './stable-i
 import { computeNamespaceHash, computeUniverseFileHash } from './hash-computer.js';
 import { sanitizeDirectoryName, detectDirectoryConflicts } from './sanitize-directory.js';
 import type { PersistorStoreParams, StoreResult, Manifest } from './persistor-types.js';
+import { assertNoSnapshotDrift, stampBaseline } from '../workspace/snapshot-baseline.js';
 import { e, exportLayer, loadAttributeMetadata, writeFileAtomic } from './persistor-helpers.js';
 import { sortConceptInstances, sortRelationshipInstances } from './persistor-sort.js';
 import { computeMetaHash, computeNamespaceHashFromFiles } from './persistor.js';
@@ -257,7 +258,28 @@ export function store(
 ): Promise<StoreResult> {
   const key = path.resolve(params.workingDir);
   const prior = storeChains.get(key) ?? Promise.resolve();
-  const run = prior.then(() => storeImpl(params, dbModule, logger));
+  const run = prior.then(async () => {
+    // ── Write fence (RiaDataChangeDetection.md §4.2) ──────────────────────────
+    // Refuse to write when ria-data/ no longer matches the snapshot the DB was
+    // loaded from — a git checkout, a pull on the same branch, a reset, a stash
+    // pop, a restore from backup, or a concurrent CLI store. Throwing here also
+    // means runStoreCommitHook never runs, so a drifted write cannot be
+    // auto-committed.
+    //
+    // Deliberately INSIDE the serialisation chain: a check outside it could be
+    // overtaken by a concurrent store for the same workspace, leaving a window
+    // between "verified" and "written".
+    assertNoSnapshotDrift(params.workingDir, params.allowSnapshotMismatch, logger);
+
+    const result = await storeImpl(params, dbModule, logger);
+
+    // The files on disk are now exactly what we just wrote, so they become the
+    // new baseline. Doing this here rather than in the dispatch handler covers
+    // the auto-save coordinator too, which calls the persistor directly and
+    // never passes through the dispatcher.
+    stampBaseline(params.workingDir, undefined, { reason: 'store' });
+    return result;
+  });
   // Keep the chain alive regardless of this run's outcome so a failed store
   // never wedges subsequent stores for the same workspace.
   storeChains.set(key, run.then(() => undefined, () => undefined));
@@ -641,6 +663,46 @@ async function storeImpl(
       edgeKeyAttrs,
     });
 
+    // Namespace metadata (namespace.json).
+    //
+    // Written UNCONDITIONALLY — including on the delta-skip path below — because
+    // `categorizational_metamodels` is derived from RIA_META_CATEGORIZEDBY edges,
+    // which the namespace content hash does not cover. Connecting an analysis to
+    // an imported namespace creates those edges without touching a single concept
+    // or relationship instance, so the hash still matches and the delta skip would
+    // leave the stale value on disk indefinitely — until some unrelated content
+    // change happened to force a re-export. That is exactly how an imported
+    // namespace ended up serialized with `"categorizational_metamodels": []`
+    // while the DB had three of them.
+    //
+    // Safe on the skip path: computeNamespaceHashFromFiles() reads concepts/,
+    // relationships/ and the cross-namespace file only, never namespace.json, so
+    // rewriting it cannot disturb the hash comparison.
+    const metamodelVersion = allMetamodelVersions.get(ns.metamodel) ?? '';
+    const writeNamespaceMetadata = async (): Promise<void> => {
+      const catRows = await dbModule.runQuery(
+        `MATCH (ns2:RIA_UNIV_Namespace)-[:RIA_META_CATEGORIZEDBY]->(mm:RIA_META_Metamodel)
+         WHERE ns2.name = '${e(namespace)}' AND mm.name <> '${e(ns.metamodel)}'
+         RETURN mm.name AS name ORDER BY mm.name`
+      );
+      const namespaceMetadata = {
+        categorizational_metamodels: catRows.map(r => String(r.name ?? '')).filter(Boolean),
+        directory: dirName,
+        metamodel: ns.metamodel,
+        metamodel_version: metamodelVersion,
+        name: namespace,
+        namespace_owning_application: ns.namespace_owning_application,
+        namespace_role: ns.namespace_role,
+      };
+      fs.mkdirSync(nsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(nsDir, 'namespace.json'),
+        serializeMetadata(namespaceMetadata as Record<string, unknown>),
+        'utf-8',
+      );
+      fileInventory[`${dirName}/namespace.json`] = 1;
+    };
+
     // Delta skip: hash matches AND files exist on disk
     const nsDirHasFiles = fs.existsSync(path.join(nsDir, 'namespace.json'));
     // Also verify that all expected data files are present — if someone
@@ -714,22 +776,15 @@ async function storeImpl(
           for (const [relType, instances] of relsByType) {
             fileInventory[`${dirName}/relationships/${relType}.json`] = instances.length;
           }
-          fileInventory[`${dirName}/namespace.json`] = 1;
+
+          // Content is unchanged, but the derived metadata may not be — see the
+          // comment on writeNamespaceMetadata above. Also sets the inventory entry.
+          await writeNamespaceMetadata();
 
           continue;
         }
       }
     }
-
-    // Query categorizational metamodels
-    const metamodelVersion = allMetamodelVersions.get(ns.metamodel) ?? '';
-
-    const catRows = await dbModule.runQuery(
-      `MATCH (ns2:RIA_UNIV_Namespace)-[:RIA_META_CATEGORIZEDBY]->(mm:RIA_META_Metamodel)
-       WHERE ns2.name = '${e(namespace)}' AND mm.name <> '${e(ns.metamodel)}'
-       RETURN mm.name AS name ORDER BY mm.name`
-    );
-    const categorizationalMetamodels = catRows.map(r => String(r.name ?? '')).filter(Boolean);
 
     // Group concept instances by type and sort within each group for
     // deterministic, diff-friendly JSON output. Grouping by type produces
@@ -821,20 +876,9 @@ async function storeImpl(
       relFilesWritten++;
     }
 
-    // Write namespace.json
-    const namespaceMetadata = {
-      categorizational_metamodels: categorizationalMetamodels,
-      directory: dirName,
-      metamodel: ns.metamodel,
-      metamodel_version: metamodelVersion,
-      name: namespace,
-      namespace_owning_application: ns.namespace_owning_application,
-      namespace_role: ns.namespace_role,
-    };
-    const nsMetaPath = path.join(nsDir, 'namespace.json');
-    fs.writeFileSync(nsMetaPath, serializeMetadata(namespaceMetadata as Record<string, unknown>), 'utf-8');
-    const nsMetaRelPath = path.relative(exportDir, nsMetaPath).replace(/\\/g, '/');
-    fileInventory[nsMetaRelPath] = 1;
+    // Write namespace.json (same helper the delta-skip path uses, so the two
+    // paths cannot drift in what metadata they emit).
+    await writeNamespaceMetadata();
     filesWritten++;
 
     // Update content_hash in DB

@@ -303,9 +303,9 @@ export function createMergeService(dbModule: IDbModule): IMergeService {
           const key = `${edge.sourceStableId}::${edge.targetStableId}::${edge.relationshipType}`;
           if (selSet && !selSet.has(key)) { skipped++; continue; }
           const srcId = index.get(edge.sourceStableId);
-          if (!srcId) { warnings.push(`Cross-NS edge source '${edge.sourceStableId}' not found in ${targetNamespace}`); continue; }
+          if (!srcId) { warnings.push(missingCrossNsSourceWarning(edge, targetNamespace, 'create')); continue; }
           const tgtId = await resolveTargetNodeId(dbModule, edge.targetNamespace, edge.targetStableId);
-          if (!tgtId) { warnings.push(`Cross-NS edge target '${edge.targetStableId}' not found in ${edge.targetNamespace}`); continue; }
+          if (!tgtId) { warnings.push(missingCrossNsTargetWarning(edge, 'create')); continue; }
           const r = await createCrossNsEdge(dbModule, edge, metamodel, srcId, tgtId);
           if (!r.ok) { warnings.push(r.error); } else { edgesAdded++; }
         }
@@ -313,9 +313,9 @@ export function createMergeService(dbModule: IDbModule): IMergeService {
           const key = `${edge.sourceStableId}::${edge.targetStableId}::${edge.relationshipType}`;
           if (selSet && !selSet.has(key)) { skipped++; continue; }
           const srcId = index.get(edge.sourceStableId);
-          if (!srcId) { warnings.push(`Cross-NS edge source '${edge.sourceStableId}' not found in ${targetNamespace}`); continue; }
+          if (!srcId) { warnings.push(missingCrossNsSourceWarning(edge, targetNamespace, 'remove')); continue; }
           const tgtId = await resolveTargetNodeId(dbModule, edge.targetNamespace, edge.targetStableId);
-          if (!tgtId) { warnings.push(`Cross-NS edge target '${edge.targetStableId}' not found in ${edge.targetNamespace}`); continue; }
+          if (!tgtId) { warnings.push(missingCrossNsTargetWarning(edge, 'remove')); continue; }
           const r = await deleteCrossNsEdge(dbModule, srcId, tgtId, edge.relationshipType);
           if (!r.ok) { warnings.push(r.error); } else { edgesDeleted++; }
         }
@@ -325,9 +325,9 @@ export function createMergeService(dbModule: IDbModule): IMergeService {
           const key = `${edge.sourceStableId}::${edge.targetStableId}::${edge.relationshipType}`;
           if (selSet && !selSet.has(key)) { skipped++; continue; }
           const srcId = index.get(edge.sourceStableId);
-          if (!srcId) { warnings.push(`Cross-NS edge source '${edge.sourceStableId}' not found in ${targetNamespace}`); continue; }
+          if (!srcId) { warnings.push(missingCrossNsSourceWarning(edge, targetNamespace, 'create')); continue; }
           const tgtId = await resolveTargetNodeId(dbModule, edge.targetNamespace, edge.targetStableId);
-          if (!tgtId) { warnings.push(`Cross-NS edge target '${edge.targetStableId}' not found in ${edge.targetNamespace}`); continue; }
+          if (!tgtId) { warnings.push(missingCrossNsTargetWarning(edge, 'create')); continue; }
           const r = await createCrossNsEdge(dbModule, edge, metamodel, srcId, tgtId);
           if (!r.ok) { warnings.push(r.error); } else { edgesAdded++; }
         }
@@ -335,9 +335,9 @@ export function createMergeService(dbModule: IDbModule): IMergeService {
           const key = `${edge.sourceStableId}::${edge.targetStableId}::${edge.relationshipType}`;
           if (selSet && !selSet.has(key)) { skipped++; continue; }
           const srcId = index.get(edge.sourceStableId);
-          if (!srcId) { warnings.push(`Cross-NS edge source '${edge.sourceStableId}' not found in ${targetNamespace}`); continue; }
+          if (!srcId) { warnings.push(missingCrossNsSourceWarning(edge, targetNamespace, 'remove')); continue; }
           const tgtId = await resolveTargetNodeId(dbModule, edge.targetNamespace, edge.targetStableId);
-          if (!tgtId) { warnings.push(`Cross-NS edge target '${edge.targetStableId}' not found in ${edge.targetNamespace}`); continue; }
+          if (!tgtId) { warnings.push(missingCrossNsTargetWarning(edge, 'remove')); continue; }
           const r = await deleteCrossNsEdge(dbModule, srcId, tgtId, edge.relationshipType);
           if (!r.ok) { warnings.push(r.error); } else { edgesDeleted++; }
         }
@@ -822,6 +822,42 @@ async function applyNodeChange(
  * The stable ID is stored in the node's attributes as stable_path, sysml_id, or uuid.
  * Returns undefined if no matching node is found.
  */
+/**
+ * Warning text for a cross-namespace relationship whose *target* element does
+ * not exist in the database.
+ *
+ * The common cause is a branch that links an analysis element to a requirement
+ * or safety goal which has not been imported into this workspace yet. A
+ * CROSSNS_INSTANCE_REL edge needs a real node on both ends, so there is nothing
+ * to create until the owning namespace is imported or updated — hence the
+ * explicit next step in the message, rather than a bare "not found".
+ */
+function missingCrossNsTargetWarning(
+  edge: CrossNsEdgeSnapshot,
+  intent: 'create' | 'remove',
+): string {
+  const what =
+    `Cross-namespace relationship '${edge.relationshipType}' → ` +
+    `'${edge.targetLabel || edge.targetStableId}' could not be ${intent === 'create' ? 'created' : 'removed'}: ` +
+    `no element with identifier '${edge.targetStableId}' exists in namespace '${edge.targetNamespace}'.`;
+  return intent === 'create'
+    ? `${what} Import or update '${edge.targetNamespace}' so the target element exists, then merge again.`
+    : `${what} It may already have been removed together with its target.`;
+}
+
+/** Warning text for a cross-namespace relationship whose *source* element is missing. */
+function missingCrossNsSourceWarning(
+  edge: CrossNsEdgeSnapshot,
+  targetNamespace: string,
+  intent: 'create' | 'remove',
+): string {
+  return (
+    `Cross-namespace relationship '${edge.relationshipType}' could not be ` +
+    `${intent === 'create' ? 'created' : 'removed'}: source element ` +
+    `'${edge.sourceLabel || edge.sourceStableId}' was not found in namespace '${targetNamespace}'.`
+  );
+}
+
 async function resolveTargetNodeId(
   dbModule: IDbModule,
   targetNamespace: string,

@@ -31,8 +31,9 @@ import {
   createCommandDispatcher,
   createConnectionService,
   createDbModule,
-  createImportLogger,
-  createImporterOrchestrationService,
+    createImporterOrchestrationService,
+  createFileLoggerFactory,
+  createAutoSaveCoordinator,
   createImporterRegistry,
   createInstanceService,
   createLoadGate,
@@ -103,13 +104,15 @@ function createRuntime(eventSink: (type: string, payload: unknown) => void) {
   };
 
   const dbModule = createDbModule(logger);
+  // Default sink: this dev server logs to the terminal it was started from.
+  const loggers = createFileLoggerFactory();
   const workspaceService = createWorkspaceService(
     dbModule,
-    (workingDir) => createPersistorService(dbModule, createImportLogger(path.join(workingDir, 'logs'))),
+    (workingDir) => createPersistorService(dbModule, loggers.workspace(workingDir)),
     (event: LoadProgressPushEvent) => eventSink('persistor.loadProgress', event),
     logger,
   );
-  const orchestration = createImporterOrchestrationService(dbModule);
+  const orchestration = createImporterOrchestrationService(dbModule, loggers);
   const registry = createImporterRegistry();
   const provisioningService = createProvisioningService(registry, dbModule);
   const profileRegistry = createProfileRegistry();
@@ -121,6 +124,14 @@ function createRuntime(eventSink: (type: string, payload: unknown) => void) {
   const mappingRegistry = createMappingRegistry();
   registerBuiltInMappings(mappingRegistry);
   const viewService = createViewService(mappingRegistry, dbModule, logger);
+  // Auto_Save — see the worker for the rationale. The dev server needs it too,
+  // since it serves the same renderer over HTTP.
+  const autoSave = createAutoSaveCoordinator({
+    dbModule,
+    workspaceService,
+    persistorFactory: (workingDir) => createPersistorService(dbModule, loggers.workspace(workingDir)),
+    logger,
+  });
   const dispatcher = createCommandDispatcher();
 
   const deps: ServiceDependencies = {
@@ -138,7 +149,8 @@ function createRuntime(eventSink: (type: string, payload: unknown) => void) {
     gitService,
     mappingRegistry,
     viewService,
-    createLogger: (workingDir: string) => createImportLogger(path.join(workingDir, 'logs')),
+    autoSave,
+    loggers,
     llmStreamSink: {
       send(_channel: string, payload: unknown): void {
         eventSink('llm.stream', payload as LlmStreamEvent);

@@ -25,12 +25,16 @@ import {
   CheckOutlined,
   SwapOutlined,
 } from '@ant-design/icons';
-import { useState } from 'react';
+import { createElement, useMemo, useState } from 'react';
+import type React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { getNodeDecoration } from '../namespace/editors/safety-analysis/config/nodeTypeConfig';
 import { useImpactReport } from '../../hooks/useImpactReport';
 import { api } from '../../api/riacore';
 import type { OrphanedEntry, ModifiedEntry, AffectedEdge } from '@riacore/app-contracts';
 import { invalidateAfterContentChange } from '../../hooks/workspaceCacheReset';
+import { toPropertyChanges } from './attributeChanges';
+import { ChangedAttributes } from './ChangedAttributes';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -39,27 +43,64 @@ interface ImpactReportPanelProps {
   runId: string;
 }
 
-/** Group entries by the authored namespaces found in their affectedEdges. */
+/**
+ * One entry as seen from a single authored namespace: the full entry (needed
+ * intact for reconnect, which rebuilds every cross-NS edge) plus only the
+ * edges that actually belong to that namespace.
+ */
+export interface NamespaceScopedEntry<T> {
+  entry: T;
+  edges: AffectedEdge[];
+}
+
+/**
+ * Group entries by the authored namespaces found in their affectedEdges.
+ *
+ * A boundary node can be referenced from several authored namespaces, so the
+ * same entry legitimately appears under more than one heading. The edge list is
+ * narrowed per namespace, so a group never shows affected nodes owned by a
+ * different namespace. Namespaces with no matching edges are dropped.
+ */
 export function groupByAuthoredNamespace<T extends { affectedEdges: AffectedEdge[] }>(
   entries: T[],
-): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
+): Map<string, NamespaceScopedEntry<T>[]> {
+  const grouped = new Map<string, NamespaceScopedEntry<T>[]>();
+  const push = (ns: string, scoped: NamespaceScopedEntry<T>) => {
+    const list = grouped.get(ns) ?? [];
+    list.push(scoped);
+    grouped.set(ns, list);
+  };
+
   for (const entry of entries) {
     const namespaces = new Set(entry.affectedEdges.map((e) => e.authoredNamespace));
     // If no affected edges, group under a fallback key
     if (namespaces.size === 0) {
-      const list = grouped.get('(unknown)') ?? [];
-      list.push(entry);
-      grouped.set('(unknown)', list);
+      push('(unknown)', { entry, edges: [] });
       continue;
     }
     for (const ns of namespaces) {
-      const list = grouped.get(ns) ?? [];
-      list.push(entry);
-      grouped.set(ns, list);
+      const edges = entry.affectedEdges.filter((e) => e.authoredNamespace === ns);
+      if (edges.length === 0) continue;
+      push(ns, { entry, edges });
     }
   }
   return grouped;
+}
+
+/**
+ * Concept icon matching the namespace tree, so an affected node is recognisable
+ * here by the same glyph and colour the user knows from the tree.
+ *
+ * The tree additionally tints a `malfunction` icon by ASIL
+ * (`NamespaceTreePanel.buildIcon`). The impact report carries no ASIL on
+ * `AffectedEdge`, so the concept's own colour is used — identical to how the tree
+ * renders a malfunction with no ASIL set.
+ */
+function conceptIcon(concept: string) {
+  const decoration = getNodeDecoration(concept);
+  return createElement(decoration.icon as React.ComponentType<{ style: React.CSSProperties }>, {
+    style: { color: decoration.color, marginRight: 4 },
+  });
 }
 
 /** Render the list of affected authored nodes for an entry. */
@@ -78,6 +119,7 @@ function AffectedNodesList({ edges }: { edges: AffectedEdge[] }) {
             marginInlineEnd: 0,
           }}
         >
+          {conceptIcon(edge.authoredConcept)}
           {edge.authoredName}{' '}
           <Text type="secondary" style={{ fontSize: 10 }}>
             ({edge.authoredConcept} · {edge.relationship})
@@ -151,7 +193,7 @@ function ModifiedActions(_props: { entry: ModifiedEntry }) {
 }
 
 /** Render a single orphaned entry with details and actions. */
-function OrphanedEntryItem({ entry }: { entry: OrphanedEntry }) {
+function OrphanedEntryItem({ entry, edges }: { entry: OrphanedEntry; edges: AffectedEdge[] }) {
   const { token } = useToken();
 
   return (
@@ -169,7 +211,7 @@ function OrphanedEntryItem({ entry }: { entry: OrphanedEntry }) {
           <Tag>{entry.concept}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="Affected nodes">
-          <AffectedNodesList edges={entry.affectedEdges} />
+          <AffectedNodesList edges={edges} />
         </Descriptions.Item>
         {entry.possibleRenameTarget && (
           <Descriptions.Item label="Rename hint">
@@ -190,8 +232,15 @@ function OrphanedEntryItem({ entry }: { entry: OrphanedEntry }) {
 }
 
 /** Render a single modified entry with details and actions. */
-function ModifiedEntryItem({ entry }: { entry: ModifiedEntry }) {
+function ModifiedEntryItem({ entry, edges }: { entry: ModifiedEntry; edges: AffectedEdge[] }) {
   const { token } = useToken();
+
+  // The report already carries the full before/after attribute maps; only the
+  // key names were ever shown. See attributeChanges.ts.
+  const changes = useMemo(
+    () => toPropertyChanges(entry.changedKeys, entry.oldAttributes, entry.newAttributes),
+    [entry],
+  );
 
   return (
     <div style={{ marginBottom: 12, padding: '8px 12px', background: token.colorBgLayout, borderRadius: token.borderRadius, overflow: 'hidden' }}>
@@ -204,15 +253,11 @@ function ModifiedEntryItem({ entry }: { entry: ModifiedEntry }) {
         <Descriptions.Item label="Path">
           <Text code style={{ fontSize: 12, wordBreak: 'break-all' }}>{entry.stablePath}</Text>
         </Descriptions.Item>
-        <Descriptions.Item label="Changed keys">
-          <Space size={4} wrap>
-            {entry.changedKeys.map((key) => (
-              <Tag key={key} color="orange" style={{ fontSize: 11 }}>{key}</Tag>
-            ))}
-          </Space>
+        <Descriptions.Item label={`Changes (${entry.changedKeys.length})`}>
+          <ChangedAttributes changes={changes} />
         </Descriptions.Item>
         <Descriptions.Item label="Affected nodes">
-          <AffectedNodesList edges={entry.affectedEdges} />
+          <AffectedNodesList edges={edges} />
         </Descriptions.Item>
       </Descriptions>
       <ModifiedActions entry={entry} />
@@ -341,8 +386,8 @@ export function ImpactReportPanel({ runId }: ImpactReportPanelProps) {
               <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
                 Authored namespace: <Tag color="blue">{ns}</Tag>
               </Text>
-              {entries.map((entry) => (
-                <OrphanedEntryItem key={entry.stablePath} entry={entry} />
+              {entries.map(({ entry, edges }) => (
+                <OrphanedEntryItem key={entry.stablePath} entry={entry} edges={edges} />
               ))}
             </div>
           ))}
@@ -367,8 +412,8 @@ export function ImpactReportPanel({ runId }: ImpactReportPanelProps) {
               <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
                 Authored namespace: <Tag color="blue">{ns}</Tag>
               </Text>
-              {entries.map((entry) => (
-                <ModifiedEntryItem key={entry.stablePath} entry={entry} />
+              {entries.map(({ entry, edges }) => (
+                <ModifiedEntryItem key={entry.stablePath} entry={entry} edges={edges} />
               ))}
             </div>
           ))}

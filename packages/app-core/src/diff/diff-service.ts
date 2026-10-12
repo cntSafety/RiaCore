@@ -494,7 +494,10 @@ function runDiff(
     result.modifiedNodes.length +
     result.addedEdges.length +
     result.deletedEdges.length +
-    result.modifiedEdges.length;
+    result.modifiedEdges.length +
+    result.addedCrossNsEdges.length +
+    result.deletedCrossNsEdges.length +
+    result.modifiedCrossNsEdges.length;
 
   const summary: DiffSummary = {
     diffId,

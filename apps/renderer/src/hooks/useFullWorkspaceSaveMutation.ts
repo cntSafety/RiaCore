@@ -17,11 +17,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
 import { api } from '../api/riacore';
 import { useWorkspaceState } from './useWorkspaceState';
 import { useLifecycleHudStore } from '../store/lifecycleHudStore';
+import { consumeSnapshotDriftError } from '../lib/snapshotDrift';
 
 /**
  * Full workspace save mutation — calls `persistor.store` for all namespaces.
@@ -33,6 +34,7 @@ export function useFullWorkspaceSaveMutation() {
   // (dark mode). The static `message` export renders outside the <App> provider.
   const { message } = App.useApp();
   const state = useWorkspaceState();
+  const queryClient = useQueryClient();
   const workingDir = state.phase !== 'no_workspace' ? state.workingDir : null;
 
   return useMutation({
@@ -53,6 +55,10 @@ export function useFullWorkspaceSaveMutation() {
       );
     },
     onError: (err) => {
+      // A refused save is a pending decision, not a failure — the drift dialog
+      // takes over. Must come first so the raw refusal never reaches a toast.
+      if (consumeSnapshotDriftError(err, queryClient, workingDir)) return;
+
       const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
       const msg = err instanceof Error ? err.message : String(err);
       useLifecycleHudStore.getState().logActivity(

@@ -25,6 +25,7 @@ import type {
 import type { createRegistry } from '../channel-registry.js';
 import { createConnectionService } from '../../namespaces/connection-service.js';
 import { createConnectionQueryService } from '../../namespaces/connection-query-service.js';
+import { openWorkspaceLogger } from '../utils/open-workspace-logger.js';
 
 /**
  * Register the manual namespace-connection channels:
@@ -63,21 +64,27 @@ export function registerNamespaceConnectionChannels(
     // DIAGNOSTIC (temporary): correlate connection-create timestamps against
     // persistor.store timestamps to investigate the intermittent
     // missing-connection-on-reopen bug. Remove once root-caused.
-    console.log('[DIAG] namespaceConnections:connect: requested', {
-      ts: new Date().toISOString(), sourceNamespace, targetNamespace,
-    });
-    const service = createConnectionService(deps.dbModule);
-    const result = await service.connect(sourceNamespace, targetNamespace);
-    if (!result.ok) {
-      throw new Error(result.error);
+    // Goes to the workspace log, not stdout — see CoreArchPrinciples.md.
+    const diag = await openWorkspaceLogger(deps);
+    try {
+      diag?.info('[DIAG] namespaceConnections:connect: requested', {
+        sourceNamespace, targetNamespace,
+      });
+      const service = createConnectionService(deps.dbModule);
+      const result = await service.connect(sourceNamespace, targetNamespace);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      diag?.info('[DIAG] namespaceConnections:connect: completed', {
+        sourceNamespace, targetNamespace,
+        alreadyConnected: result.data.alreadyConnected,
+      });
+      return result.data satisfies ConnectionEntry;
+    } finally {
+      diag?.close();
     }
-    console.log('[DIAG] namespaceConnections:connect: completed', {
-      ts: new Date().toISOString(), sourceNamespace, targetNamespace,
-      alreadyConnected: result.data.alreadyConnected,
-    });
-    return result.data satisfies ConnectionEntry;
   }, {
-    requiresWorkspace: true,
+    mutates: 'universe', requiresWorkspace: true,
     category: 'namespaceConnections',
   });
 
@@ -87,21 +94,26 @@ export function registerNamespaceConnectionChannels(
   registry.register('namespaceConnections:disconnect', async (payload, deps, _ctx) => {
     const { importedNamespace, authoredNamespace, deleteDependents } = payload;
     // DIAGNOSTIC (temporary): see namespaceConnections:connect above.
-    console.log('[DIAG] namespaceConnections:disconnect: requested', {
-      ts: new Date().toISOString(), importedNamespace, authoredNamespace, deleteDependents,
-    });
-    const service = createConnectionService(deps.dbModule);
-    const result = await service.disconnect(
-      importedNamespace,
-      authoredNamespace,
-      deleteDependents,
-    );
-    if (!result.ok) {
-      throw new Error(result.error);
+    const diag = await openWorkspaceLogger(deps);
+    try {
+      diag?.info('[DIAG] namespaceConnections:disconnect: requested', {
+        importedNamespace, authoredNamespace, deleteDependents,
+      });
+      const service = createConnectionService(deps.dbModule);
+      const result = await service.disconnect(
+        importedNamespace,
+        authoredNamespace,
+        deleteDependents,
+      );
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return result.data satisfies DisconnectResult;
+    } finally {
+      diag?.close();
     }
-    return result.data satisfies DisconnectResult;
   }, {
-    requiresWorkspace: true,
+    mutates: 'universe', requiresWorkspace: true,
     category: 'namespaceConnections',
   });
 

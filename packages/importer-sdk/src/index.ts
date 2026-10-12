@@ -79,6 +79,30 @@ export interface ImporterRuntime {
 // ImporterContext — everything an importer receives when executed
 // ---------------------------------------------------------------------------
 
+/**
+ * The logging channel an importer may write to.
+ *
+ * Structurally a subset of app-core's `ImportLogger`, so the orchestration
+ * service can pass its own logger straight through. Declared here rather than
+ * imported because importer-sdk sits below app-core: app-core depends on the
+ * SDK, not the other way round.
+ *
+ * `close()` is deliberately absent. The host owns the logger's lifecycle and
+ * closes it when the import finishes; an importer that could close it would
+ * silence the rest of the run.
+ *
+ * Importers had no logging channel at all before this existed, which left
+ * `console.log` as the only option — and that writes to stdout, which the CLI
+ * reserves for a command's JSON result. See CoreArchPrinciples.md
+ * §Logger infrastructure.
+ */
+export interface ImporterLogger {
+  info(msg: string, ctx?: Record<string, unknown>): void;
+  warn(msg: string, ctx?: Record<string, unknown>): void;
+  error(msg: string, ctx?: Record<string, unknown>): void;
+  debug(msg: string, ctx?: Record<string, unknown>): void;
+}
+
 export interface ImporterContext {
   session: ImportSession;
   config: unknown;
@@ -101,6 +125,15 @@ export interface ImporterContext {
   projectDir: string;
   writeService: IImportWriteService;
   onProgress: (progress: ImportProgress) => void;
+  /**
+   * Where to record diagnostics. Goes to the workspace log and to whichever
+   * sink the host chose — never to stdout.
+   *
+   * `onProgress` is for the UI's progress indicator and is not a logging
+   * channel; use this for anything a user or maintainer would want to read
+   * after the import has finished.
+   */
+  logger: ImporterLogger;
 }
 
 // ---------------------------------------------------------------------------

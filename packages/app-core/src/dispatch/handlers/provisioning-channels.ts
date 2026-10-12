@@ -43,7 +43,7 @@ export function registerProvisioningChannels(
     const { sourceId } = result.data;
     return sourceId;
   }, {
-    requiresWorkspace: true,
+    mutates: 'full', requiresWorkspace: true,
     category: 'provisioning',
   });
 

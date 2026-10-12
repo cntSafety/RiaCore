@@ -79,10 +79,11 @@ export {
 // for the first bundled module to import one of them. (The renderer carries its
 // own copy of `shouldBroadcast` in lib/cache-invalidation-subscriber.ts, which
 // is very likely a workaround for exactly that.)
+export { countDiffSummaryChanges, describeDiffSummaryCounts } from './diff-types.js';
 export { shouldBroadcast, broadcastPolicy } from './cache-invalidation.js';
 export { resolveAttributeKey, resolveAttributeLabel } from './check-types.js';
 export { IPC_CHANNELS } from './ipc.js';
-export { WorkspaceConfigSchema } from './workspace.js';
+export { WorkspaceConfigSchema, SNAPSHOT_DRIFT_CODE, isSnapshotDriftError } from './workspace.js';
 export type {
   GitSemanticDiffParams,
   GitSemanticDiffResult,

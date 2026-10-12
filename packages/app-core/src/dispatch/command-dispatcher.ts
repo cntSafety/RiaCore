@@ -244,6 +244,19 @@ export function createCommandDispatcher(): ICommandDispatcher {
         hiddenCache.clear();
       }
 
+      // Post-dispatch side effect: Auto_Save. A channel that declares `mutates`
+      // changed persisted content, so schedule a coalesced store. This is the
+      // single choke point that makes the DB a disposable cache — it replaces ~60
+      // renderer call sites that each had to remember to trigger a save, and it
+      // covers the CLI, which has no renderer at all.
+      //
+      // Deliberately after the handler resolved: a throwing handler must not
+      // schedule a save. Deliberately not awaited: `markDirty` only arms a timer,
+      // so the response is not delayed by the store.
+      if (entry.meta.mutates) {
+        deps.autoSave?.markDirty(entry.meta.mutates);
+      }
+
       return result;
     },
 

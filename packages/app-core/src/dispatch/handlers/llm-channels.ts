@@ -60,6 +60,7 @@ import { buildUserPrompt } from '../../llm/prompt-assembly.js';
 import { pushStreamEvent, consumePumpedStream } from '../../llm/llm-stream.js';
 import { createLanguageModel } from '../../llm/provider-factory.js';
 import { ReviewRunRegistry } from '../../llm/review-run-registry.js';
+import { openWorkspaceLogger } from '../utils/open-workspace-logger.js';
 
 /**
  * Register all four `llm.*` channels on the provided registry.
@@ -216,14 +217,19 @@ export function registerLlmChannels(
 
     // 4. Collect context elements
     let contextRefs: Awaited<ReturnType<typeof collectContextElements_swArxml>>;
+    const reviewLog = await openWorkspaceLogger(deps);
     try {
-      console.log(`[LLM] startReview: collecting context elements for profile=${profile}, nodeId=${payload.nodeId}, namespace=${payload.namespace}`);
+      reviewLog?.info('[LLM] startReview: collecting context elements', {
+        profile, nodeId: payload.nodeId, namespace: payload.namespace,
+      });
       contextRefs = profile === 'sw_arxml'
         ? await collectContextElements_swArxml(payload.nodeId, payload.namespace, deps)
         : await collectContextElements_sysml(payload.nodeId, payload.namespace, deps);
-      console.log(`[LLM] startReview: collected ${contextRefs.length} context elements`);
+      reviewLog?.info('[LLM] startReview: collected context elements', { count: contextRefs.length });
     } catch (err) {
-      console.error(`[LLM] startReview: context collection FAILED:`, err instanceof Error ? err.message : String(err));
+      reviewLog?.error('[LLM] startReview: context collection FAILED', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return emitErrorAndReturn(
         'unknown',
         `Failed to collect context elements: ${err instanceof Error ? err.message : String(err)}`,
@@ -384,12 +390,15 @@ export function registerLlmChannels(
 
     // 3. Collect context elements
     let contextRefs: Awaited<ReturnType<typeof collectContextElements_swArxml>>;
+    const dryRunLog = await openWorkspaceLogger(deps);
     try {
-      console.log(`[LLM DryRun] Collecting context elements for profile=${profile}, nodeId=${payload.nodeId}`);
+      dryRunLog?.info('[LLM DryRun] Collecting context elements', {
+        profile, nodeId: payload.nodeId,
+      });
       contextRefs = profile === 'sw_arxml'
         ? await collectContextElements_swArxml(payload.nodeId, payload.namespace, deps)
         : await collectContextElements_sysml(payload.nodeId, payload.namespace, deps);
-      console.log(`[LLM DryRun] Collected ${contextRefs.length} context elements`);
+      dryRunLog?.info('[LLM DryRun] Collected context elements', { count: contextRefs.length });
     } catch (err) {
       return { profile, contextElementCount: 0, systemPrompt: '', userPrompt: '', model_id: settings.model_id, region: settings.region, error: `Failed to collect context elements: ${err instanceof Error ? err.message : String(err)}` };
     }

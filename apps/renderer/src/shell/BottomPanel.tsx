@@ -39,6 +39,7 @@ import React, { useRef, useCallback, useEffect, useState } from 'react';
 import { Button, Tabs, theme, Alert, Spin } from 'antd';
 import {
   FolderOutlined,
+  BranchesOutlined,
   WarningOutlined,
   UpOutlined,
   DownOutlined,
@@ -55,6 +56,7 @@ import { useWorkspaceStore } from '../store/workspaceStore';
 import { usePersistorRepairMutation } from '../hooks/useRiacoreMutations';
 import { useOpenWorkspaceMutation } from '../hooks/useOpenWorkspaceMutation';
 import { api } from '../api/riacore';
+import { useWorkspaceGitBranch } from '../api/git-hooks';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
 
 const { useToken } = theme;
@@ -120,6 +122,7 @@ function CollapsedBar({ onOpenAppLogs }: StatusBarProps) {
   const { token } = useToken();
   const wsState   = useWorkspaceState();
   const chip      = useStatusChip();
+  const { branch } = useWorkspaceGitBranch();
   const { expanded, toggle, expand, setActiveTab } = useBottomPanelStore();
 
   const activeNamespace = useWorkspaceStore((s) => s.activeNamespace);
@@ -170,6 +173,23 @@ function CollapsedBar({ onOpenAppLogs }: StatusBarProps) {
         <FolderOutlined style={{ fontSize: 11 }} />
         {wsName}
       </span>
+
+      {branch && (
+        <span
+          style={{
+            ...chipStyle,
+            color: token.colorTextSecondary,
+            maxWidth: 180,
+            minWidth: 0,
+          }}
+          title={branch}
+        >
+          <BranchesOutlined style={{ fontSize: 11, flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {branch}
+          </span>
+        </span>
+      )}
 
       {/* Unified status chip */}
       <span

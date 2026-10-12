@@ -54,9 +54,11 @@ import {
   FileTextOutlined,
   MergeCellsOutlined,
   TagOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DiffSummary, MergeResult, SupervisedMergePrepareResult } from '@riacore/app-contracts';
+import { countDiffSummaryChanges } from '@riacore/app-contracts';
 import type { BranchInfo, TagInfo } from '@riacore/git-service';
 import { api } from '../api/riacore';
 import { useDiffStore } from '../store/diffStore';
@@ -65,6 +67,7 @@ import { useDiffResult, useExportDiffHtml } from '../hooks/useDiffMutations';
 import { DiffSummaryBar } from '../modules/diff/DiffSummaryBar';
 import { DiffResultView } from '../modules/diff/DiffResultView';
 import { invalidateAfterContentChange } from '../hooks/workspaceCacheReset';
+import { describeMergeResult, visibleCounters, warningsHeading } from './mergeResultPresentation';
 
 const { useToken } = theme;
 const { Text } = Typography;
@@ -192,13 +195,12 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
 
         // If the branch is identical to the live namespace, show an "up to date"
         // message instead of an empty diff review screen.
-        const totalChanges =
-          result.diffSummary.addedNodesCount +
-          result.diffSummary.deletedNodesCount +
-          result.diffSummary.modifiedNodesCount +
-          result.diffSummary.addedEdgesCount +
-          result.diffSummary.deletedEdgesCount +
-          result.diffSummary.modifiedEdgesCount;
+        //
+        // Must go through countDiffSummaryChanges: hand-summing the counts here
+        // previously omitted the three cross-namespace fields, so a branch that
+        // differed only in a cross-NS relationship (e.g. a malfunction's link to
+        // a safety goal in another namespace) was reported as "nothing to merge".
+        const totalChanges = countDiffSummaryChanges(result.diffSummary);
 
         if (totalChanges === 0) {
           // Nothing to merge — clean up the temp dir and go straight to up_to_date.
@@ -559,22 +561,63 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
       {/* ── Done phase ───────────────────────────────────────────────────── */}
       {phase.kind === 'done' && (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Alert
-            type="success"
-            showIcon
-            icon={<CheckCircleOutlined />}
-            message="Merge Applied"
-            description={
-              <span>
-                Changes from <strong>{selectedRef}</strong> have been merged into{' '}
-                <strong>{ns.name}</strong>.{' '}
-                Nodes added: {phase.mergeResult.nodesAdded},{' '}
-                nodes modified: {phase.mergeResult.nodesModified},{' '}
-                edges added: {phase.mergeResult.edgesAdded},{' '}
-                edges modified: {phase.mergeResult.edgesModified}.
-              </span>
-            }
-          />
+          {/*
+            Every decision here comes from describeMergeResult, so the rules are
+            unit-testable without driving the modal to the done phase. See
+            mergeResultPresentation.ts for the bug this replaced.
+          */}
+          {(() => {
+            const presentation = describeMergeResult(phase.mergeResult);
+            const clean = presentation.status === 'success';
+            const heading = warningsHeading(presentation);
+
+            return (
+              <>
+                <Alert
+                  type={presentation.status}
+                  showIcon
+                  icon={clean ? <CheckCircleOutlined /> : <WarningOutlined />}
+                  message={presentation.heading}
+                  description={
+                    <span>
+                      {clean ? (
+                        <>
+                          Changes from <strong>{selectedRef}</strong> have been merged into{' '}
+                          <strong>{ns.name}</strong>.
+                        </>
+                      ) : (
+                        <>
+                          Changes from <strong>{selectedRef}</strong> were merged into{' '}
+                          <strong>{ns.name}</strong>, but some could not be applied — see below.
+                        </>
+                      )}{' '}
+                      {visibleCounters(presentation)
+                        .map(c => `${c.label}: ${c.value}`)
+                        .join(', ')}
+                      .
+                    </span>
+                  }
+                />
+
+                {heading && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={heading}
+                    description={
+                      <ul style={{ margin: 0, paddingInlineStart: 20 }}>
+                        {presentation.warnings.map((warning, i) => (
+                          <li key={i} style={{ marginBottom: 4 }}>
+                            <Text style={{ fontSize: 12 }}>{warning}</Text>
+                          </li>
+                        ))}
+                      </ul>
+                    }
+                  />
+                )}
+              </>
+            );
+          })()}
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               type="primary"
@@ -718,8 +761,7 @@ export function SupervisedMergeFromBranchModal({ ns, workingDir, repoDir, open, 
             >
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {(() => {
-                  const total = phase.diffSummary.addedNodesCount + phase.diffSummary.deletedNodesCount + phase.diffSummary.modifiedNodesCount
-                    + phase.diffSummary.addedEdgesCount + phase.diffSummary.deletedEdgesCount + phase.diffSummary.modifiedEdgesCount;
+                  const total = countDiffSummaryChanges(phase.diffSummary);
                   if (selectedChangeIds.size === 0) return 'No items selected — nothing will be merged. Check items to include them.';
                   if (selectedChangeIds.size >= total) return `All ${total} change(s) selected — everything will be merged. Uncheck items to exclude them.`;
                   return `${selectedChangeIds.size} of ${total} change(s) selected — only checked items will be merged.`;

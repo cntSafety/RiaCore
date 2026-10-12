@@ -35,6 +35,42 @@ import type { WriteStream } from 'node:fs';
 
 type Level = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
+// ── Log sinks ─────────────────────────────────────────────────────────────────
+//
+// Every logger here writes each line twice: to its log file, and to a sink. The
+// sink is a constructor parameter rather than a hard-coded `console.*` call,
+// because where log lines belong is the host's decision, not this library's:
+//
+//   - Electron main / worker  → the console (`consoleLogSink`, the default)
+//   - CLI                     → stderr, so stdout stays pure JSON (`stderrLogSink`)
+//   - CLI under --quiet       → nowhere (`silentLogSink`); the file still gets it
+//
+// Passing the sink in keeps that choice explicit and per-logger. An earlier
+// attempt used a module-global `setLoggerConsoleSink`, which worked but made the
+// destination invisible at the call site and process-wide by nature.
+
+export type LogSink = (level: Level, line: string) => void;
+
+/** Default: mirror lines to the console, by level. DEBUG is file-only. */
+export const consoleLogSink: LogSink = (level, line) => {
+  if (level === 'ERROR') console.error(line);
+  else if (level === 'WARN') console.warn(line);
+  else if (level === 'INFO') console.log(line);
+};
+
+/**
+ * Send every level to stderr, leaving stdout free for machine-readable output.
+ *
+ * DEBUG is included: a host that asks for stderr wants the detail, and unlike
+ * the console sink there is no stdout to protect.
+ */
+export const stderrLogSink: LogSink = (_level, line) => {
+  process.stderr.write(line + '\n');
+};
+
+/** Discard console output entirely; the log file is unaffected. */
+export const silentLogSink: LogSink = () => { /* file only */ };
+
 const WORKSPACE_LOG_MAX_FILES = 30;
 const WORKSPACE_LOG_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -104,7 +140,7 @@ export interface ImportLogger {
   close(): void;
 }
 
-export function createImportLogger(logDir: string): ImportLogger {
+export function createImportLogger(logDir: string, sink: LogSink = consoleLogSink): ImportLogger {
   mkdirSync(logDir, { recursive: true });
 
   // This factory serves imports, persistence, merges, and other workspace
@@ -140,9 +176,7 @@ export function createImportLogger(logDir: string): ImportLogger {
         streamHealthy = false;
       }
     }
-    if (level === 'ERROR') console.error(line);
-    else if (level === 'WARN') console.warn(line);
-    else if (level === 'INFO') console.log(line);
+    sink(level, line);
   }
 
   write('INFO', 'Workspace operation logger started', { logFile: logPath });
@@ -156,7 +190,7 @@ export function createImportLogger(logDir: string): ImportLogger {
   };
 }
 
-export function createDiffMergeLogger(logDir: string): ImportLogger {
+export function createDiffMergeLogger(logDir: string, sink: LogSink = consoleLogSink): ImportLogger {
   mkdirSync(logDir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
@@ -184,10 +218,7 @@ export function createDiffMergeLogger(logDir: string): ImportLogger {
         streamHealthy = false;
       }
     }
-    if (level === 'ERROR') console.error(line);
-    else if (level === 'WARN') console.warn(line);
-    else if (level === 'INFO') console.log(line);
-    // DEBUG: file only — no stdout
+    sink(level, line);
   }
 
   write('INFO', 'Diff/merge logger started', { logFile: logPath });
@@ -206,7 +237,7 @@ export interface PersistorLoadLogger extends ImportLogger {
   readonly logFile: string;
 }
 
-export function createPersistorLoadLogger(logDir: string): PersistorLoadLogger {
+export function createPersistorLoadLogger(logDir: string, sink: LogSink = consoleLogSink): PersistorLoadLogger {
   mkdirSync(logDir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
@@ -234,10 +265,7 @@ export function createPersistorLoadLogger(logDir: string): PersistorLoadLogger {
         streamHealthy = false;
       }
     }
-    if (level === 'ERROR') console.error(line);
-    else if (level === 'WARN') console.warn(line);
-    else if (level === 'INFO') console.log(line);
-    // DEBUG: file only — no stdout
+    sink(level, line);
   }
 
   write('INFO', 'Persistor load logger started', { logFile });
@@ -249,5 +277,79 @@ export function createPersistorLoadLogger(logDir: string): PersistorLoadLogger {
     error: (msg, ctx) => write('ERROR', msg, ctx),
     debug: (msg, ctx) => write('DEBUG', msg, ctx),
     close: () => { if (streamHealthy) { streamHealthy = false; stream.end(); } },
+  };
+}
+
+// ── Logger factory ────────────────────────────────────────────────────────────
+
+/**
+ * The set of loggers a host supplies to app-core.
+ *
+ * WHY THIS IS AN INTERFACE ON ServiceDependencies
+ *
+ * Dispatch handlers and services need loggers, but they must not choose where
+ * the lines go — that depends on the host. Before this existed, the only seam
+ * was a single optional `deps.createLogger` covering the workspace logger, so:
+ *
+ *   - `createDiffMergeLogger` had no seam at all and was constructed directly in
+ *     five handlers, writing to stdout no matter what the host wanted;
+ *   - every call site that did use the seam carried a fallback
+ *     (`deps.createLogger ? … : createImportLogger(…)`), and the fallback is
+ *     what defeated injection — `orchestration-service.ts` and two sites in
+ *     `import-channels.ts` skipped the seam entirely and nothing caught it;
+ *   - `persistor-channels.ts` returned a *different kind* of logger depending on
+ *     whether the host had injected one: `deps.createLogger(dir)` gave the
+ *     workspace logger while the fallback gave the persistor-load logger, so
+ *     which file a load was traced into depended on the host.
+ *
+ * Hence three named methods and a required field on ServiceDependencies: asking
+ * for the wrong logger, or forgetting to route one, is now a type error.
+ *
+ * Methods take `workingDir`, not a log directory — appending `logs` is this
+ * factory's job. Previously the injected form took `workingDir` while every
+ * fallback wrote `path.join(workingDir, 'logs')` at the call site, which meant
+ * two conventions for one concept and an easy mistake to make.
+ */
+export interface LoggerFactory {
+  /** General workspace operations: imports, namespace edits, save/export. */
+  workspace(workingDir: string): ImportLogger;
+  /** Diff and merge operations; own timestamped file. */
+  diffMerge(workingDir: string): ImportLogger;
+  /** Detailed persistor load tracing; own timestamped file. */
+  persistorLoad(workingDir: string): PersistorLoadLogger;
+}
+
+/**
+ * The standard file-backed factory.
+ *
+ * @param sink where to mirror lines besides the log file. Defaults to the
+ *   console, which is what Electron main, the worker, and tests want. The CLI
+ *   passes `stderrLogSink` (or `silentLogSink` under `--quiet`) so that stdout
+ *   carries only the command's JSON result.
+ */
+export function createFileLoggerFactory(sink: LogSink = consoleLogSink): LoggerFactory {
+  const logDir = (workingDir: string): string => resolve(workingDir, 'logs');
+  return {
+    workspace: (workingDir) => createImportLogger(logDir(workingDir), sink),
+    diffMerge: (workingDir) => createDiffMergeLogger(logDir(workingDir), sink),
+    persistorLoad: (workingDir) => createPersistorLoadLogger(logDir(workingDir), sink),
+  };
+}
+
+/**
+ * A factory whose loggers discard everything — no file, no console.
+ *
+ * For tests and any host that genuinely wants logging off. Prefer this over
+ * `createFileLoggerFactory(silentLogSink)` when you do not want log files
+ * created as a side effect of constructing dependencies.
+ */
+export function createNullLoggerFactory(): LoggerFactory {
+  const noop: ImportLogger = {
+    info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, close: () => {},
+  };
+  return {
+    workspace: () => noop,
+    diffMerge: () => noop,
+    persistorLoad: () => ({ ...noop, logFile: '' }),
   };
 }

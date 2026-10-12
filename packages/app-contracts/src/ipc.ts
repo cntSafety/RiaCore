@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { WorkspaceConfig, WorkspaceInfo, WorkspaceStatus } from './workspace.js';
+import { WorkspaceConfig, WorkspaceInfo, WorkspaceStatus, SnapshotDriftInfo } from './workspace.js';
 import { DbStatus } from './db.js';
 import { RunImportParams, ImportRunSummary, ImportRunStatus, ImportSourceInfo, ImportConfigView, SaveImportConfigParams, RunFromSourceParams, ExportConfigParams, ImportConfigParams, ArxmlTreeData, ImpactReport, OrphanedEntry, OrphanedEntryWithContext, ListOrphanedEntriesParams, UpdateFromImportedBranchResult } from './import-types.js';
 import { PersistorStoreParams, PersistorLoadParams, PersistorRepairParams, StoreResult, LoadResult, RepairManifestResult, DbStats, NamespaceStats } from './persistor-types.js';
@@ -113,6 +113,20 @@ export interface IpcChannelMap {
    * Used by the UI to decide whether to show a "Create new workspace?" confirmation.
    */
   'workspace.probe': { input: { workingDir: string }; output: { hasDb: boolean; hasRiaData: boolean } };
+
+  /**
+   * Has `ria-data/` changed since this database was loaded?
+   *
+   * Cheap by construction: reads `ria-data/manifest.json` (which already carries
+   * the hashes) and compares against the baseline stamped at open / after the
+   * last store. No file hashing.
+   *
+   * Deliberately its own channel rather than a field on `workspace.getStatus`:
+   * the load gate calls `getStatus()` on every dispatched channel, so putting a
+   * manifest read there would add a JSON parse to every IPC call.
+   * See docs/coreSpecs/RiaDataChangeDetection.md §4.3.
+   */
+  'workspace.getSnapshotDrift': { input: void; output: SnapshotDriftInfo };
   'db.getStatus': { input: void; output: DbStatus };
   'db.getStats': { input: void; output: DbStats };
   'db.getNamespaceStats': { input: void; output: NamespaceStats[] };
@@ -665,6 +679,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'workspace.getStatus',
   'workspace.close',
   'workspace.probe',
+  'workspace.getSnapshotDrift',
   'db.getStatus',
   'db.getStats',
   'db.getNamespaceStats',

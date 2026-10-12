@@ -55,9 +55,7 @@ export function registerPersistorChannels(
     const wsResult = await deps.workspaceService.open({ workingDir: payload.workingDir });
     if (!wsResult.ok) throw new Error(wsResult.error);
 
-    const logger = deps.createLogger
-      ? deps.createLogger(payload.workingDir)
-      : createImportLogger(path.join(payload.workingDir, 'logs'));
+    const logger = deps.loggers.workspace(payload.workingDir);
 
     try {
       const svc = createPersistorService(deps.dbModule, logger);
@@ -88,7 +86,7 @@ export function registerPersistorChannels(
       logger.close();
     }
   }, {
-    requiresWorkspace: true,
+    mutates: 'self', requiresWorkspace: true,
     category: 'persistor',
   });
 
@@ -97,9 +95,11 @@ export function registerPersistorChannels(
     const wsResult = await deps.workspaceService.open({ workingDir: payload.workingDir });
     if (!wsResult.ok) throw new Error(wsResult.error);
 
-    const logger = deps.createLogger
-      ? deps.createLogger(payload.workingDir)
-      : createPersistorLoadLogger(path.join(payload.workingDir, 'logs'));
+    // persistorLoad, unconditionally. The previous ternary handed back the
+    // *workspace* logger when a host had injected one and the persistor-load
+    // logger otherwise, so whether a load was traced into its own
+    // persistor-load-*.log depended on the host rather than on the operation.
+    const logger = deps.loggers.persistorLoad(payload.workingDir);
 
     try {
       const svc = createPersistorService(deps.dbModule, logger);
@@ -115,7 +115,7 @@ export function registerPersistorChannels(
       logger.close();
     }
   }, {
-    requiresWorkspace: true,
+    mutates: 'self', requiresWorkspace: true,
     category: 'persistor',
   });
 
@@ -124,9 +124,7 @@ export function registerPersistorChannels(
     // manifest.json). It does NOT need an open DB — in fact, the primary use case
     // is recovering from a hash mismatch that prevents workspace.open() from
     // succeeding. Opening the workspace here would fail for the same reason.
-    const logger = deps.createLogger
-      ? deps.createLogger(payload.workingDir)
-      : createImportLogger(path.join(payload.workingDir, 'logs'));
+    const logger = deps.loggers.workspace(payload.workingDir);
     const startedAt = Date.now();
 
     try {
@@ -143,7 +141,7 @@ export function registerPersistorChannels(
       logger.close();
     }
   }, {
-    requiresWorkspace: false,
+    mutates: 'self', requiresWorkspace: false,
     category: 'persistor',
   });
 }

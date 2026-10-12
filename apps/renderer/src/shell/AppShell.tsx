@@ -21,6 +21,7 @@ import { Layout, theme } from 'antd';
 import { TopBar } from './TopBar';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { BottomPanel } from './BottomPanel';
+import { SnapshotDriftDialog } from './SnapshotDriftDialog';
 import { useWorkspaceStore, type NamespaceContext } from '../store/workspaceStore';
 
 const { Sider, Content } = Layout;
@@ -85,6 +86,12 @@ export function AppShell({
       </Layout>
 
       <BottomPanel onOpenAppLogs={onOpenAppLogs} onOpenWorkspaceLogs={onOpenWorkspaceLogs} />
+
+      {/* Store-or-Load decision when ria-data/ changed under the open workspace
+          (git checkout, pull, reset, another window, the CLI). Mounted at shell
+          level because it is not scoped to any view, and self-hides when the
+          drift query reports nothing. See docs/coreSpecs/RiaDataChangeDetection.md */}
+      <SnapshotDriftDialog />
     </Layout>
   );
 }

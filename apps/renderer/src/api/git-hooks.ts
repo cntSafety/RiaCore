@@ -43,6 +43,8 @@ export const gitKeys = {
   config: (repoDir: string) => ['git', 'config', repoDir] as const,
   version: () => ['git', 'version'] as const,
   workspaceConfig: (workingDir: string) => ['git', 'workspaceConfig', workingDir] as const,
+  workspaceRepoRoot: (workingDir: string) => ['git', 'workspaceRepoRoot', workingDir] as const,
+  workspaceBranch: (repoDir: string) => ['git', 'workspaceBranch', repoDir] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -118,6 +120,25 @@ export function useWorkspaceGitConfig() {
     queryFn: () => api.git.getWorkspaceConfig(workingDir),
     enabled: !!workingDir,
   });
+}
+
+/** Resolves the containing Git repository and its checked-out branch for the active workspace. */
+export function useWorkspaceGitBranch() {
+  const workingDir = useWorkspaceStore(s => s.workingDir ?? '');
+  const repoRootQuery = useQuery({
+    queryKey: gitKeys.workspaceRepoRoot(workingDir),
+    queryFn: () => api.git.getRepoRoot(workingDir),
+    enabled: !!workingDir,
+  });
+  const repoDir = repoRootQuery.data ?? '';
+  const branchQuery = useQuery({
+    queryKey: gitKeys.workspaceBranch(repoDir),
+    queryFn: () => api.git.getCurrentBranch(repoDir),
+    enabled: !!repoDir,
+    refetchInterval: 5000,
+  });
+
+  return { repoDir: repoDir || null, branch: branchQuery.data ?? null };
 }
 
 // ---------------------------------------------------------------------------

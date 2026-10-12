@@ -99,7 +99,7 @@ export function registerDbChannels(
   registry.register('db.close', async (_payload, deps, _ctx) => {
     return deps.dbModule.close();
   }, {
-    requiresWorkspace: true,
+    mutates: 'self', requiresWorkspace: true,
     category: 'db',
   });
 

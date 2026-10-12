@@ -35,6 +35,7 @@ import type {
   WorkspaceConfig,
   WorkspaceInfo,
   WorkspaceStatus,
+  SnapshotDriftInfo,
   DbStatus,
   DbStats,
   NamespaceStats,
@@ -175,6 +176,8 @@ declare global {
         close(): Promise<void>;
         /** Read-only probe — no side effects. Returns whether a DB and/or ria-data exist in the directory. */
         probe(workingDir: string): Promise<{ hasDb: boolean; hasRiaData: boolean }>;
+        /** Has ria-data/ changed since the DB was loaded? Throws on error. */
+        getSnapshotDrift(): Promise<SnapshotDriftInfo>;
         openLogsDirectory(workingDir: string): Promise<string>;
         getRecent(): Promise<string[]>;
         addRecent(workingDir: string): Promise<string[]>;

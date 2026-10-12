@@ -25,6 +25,8 @@ import { useWorkspaceStore } from '../store/workspaceStore';
 import { useImportRunStore } from '../store/importRunStore';
 import { useJobStore } from '../store/jobStore';
 import { useDiffStore } from '../store/diffStore';
+import { useLlmReviewModalStore } from '../store/llmReviewModalStore';
+import { useAutoSaveStatusStore } from '../store/autoSaveStatusStore';
 import { resetWorkspaceScopedQueries } from './workspaceCacheReset';
 
 /** Indeterminate spinner phase shown while the close is in flight. */
@@ -100,6 +102,12 @@ export function useCloseWorkspaceMutation() {
       useImportRunStore.getState().reset();
       useJobStore.getState().resetAll();
       useDiffStore.getState().reset();
+      // Holds a node id + namespace and keeps a modal open while non-null, so it
+      // would otherwise outlive the workspace those ids belong to.
+      useLlmReviewModalStore.getState().closeModal();
+      // A refused save may have left the indicator on 'needs_decision'; the
+      // decision is moot once the workspace is closed.
+      useAutoSaveStatusStore.getState().reset();
 
       // Remove ALL workspace-scoped TanStack Query caches so no stale data from
       // the just-closed workspace lingers (removal, not invalidation, so

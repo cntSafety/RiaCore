@@ -33,7 +33,8 @@ import * as fs from 'node:fs';
 import type { createRegistry } from '../channel-registry.js';
 import { createDiffService } from '../../diff/diff-service.js';
 import { createUnionMergeService } from '../../namespaces/union-merge-service.js';
-import { createPersistorService, createImportLogger, createDiffMergeLogger } from '../../index.js';
+import { countDiffSummaryChanges, describeDiffSummaryCounts } from '@riacore/app-contracts';
+import { createPersistorService } from '../../index.js';
 import { runStoreCommitHook } from '../../git/store-commit-hook.js';
 
 export function registerNamespaceMergeChannels(
@@ -51,13 +52,11 @@ export function registerNamespaceMergeChannels(
       workingDir,
     });
 
-    const inSync =
-      summary.addedNodesCount === 0 &&
-      summary.deletedNodesCount === 0 &&
-      summary.modifiedNodesCount === 0 &&
-      summary.addedEdgesCount === 0 &&
-      summary.deletedEdgesCount === 0 &&
-      summary.modifiedEdgesCount === 0;
+    // countDiffSummaryChanges, not a hand-written field list: the previous
+    // check omitted the three cross-namespace counts, so a namespace that
+    // differed from its snapshot only in a cross-NS relationship reported
+    // itself as in sync.
+    const inSync = countDiffSummaryChanges(summary) === 0;
 
     return {
       namespace,
@@ -92,9 +91,7 @@ export function registerNamespaceMergeChannels(
     });
 
     // Persist the updated DB state to ria-data/ files (Bug 4 fix)
-    const logger = deps.createLogger
-      ? deps.createLogger(workingDir)
-      : createImportLogger(path.join(workingDir, 'logs'));
+    const logger = deps.loggers.workspace(workingDir);
     const storeResult = await createPersistorService(deps.dbModule, logger).store({ workingDir });
 
     // Run the auto-commit hook so that the files written here are staged
@@ -108,13 +105,13 @@ export function registerNamespaceMergeChannels(
     }
 
     return mergeResult;
-  }, { requiresWorkspace: true, category: 'namespaces' });
+  }, { mutates: 'self', requiresWorkspace: true, category: 'namespaces' });
 
   // ── namespace.supervisedMergeFromBranchPrepare ────────────────────────────
   registry.register('namespace.supervisedMergeFromBranchPrepare', async (
     { namespace, repoDir, branchRef, workingDir }, deps, ctx,
   ) => {
-    const logger = createDiffMergeLogger(path.join(workingDir, 'logs'));
+    const logger = deps.loggers.diffMerge(workingDir);
     logger.info('namespace.supervisedMergeFromBranchPrepare: start', {
       namespace,
       repoDir,
@@ -129,6 +126,22 @@ export function registerNamespaceMergeChannels(
 
     let tempDir: string | undefined;
     try {
+      const workspaceRiaDataPath = path.relative(
+        path.resolve(repoDir),
+        path.resolve(workingDir, 'ria-data'),
+      );
+      if (
+        workspaceRiaDataPath === '' ||
+        workspaceRiaDataPath.startsWith(`..${path.sep}`) ||
+        workspaceRiaDataPath === '..' ||
+        path.isAbsolute(workspaceRiaDataPath)
+      ) {
+        throw new Error(
+          `Workspace '${workingDir}' must be inside repository '${repoDir}' to merge from a branch.`,
+        );
+      }
+      const archivePath = workspaceRiaDataPath.split(path.sep).join('/');
+
       // Step 2: resolve commit hash for the branch ref
       const commitResult = await deps.gitService.getCommit(repoDir, branchRef);
       if (!commitResult.ok) {
@@ -156,7 +169,7 @@ export function registerNamespaceMergeChannels(
       const checkoutResult = await deps.gitService.checkoutCommitToTemp({
         repoDir,
         commitHash: commit.hash,
-        paths: ['ria-data'],
+        paths: [archivePath],
       });
       if (!checkoutResult.ok) {
         const errKind = checkoutResult.error.kind;
@@ -189,40 +202,36 @@ export function registerNamespaceMergeChannels(
         liveIsLeft: true,
         workingDir,
       });
-      const hasLiveChanges =
-        syncSummary.addedNodesCount + syncSummary.deletedNodesCount +
-        syncSummary.modifiedNodesCount > 0;
+      // Counts every change kind, including edges and cross-namespace edges.
+      // The previous node-only check missed unsaved relationship edits, so the
+      // user was not warned that the diff below compares the branch against a
+      // stale snapshot rather than what they see on screen.
+      const hasLiveChanges = countDiffSummaryChanges(syncSummary) > 0;
       const syncWarning = hasLiveChanges
         ? `Namespace '${namespace}' has unsaved live changes. The diff shows the branch content against the last stored snapshot.`
         : undefined;
       logger.info('namespace.supervisedMergeFromBranchPrepare: sync check result', {
         hasLiveChanges,
-        addedNodes: syncSummary.addedNodesCount,
-        deletedNodes: syncSummary.deletedNodesCount,
-        modifiedNodes: syncSummary.modifiedNodesCount,
+        ...describeDiffSummaryCounts(syncSummary),
         syncWarning: syncWarning ?? null,
       });
 
       // Step 5: branch diff — diff live namespace vs branch snapshot
       logger.info('namespace.supervisedMergeFromBranchPrepare: computing branch diff', {
         namespace,
-        branchSnapshotDir: path.join(tempDir, 'ria-data'),
+        branchSnapshotDir: path.join(tempDir, workspaceRiaDataPath),
       });
       const { summary, result } = await diffSvc.diffHybrid({
         liveNs: namespace,
-        snapshotDir: path.join(tempDir, 'ria-data'),
+        snapshotDir: path.join(tempDir, workspaceRiaDataPath),
         snapshotNs: namespace,
         liveIsLeft: true,
         workingDir,
       });
       logger.info('namespace.supervisedMergeFromBranchPrepare: branch diff complete', {
         diffId: summary.diffId,
-        addedNodes: summary.addedNodesCount,
-        deletedNodes: summary.deletedNodesCount,
-        modifiedNodes: summary.modifiedNodesCount,
-        addedEdges: summary.addedEdgesCount,
-        deletedEdges: summary.deletedEdgesCount,
-        modifiedEdges: summary.modifiedEdgesCount,
+        ...describeDiffSummaryCounts(summary),
+        totalChanges: countDiffSummaryChanges(summary),
       });
 
       // Step 6: cache the diff result
@@ -250,7 +259,7 @@ export function registerNamespaceMergeChannels(
       }
       throw err;
     }
-  }, { requiresWorkspace: true, category: 'namespaces' });
+  }, { mutates: 'self', requiresWorkspace: true, category: 'namespaces' });
 
   // ── namespace.supervisedMergeCleanup ──────────────────────────────────────
   registry.register('namespace.supervisedMergeCleanup', async ({ tempDir }) => {
@@ -261,7 +270,7 @@ export function registerNamespaceMergeChannels(
       if (code !== 'ENOENT') throw err;
       // ENOENT = already deleted, succeed silently
     }
-  }, { requiresWorkspace: false, category: 'namespaces' });
+  }, { mutates: 'self', requiresWorkspace: false, category: 'namespaces' });
 
   // ── namespace.applyUnionMergeFromBranch ───────────────────────────────────
   registry.register('namespace.applyUnionMergeFromBranch', async ({ namespace, workingDir, repoDir, branchRef }, deps, _ctx) => {
@@ -321,9 +330,7 @@ export function registerNamespaceMergeChannels(
       });
 
       // Persist the updated DB state to ria-data/ files (Bug 4 fix)
-      const logger = deps.createLogger
-        ? deps.createLogger(workingDir)
-        : createImportLogger(path.join(workingDir, 'logs'));
+      const logger = deps.loggers.workspace(workingDir);
       const storeResult = await createPersistorService(deps.dbModule, logger).store({ workingDir });
 
       // Run the auto-commit hook so that the files written here are staged
@@ -345,5 +352,5 @@ export function registerNamespaceMergeChannels(
         // Ignore cleanup errors — temp dir will be cleaned up by OS eventually
       }
     }
-  }, { requiresWorkspace: true, category: 'namespaces' });
+  }, { mutates: 'self', requiresWorkspace: true, category: 'namespaces' });
 }

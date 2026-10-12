@@ -67,7 +67,7 @@ export function createArxmlRuntime(): ImporterRuntime {
         current: 0,
         total: files.length,
       });
-      const model = parseArxmlProject(scanDir, config.elements, files);
+      const model = parseArxmlProject(scanDir, config.elements, files, context.logger);
 
       // Skipped elements are logged via the orchestration service logger
       // Phase 3: Map model to concept batches and write

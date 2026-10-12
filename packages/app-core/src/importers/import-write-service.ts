@@ -512,6 +512,15 @@ export async function createOrReplaceNamespace(
   // We capture these connections so they can be restored after the namespace
   // node is recreated.
   let connectedAuthoredNamespaces: string[] = [];
+  // Views sourcing this namespace (RIA_UNIV_VIEW_SOURCE, view → namespace) are
+  // attached to the namespace node too, so the same DETACH DELETE silently drops
+  // them. The View node itself survives — it is a separate node with its own
+  // VIEW_DEFINEDBY/VIEW_CATEGORIZEDBY edges — which leaves a view with zero
+  // sources: an invalid state per docs/coreSpecs/RiaViews.md, and one that makes
+  // the next store write a RIA_UNIV_View.json listing a view whose
+  // RIA_UNIV_VIEW_SOURCE.json row has vanished. Snapshot and restore, exactly as
+  // for the connection edges.
+  let sourcingViews: string[] = [];
   if (exists) {
     const connRows = await db.runQuery(
       `MATCH (i:RIA_UNIV_Namespace {name: $ns})-[:RIA_UNIV_NamespaceConnection]->(a:RIA_UNIV_Namespace)
@@ -521,6 +530,16 @@ export async function createOrReplaceNamespace(
     connectedAuthoredNamespaces = connRows
       .map(r => String(r.authoredNamespace ?? ''))
       .filter(n => n.length > 0);
+
+    const viewRows = await db.runQuery(
+      `MATCH (v:RIA_UNIV_View)-[:RIA_UNIV_VIEW_SOURCE]->(i:RIA_UNIV_Namespace {name: $ns})
+       RETURN DISTINCT v.name AS viewName`,
+      { ns: params.namespace },
+    );
+    sourcingViews = viewRows
+      .map(r => String(r.viewName ?? ''))
+      .filter(n => n.length > 0);
+
     await replaceNamespace(db, params.namespace);
   }
 
@@ -581,6 +600,25 @@ export async function createOrReplaceNamespace(
         );
       }
     }
+  }
+
+  // Restore RIA_UNIV_VIEW_SOURCE edges (view → this namespace) removed by the
+  // DETACH DELETE. A view may source several namespaces, so re-create only the
+  // edge to this one; the rest were never attached to the deleted node.
+  for (const viewName of sourcingViews) {
+    // The view may have been deleted in the meantime (e.g. a cascade from another
+    // namespace deletion), so guard rather than assume it is still there.
+    const viewRows = await db.runQuery(
+      `MATCH (v:RIA_UNIV_View {name: $name}) RETURN count(v) AS cnt`,
+      { name: viewName },
+    );
+    if (Number(viewRows[0]?.cnt ?? 0) === 0) continue;
+
+    await db.runQuery(
+      `MATCH (v:RIA_UNIV_View), (ns:RIA_UNIV_Namespace)
+       WHERE v.name = '${e(viewName)}' AND ns.name = '${e(params.namespace)}'
+       CREATE (v)-[:RIA_UNIV_VIEW_SOURCE]->(ns)`,
+    );
   }
 }
 

@@ -104,6 +104,52 @@ RETURN owner.node_id AS owner_node_id, port.node_id AS port_node_id,
        port.concept AS port_concept
 `;
 
+// ── Note / tag host resolution ───────────────────────────────────────────────
+
+/** Concepts that are ports rather than components, across ARXML and SysML v2. */
+const PORT_CONCEPTS = new Set(['p_port', 'r_port', 'pr_port', 'port_usage']);
+
+/**
+ * Cypher fragment that resolves the owning component of a note/tag host element
+ * when that host is a port. Shared by the note and tag discovery queries so both
+ * redirect ports identically. Expects the host to be bound as `host`.
+ */
+const RECORD_HOST_OWNER_MATCH = `
+OPTIONAL MATCH (owner:RIA_UNIV_ConceptInstance)-[op:RIA_UNIV_INSTANCE_REL]->(host)
+WHERE op.relationship IN ['has_p_port', 'has_r_port', 'has_pr_port']
+   OR (op.relationship = 'owns_element' AND host.concept = 'port_usage')`;
+
+/** The host/owner columns that `resolveRecordHost` reads. */
+const RECORD_HOST_RETURN = `host.node_id AS host_node_id, host.concept AS host_concept,
+       host.attributes AS host_attrs, owner.node_id AS owner_node_id`;
+
+/**
+ * Decide which component a note or tag should be reported under.
+ *
+ * A note or tag authored on a component belongs to that component. One authored
+ * on a *port* belongs to the component that owns the port — the report is
+ * component-centric, and a port is not a component. `appliesTo` carries the port
+ * name so the reader still knows which port the record refers to.
+ *
+ * Returns a null `componentNodeId` when the record cannot be attributed to any
+ * component (an orphaned port with no owner edge). The caller then leaves it for
+ * the unassigned bucket, which is honest: inventing a component from the port is
+ * what produced spurious `r_port` "components" in earlier exports.
+ */
+function resolveRecordHost(
+  row: Record<string, unknown>,
+): { componentNodeId: number | null; appliesTo?: string } {
+  const hostNodeId = row.host_node_id != null ? Number(row.host_node_id) : null;
+  if (!PORT_CONCEPTS.has(str(row.host_concept))) return { componentNodeId: hostNodeId };
+
+  const hostAttrs = parseAttrs(row.host_attrs);
+  const appliesTo =
+    str(hostAttrs.short_name || hostAttrs.has_name || hostAttrs.name || hostAttrs.declared_name) ||
+    (hostNodeId != null ? `port_${hostNodeId}` : undefined);
+  const ownerNodeId = row.owner_node_id != null ? Number(row.owner_node_id) : null;
+  return { componentNodeId: ownerNodeId, appliesTo };
+}
+
 // ── Main aggregation function ────────────────────────────────────────────────
 
 /**
@@ -352,44 +398,81 @@ export async function aggregateExportData(
   // For functional MFs: occurs_at → SWC directly
   // For port MFs: occurs_at → port → owner SWC
 
-  // Collect all unique component node IDs referenced by malfunctions
+  // Collect all unique component node IDs referenced by malfunctions.
+  //
+  // A port-level malfunction is reported under the component that owns the port.
+  // When the owner edge is missing the port is NOT used as a stand-in component:
+  // that would emit a component document whose "Component Type" is `r_port`. Such
+  // a malfunction falls through to the unassigned bucket instead, keeping its
+  // `portName` so the port it occurs at is still on the record.
   const componentNodeIds = new Set<number>();
   for (const fm of rawMalfunctions) {
     const oa = occursAtByFm.get(fm.node_id);
     if (!oa) continue;
-    if (oa.portKind) {
-      // Port-level MF: owner is the SWC
-      if (oa.ownerNodeId != null) componentNodeIds.add(oa.ownerNodeId);
-      else if (oa.targetNodeId != null) componentNodeIds.add(oa.targetNodeId);
-    } else {
-      // Functional MF: target is the SWC
-      if (oa.targetNodeId != null) componentNodeIds.add(oa.targetNodeId);
-    }
+    const compId = oa.portKind ? oa.ownerNodeId : oa.targetNodeId;
+    if (compId != null) componentNodeIds.add(compId);
   }
 
   // Discover notes before components, including elements without malfunctions.
-  // Notes can be attached to components via cross-namespace has_notes edges
+  // Notes can be attached to components via cross-namespace has_notes edges.
+  //
+  // `host` is whatever element the note or tag was authored on. It is NOT
+  // necessarily a component: the UI lets a user tag or annotate a port too, and
+  // a port must be reported under the component that owns it rather than
+  // promoted to a component of its own. `resolveRecordHost` below does that
+  // redirection; without it, a single tag on a port produces a bogus
+  // top-level component document whose "Component Type" is `r_port`.
   const notesByComponent = new Map<number, ConceptInstanceData[]>();
   const noteById = new Map(rawSafetyNotes.map(note => [note.node_id, note]));
+  /** Port name for a note/tag authored on a port, keyed by record node ID. */
+  const appliesToByRecord = new Map<number, string>();
   if (rawSafetyNotes.length > 0) {
     const noteCompRows = await required(
       'notes-component link query',
       () => db.runQuery(
-        `MATCH (comp:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(note:RIA_UNIV_ConceptInstance)
+        `MATCH (host:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(note:RIA_UNIV_ConceptInstance)
          WHERE note.namespace = $namespace AND r.relationship = 'has_notes' AND note.concept = 'safety_note'
-         RETURN comp.node_id AS comp_node_id, note.node_id AS note_node_id,
-                note.namespace AS note_namespace, note.concept AS note_concept,
-                note.metamodel AS note_metamodel, note.attributes AS note_attributes`,
+         ${RECORD_HOST_OWNER_MATCH}
+         RETURN note.node_id AS record_node_id, ${RECORD_HOST_RETURN}`,
         { namespace },
       ),
     );
     for (const row of noteCompRows) {
-      const compId = Number(row.comp_node_id);
-      const note = noteById.get(Number(row.note_node_id));
+      const note = noteById.get(Number(row.record_node_id));
       if (!note) continue;
-      componentNodeIds.add(compId);
-      if (!notesByComponent.has(compId)) notesByComponent.set(compId, []);
-      notesByComponent.get(compId)!.push(note);
+      const host = resolveRecordHost(row);
+      if (host.appliesTo) appliesToByRecord.set(note.node_id, host.appliesTo);
+      if (host.componentNodeId == null) continue;
+      componentNodeIds.add(host.componentNodeId);
+      if (!notesByComponent.has(host.componentNodeId)) notesByComponent.set(host.componentNodeId, []);
+      notesByComponent.get(host.componentNodeId)!.push(note);
+    }
+  }
+
+  // Notes authored on a malfunction live in the same namespace as the
+  // malfunction, so their has_notes edge is an intra-namespace relationship
+  // instance and the cross-namespace query above cannot see it. They belong to
+  // the malfunction they annotate, not to the owning component's note list —
+  // reading them here is what keeps them out of the unassigned bucket.
+  const notesByMalfunction = new Map<number, ConceptInstanceData[]>();
+  if (rawSafetyNotes.length > 0) {
+    const rows = await required(
+      'notes-malfunction link query',
+      () => db.runQuery(
+        `MATCH (ri:RIA_UNIV_RelationshipInstance)
+         WHERE ri.namespace = $namespace AND ri.relationship = 'has_notes'
+         RETURN ri.source_node_id AS host_node_id, ri.target_node_id AS record_node_id`,
+        { namespace },
+      ),
+    );
+    for (const row of rows) {
+      const note = noteById.get(Number(row.record_node_id));
+      const hostId = Number(row.host_node_id);
+      // Only malfunctions are reported per-record; any other intra-namespace
+      // host has no place to render a note, so leave it for the unassigned bucket.
+      if (!note || !malfunctionIds.has(hostId)) continue;
+      if (!notesByMalfunction.has(hostId)) notesByMalfunction.set(hostId, []);
+      notesByMalfunction.get(hostId)!.push(note);
     }
   }
 
@@ -398,17 +481,23 @@ export async function aggregateExportData(
   const tagsByComponent = new Map<number, TagExportData[]>();
   if (rawAllTags.length > 0) {
     const rows = await required('tags-component link query', () => db.runQuery(
-      `MATCH (comp:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tag:RIA_UNIV_ConceptInstance)
+      `MATCH (host:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tag:RIA_UNIV_ConceptInstance)
        WHERE tag.namespace = $namespace AND tag.concept = 'tag' AND r.relationship = 'has_tag'
-       RETURN comp.node_id AS comp_node_id, tag.node_id AS tag_node_id`, { namespace },
+       ${RECORD_HOST_OWNER_MATCH}
+       RETURN tag.node_id AS record_node_id, ${RECORD_HOST_RETURN}`, { namespace },
     ));
     for (const row of rows) {
-      const compId = Number(row.comp_node_id);
-      const tag = tagById.get(Number(row.tag_node_id));
+      const tag = tagById.get(Number(row.record_node_id));
       if (!tag) continue;
-      componentNodeIds.add(compId);
-      if (!tagsByComponent.has(compId)) tagsByComponent.set(compId, []);
-      tagsByComponent.get(compId)!.push(tag);
+      const host = resolveRecordHost(row);
+      if (host.componentNodeId == null) continue;
+      componentNodeIds.add(host.componentNodeId);
+      if (!tagsByComponent.has(host.componentNodeId)) tagsByComponent.set(host.componentNodeId, []);
+      // A tag definition is shared across every element that uses it, so the
+      // port qualifier has to live on this assignment, not on `tagById`.
+      tagsByComponent.get(host.componentNodeId)!.push(
+        host.appliesTo ? { ...tag, appliesTo: host.appliesTo } : tag,
+      );
     }
   }
 
@@ -624,7 +713,7 @@ export async function aggregateExportData(
   }
   for (const em of enrichedMalfunctions) {
     const oa = em.oa;
-    const compId = (oa?.portKind ? oa.ownerNodeId ?? oa.targetNodeId : oa?.targetNodeId) ?? UNASSIGNED;
+    const compId = (oa?.portKind ? oa.ownerNodeId : oa?.targetNodeId) ?? UNASSIGNED;
     const acc = getOrCreateAccumulator(compId);
     if (!acc) throw new Error(`Cannot resolve export element ${compId} for malfunction ${em.raw.node_id}`);
     if (oa?.portKind === 'receiver') acc.receiverPortMFs.push(em);
@@ -633,7 +722,10 @@ export async function aggregateExportData(
   }
   const usedTasks = new Set(enrichedMalfunctions.flatMap(em => tasksByFm.get(em.raw.node_id) ?? []));
   const usedRequirements = new Set(enrichedMalfunctions.flatMap(em => em.linkedReqIds));
-  const usedNotes = new Set([...notesByComponent.values()].flat().map(note => note.node_id));
+  // A note reported under its malfunction is linked, not unassigned.
+  const usedNotes = new Set(
+    [...notesByComponent.values(), ...notesByMalfunction.values()].flat().map(note => note.node_id),
+  );
   const usedTags = new Set([...tagsByComponent.values()].flat().map(tag => tag.nodeId));
   const unlinkedTasks = rawSafetyTasks.filter(task => !usedTasks.has(task.node_id));
   const unlinkedRequirements = rawRequirements.filter(req => !usedRequirements.has(req.node_id));
@@ -765,6 +857,13 @@ export async function aggregateExportData(
         reqIds,
         riskRating,
         reviews: reviewsByFm.get(em.raw.node_id) ?? [],
+        // IDs are scoped to the malfunction's own ID so they stay unique and
+        // still carry the component prefix every other exported ID uses.
+        safetyNotes: (notesByMalfunction.get(em.raw.node_id) ?? []).map((note, i) => ({
+          nodeId: note.node_id,
+          id: `${mfId}_SN_${pad(i + 1, 2)}`,
+          noteText: str(parseAttrs(note.attributes).note_text),
+        })),
         functionalInsufficiencies: functionalInsufficiencies.byFm.get(em.raw.node_id) ?? [],
         triggeringConditions: triggeringConditions.byFm.get(em.raw.node_id) ?? [],
       };
@@ -854,6 +953,7 @@ export async function aggregateExportData(
         nodeId: note.node_id,
         id: noteSphinxId,
         noteText: str(attrs.note_text),
+        appliesTo: appliesToByRecord.get(note.node_id),
       });
     }
 
