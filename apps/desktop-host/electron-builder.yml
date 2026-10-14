@@ -2,6 +2,7 @@ appId: com.riacore.desktop
 productName: RiaCore
 asar: false
 npmRebuild: false
+afterPack: ./scripts/after-pack.cjs
 directories:
   app: .release/app
   output: dist-electron
@@ -13,6 +14,12 @@ files:
   - '!node_modules/dugite/git'
   - '!node_modules/dugite/git/**/*'
 extraResources:
+  - from: .release/licenses
+    to: licenses
+  - from: .release/licenses/RiaCore-LICENSE.txt
+    to: LICENSE
+  - from: ../../THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
   - from: .release/sidecar
     to: node-sidecar
     filter:
@@ -32,6 +39,7 @@ win:
         - x64
 mac:
   icon: build/icons/mac/icon.icns
+  minimumSystemVersion: '26.0.0'
   # Sign the complete app without an Apple certificate, locally and on CI.
   # electron-builder's default entitlements allow JIT and disable library
   # validation so ad-hoc-signed Electron and the Node sidecar can run.

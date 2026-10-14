@@ -1,0 +1,63 @@
+RiaCore — Additional Native Runtime Notices
+==========================================
+
+This file covers the Microsoft Visual C++ runtime and OpenSSL libraries added
+by RiaCore's desktop packaging. Components retain their respective licenses;
+RiaCore's own license does not replace or grant additional rights to them.
+The complete generated release inventory and copied upstream license/notice
+texts are in licenses/inventory.json and licenses/THIRD-PARTY-LICENSES.txt.
+RiaCore's public-release GPL text is supplied as LICENSE and
+licenses/RiaCore-LICENSE.txt. Source locations are in licenses/SOURCE-CODE.txt.
+
+Microsoft Visual C++ Runtime (Windows packages)
+----------------------------------------------
+
+Copyright Microsoft Corporation. All rights reserved.
+
+The Windows installer and portable package include the x64 release runtime
+DLLs required by the native database module. They are provided as unmodified
+Microsoft redistributable components, not as RiaCore-authored or open-source
+software. Their applicable Microsoft license terms continue to apply.
+
+The exact DLL names, redistributable source version and SHA-256 checksums are
+recorded in node-sidecar/vc-runtime.json alongside the bundled node.exe.
+
+Redistribution is subject to the license terms of the Visual Studio or Build
+Tools installation supplying the files. The distributor must have a validly
+licensed installation and use the approved release redistributables. Debug
+and preview components must not be redistributed under this packaging path.
+This notice does not itself grant Microsoft's redistribution rights.
+
+Official license directory:
+https://visualstudio.microsoft.com/license-terms/
+
+Microsoft's redistribution guidance:
+https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
+
+Distributable code lists:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution
+
+OpenSSL 3 (macOS packages)
+-------------------------
+
+Copyright The OpenSSL Project Authors and other contributors.
+
+The macOS package includes libssl.3.dylib and libcrypto.3.dylib used by the
+native database module. OpenSSL 3 is licensed under the Apache License,
+Version 2.0. The license text, author information and any upstream NOTICE
+file accompanying the build are supplied in native-libs/ as
+OpenSSL-LICENSE.txt, OpenSSL-AUTHORS.md and, when present,
+OpenSSL-NOTICE.txt.
+
+RiaCore packaging changes Mach-O library identifiers and load paths to resolve
+dependencies within the app bundle, may remove unused architecture slices,
+and signs the packaged libraries. These packaging changes do not change the
+OpenSSL source code. This paragraph records that the distributed binaries
+have been modified during packaging.
+
+Official licensing information:
+https://openssl-library.org/source/license/index.html
+
+License:
+https://www.apache.org/licenses/LICENSE-2.0

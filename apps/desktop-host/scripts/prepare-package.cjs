@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { stageReleaseLicenses } = require('./license-bundle.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const desktopHostDir = path.resolve(__dirname, '..');
@@ -406,6 +407,7 @@ function writeAppPackageJson(topLevel) {
     private: true,
     main: 'dist/main.js',
     productName: 'RiaCore',
+    license: 'GPL-3.0-or-later',
     description: 'RiaCore desktop application',
     author: 'RiaCore',
     dependencies,
@@ -651,6 +653,7 @@ function main() {
   writeAppPackageJson(topLevel);
   copySidecarNode();
   copyPortableGit();
+  stageReleaseLicenses();
 
   assertPackagedPathLengths();
 

@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  buffers: npm:node-buffers@0.1.1
   '@fast-csv/format>@types/node': 20.19.37
   '@fast-csv/parse>@types/node': 20.19.37
 
@@ -1784,10 +1785,6 @@ packages:
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
 
-  buffers@0.1.1:
-    resolution: {integrity: sha512-9q/rDEGSb/Qsvv2qvzIzdluL5k7AaJOTrw23z9reQthrbF7is4CtlT0DXyO1oei2DCp4uojjzQ7igaSHp1kAEQ==}
-    engines: {node: '>=0.2.0'}
-
   builder-util-runtime@9.7.0:
     resolution: {integrity: sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw==}
     engines: {node: '>=12.0.0'}
@@ -3008,6 +3005,10 @@ packages:
 
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
+
+  node-buffers@0.1.1:
+    resolution: {integrity: sha512-8iL8aZ4ojwdcSy0wAb8feieTOjqZBFRTjbYH0WAYbZxj1twaFM6Vv9BKECyqBfgRy+Q3V8VRbxsTW5sJNDlHTQ==}
+    engines: {node: '>=0.2.0'}
 
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
@@ -5317,7 +5318,7 @@ snapshots:
 
   binary@0.3.0:
     dependencies:
-      buffers: 0.1.1
+      buffers: node-buffers@0.1.1
       chainsaw: 0.1.0
 
   bl@4.1.0:
@@ -5358,8 +5359,6 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
-
-  buffers@0.1.1: {}
 
   builder-util-runtime@9.7.0:
     dependencies:
@@ -6868,6 +6867,8 @@ snapshots:
   node-api-version@0.2.1:
     dependencies:
       semver: 7.8.5
+
+  node-buffers@0.1.1: {}
 
   node-domexception@1.0.0: {}
 

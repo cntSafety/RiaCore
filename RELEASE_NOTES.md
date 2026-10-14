@@ -1,1 +1,1 @@
-Improved the diff / merge feature.
+Packaging was improved.

@@ -1,0 +1,1275 @@
+{
+  "dugiteTag": "v2.53.0-4",
+  "gitCommit": "67ad42147a7acc2af6074753ebd03d904476118f",
+  "gitForWindowsTag": "v2.53.0.windows.4",
+  "gcmVersion": "2.9.0",
+  "dotnetVersion": "10.0.9",
+  "goModules": [
+    [
+      "github.com/alexbrainman/sspi",
+      "v0.0.0-20210105120005-909beea2cc74"
+    ],
+    [
+      "github.com/avast/retry-go",
+      "v2.4.2+incompatible"
+    ],
+    [
+      "github.com/davecgh/go-spew",
+      "v1.1.1"
+    ],
+    [
+      "github.com/dpotapov/go-spnego",
+      "v0.0.0-20210315154721-298b63a54430"
+    ],
+    [
+      "github.com/git-lfs/git-lfs/v3",
+      "(devel)"
+    ],
+    [
+      "github.com/git-lfs/gitobj/v2",
+      "v2.1.1"
+    ],
+    [
+      "github.com/git-lfs/go-netrc",
+      "v0.0.0-20250218165306-ba0029b43d11"
+    ],
+    [
+      "github.com/git-lfs/pktline",
+      "v0.0.0-20210330133718-06e9096e2825"
+    ],
+    [
+      "github.com/git-lfs/wildmatch/v2",
+      "v2.0.1"
+    ],
+    [
+      "github.com/golang/groupcache",
+      "v0.0.0-20241129210726-2c02b8208cf8"
+    ],
+    [
+      "github.com/hashicorp/go-uuid",
+      "v1.0.2"
+    ],
+    [
+      "github.com/inconshreveable/mousetrap",
+      "v1.1.0"
+    ],
+    [
+      "github.com/jcmturner/aescts/v2",
+      "v2.0.0"
+    ],
+    [
+      "github.com/jcmturner/dnsutils/v2",
+      "v2.0.0"
+    ],
+    [
+      "github.com/jcmturner/gofork",
+      "v1.0.0"
+    ],
+    [
+      "github.com/jcmturner/goidentity/v6",
+      "v6.0.1"
+    ],
+    [
+      "github.com/jcmturner/gokrb5/v8",
+      "v8.4.2"
+    ],
+    [
+      "github.com/jcmturner/rpc/v2",
+      "v2.0.3"
+    ],
+    [
+      "github.com/jmhodges/clock",
+      "v1.2.0"
+    ],
+    [
+      "github.com/leonelquinteros/gotext",
+      "v1.5.0"
+    ],
+    [
+      "github.com/mattn/go-isatty",
+      "v0.0.4"
+    ],
+    [
+      "github.com/olekukonko/ts",
+      "v0.0.0-20171002115256-78ecb04241c0"
+    ],
+    [
+      "github.com/pkg/errors",
+      "v0.0.0-20170505043639-c605e284fe17"
+    ],
+    [
+      "github.com/pmezard/go-difflib",
+      "v1.0.0"
+    ],
+    [
+      "github.com/rubyist/tracerx",
+      "v0.0.0-20170927163412-787959303086"
+    ],
+    [
+      "github.com/spf13/cobra",
+      "v1.7.0"
+    ],
+    [
+      "github.com/spf13/pflag",
+      "v1.0.5"
+    ],
+    [
+      "github.com/ssgelm/cookiejarparser",
+      "v1.0.1"
+    ],
+    [
+      "github.com/stretchr/testify",
+      "v1.6.1"
+    ],
+    [
+      "github.com/xeipuuv/gojsonpointer",
+      "v0.0.0-20180127040702-4e3ac2762d5f"
+    ],
+    [
+      "github.com/xeipuuv/gojsonreference",
+      "v0.0.0-20180127040603-bd5ef7bd5415"
+    ],
+    [
+      "github.com/xeipuuv/gojsonschema",
+      "v0.0.0-20170210233622-6b67b3fab74d"
+    ],
+    [
+      "golang.org/x/crypto",
+      "v0.36.0"
+    ],
+    [
+      "golang.org/x/net",
+      "v0.38.0"
+    ],
+    [
+      "golang.org/x/sync",
+      "v0.12.0"
+    ],
+    [
+      "golang.org/x/sys",
+      "v0.31.0"
+    ],
+    [
+      "golang.org/x/text",
+      "v0.23.0"
+    ],
+    [
+      "gopkg.in/yaml.v3",
+      "v3.0.1"
+    ]
+  ],
+  "nugetPackages": [
+    [
+      "Avalonia",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Desktop",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.FreeDesktop",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Native",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Remote.Protocol",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Skia",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Themes.Fluent",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.Win32",
+      "11.1.3"
+    ],
+    [
+      "Avalonia.X11",
+      "11.1.3"
+    ],
+    [
+      "HarfBuzzSharp",
+      "7.3.0.2"
+    ],
+    [
+      "HarfBuzzSharp.NativeAssets.macOS",
+      "7.3.0.2"
+    ],
+    [
+      "MicroCom.Runtime",
+      "0.11.0"
+    ],
+    [
+      "Microsoft.Identity.Client",
+      "4.84.2"
+    ],
+    [
+      "Microsoft.Identity.Client.Extensions.Msal",
+      "4.84.2"
+    ],
+    [
+      "Microsoft.IdentityModel.Abstractions",
+      "8.14.0"
+    ],
+    [
+      "SkiaSharp",
+      "2.88.8"
+    ],
+    [
+      "SkiaSharp.NativeAssets.macOS",
+      "2.88.8"
+    ],
+    [
+      "System.CommandLine",
+      "2.0.0-beta4.22272.1"
+    ],
+    [
+      "System.Security.Cryptography.ProtectedData",
+      "4.5.0"
+    ],
+    [
+      "Tmds.DBus.Protocol",
+      "0.16.0"
+    ],
+    [
+      "HarfBuzzSharp.NativeAssets.Linux",
+      "7.3.0.2"
+    ],
+    [
+      "HarfBuzzSharp.NativeAssets.Win32",
+      "7.3.0.2"
+    ],
+    [
+      "SkiaSharp.NativeAssets.Linux",
+      "2.88.8"
+    ],
+    [
+      "SkiaSharp.NativeAssets.Win32",
+      "2.88.8"
+    ]
+  ],
+  "components": [
+    {
+      "id": ".NET-runtime@10.0.9",
+      "license": "MIT AND bundled third-party licenses",
+      "source": "https://github.com/dotnet/runtime/tree/v10.0.9",
+      "files": [
+        {
+          "path": "native-dotnet.txt",
+          "sha256": "cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310"
+        },
+        {
+          "path": "native-dotnet-notices.txt",
+          "sha256": "66f1d4e44973185519bb4aa8a9718eb22fc7af2cc532e3ae9cfc4c127ee7fc54"
+        }
+      ]
+    },
+    {
+      "id": "Git-Credential-Manager@2.9.0",
+      "license": "MIT",
+      "source": "https://github.com/git-ecosystem/git-credential-manager/tree/v2.9.0",
+      "files": [
+        {
+          "path": "native-gcm.txt",
+          "sha256": "b47f1a8a744ecdc7a3da35804f88552805d33f51a726b87a2105acdfae406b07"
+        }
+      ]
+    },
+    {
+      "id": "Git-LFS@3.7.1",
+      "license": "MIT AND BSD-3-Clause",
+      "source": "https://github.com/git-lfs/git-lfs/tree/v3.7.1",
+      "files": [
+        {
+          "path": "native-git-lfs.txt",
+          "sha256": "4fae9062ab5cdd5fb15486b728534d8aded8b4ae9d84b6d66a956f5162c366b6"
+        }
+      ]
+    },
+    {
+      "id": "Git@2.53.0",
+      "license": "GPL-2.0",
+      "source": "https://github.com/git/git/tree/67ad42147a7acc2af6074753ebd03d904476118f",
+      "files": [
+        {
+          "path": "native-git.txt",
+          "sha256": "5b2198d1645f767585e8a88ac0499b04472164c0d2da22e75ecf97ef443ab32e"
+        }
+      ]
+    },
+    {
+      "id": "Go-runtime@1.25.1",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/golang/go/tree/go1.25.1",
+      "files": [
+        {
+          "path": "native-go-LICENSE.txt",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "native-go-PATENTS.txt",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "id": "LadybugDB-native-source-licenses@0.19.1",
+      "license": "MIT AND upstream bundled third-party licenses",
+      "source": "https://github.com/LadybugDB/ladybug/tree/v0.19.1",
+      "files": [
+        {
+          "path": "ladybug-c693279643b8-LICENSE",
+          "sha256": "c7ac924b150ec18a9d9c7136a8cd533bcfa33109ea7b4b7712ea952a245186b0",
+          "upstreamPath": "LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/LICENSE"
+        },
+        {
+          "path": "ladybug-d33bc7f49691-LICENSE",
+          "sha256": "905b4e0855ce0a277d19bb7c00d61e3d46598eb62446a95fd8c8c6cccad53d86",
+          "upstreamPath": "third_party/alp/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/alp/LICENSE"
+        },
+        {
+          "path": "ladybug-a0d9d36b4baf-LICENSE",
+          "sha256": "1e41356f47b55ce77df2f639d1fdf3c2d50587f857307144e9aa547618974b32",
+          "upstreamPath": "third_party/antlr4_runtime/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/antlr4_runtime/LICENSE"
+        },
+        {
+          "path": "ladybug-4d8651ec2750-LICENSE",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+          "upstreamPath": "third_party/brotli/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/brotli/LICENSE"
+        },
+        {
+          "path": "ladybug-bf5e50e4b57a-LICENSE",
+          "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0",
+          "upstreamPath": "third_party/cppjieba/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/cppjieba/LICENSE"
+        },
+        {
+          "path": "ladybug-87eb8c6e3492-LICENSE",
+          "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0",
+          "upstreamPath": "third_party/cppjieba/deps/limonp/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/cppjieba/deps/limonp/LICENSE"
+        },
+        {
+          "path": "ladybug-b7a562ecd984-LICENSE",
+          "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+          "upstreamPath": "third_party/fastpfor/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/fastpfor/LICENSE"
+        },
+        {
+          "path": "ladybug-8ecc72c0aa9a-LICENSE",
+          "sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c",
+          "upstreamPath": "third_party/lz4/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/lz4/LICENSE"
+        },
+        {
+          "path": "ladybug-d76f713aab78-LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstreamPath": "third_party/mbedtls/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/mbedtls/LICENSE"
+        },
+        {
+          "path": "ladybug-df69431cc619-LICENSE",
+          "sha256": "0115478d567121238cf6cc1c0c361926cf07a49d9e4c9e66da97fac6a01646b3",
+          "upstreamPath": "third_party/miniz/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/miniz/LICENSE"
+        },
+        {
+          "path": "ladybug-bd0c277c1c1b-LICENSE",
+          "sha256": "70b6a7d630fae9f49643f9b16bee42a2feda68301f9c14470e7fb5ad0599bb9f",
+          "upstreamPath": "third_party/parquet/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/parquet/LICENSE"
+        },
+        {
+          "path": "ladybug-607ea7eda58c-LICENSE",
+          "sha256": "3febf788fd814bf1f350db169bdc51b28ff7e7596ff1f09cc0181e4fde42b480",
+          "upstreamPath": "third_party/pcg/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/pcg/LICENSE"
+        },
+        {
+          "path": "ladybug-8a1bb57a8869-LICENSE",
+          "sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb",
+          "upstreamPath": "third_party/pybind11/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/pybind11/LICENSE"
+        },
+        {
+          "path": "ladybug-671a775a698f-LICENSE",
+          "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+          "upstreamPath": "third_party/re2/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/re2/LICENSE"
+        },
+        {
+          "path": "ladybug-a3603bd9f9ca-LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "upstreamPath": "third_party/simsimd/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/simsimd/LICENSE"
+        },
+        {
+          "path": "ladybug-ee02d51bc7b1-LICENSE",
+          "sha256": "55172044f7e241207117448a4d9d6ba1d0925c8ad66b5d4c08c70adfa9cc3de6",
+          "upstreamPath": "third_party/snappy/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/snappy/LICENSE"
+        },
+        {
+          "path": "ladybug-6eb7130964be-LICENSE",
+          "sha256": "a7241a379cb98d37788f82c2fc2e484c3ae85dae881fd3406f0637644850926f",
+          "upstreamPath": "third_party/spdlog/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/spdlog/LICENSE"
+        },
+        {
+          "path": "ladybug-81340f71e64e-LICENSE",
+          "sha256": "e0c9f11d6dfec641f099a0a153358b8b9954a86a61c64c89db3a75d5d282852a",
+          "upstreamPath": "third_party/taywee_args/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/taywee_args/LICENSE"
+        },
+        {
+          "path": "ladybug-942b29cc0647-LICENSE",
+          "sha256": "23df881cec3192d1f4474633c14eb2ec30a45b84f8daeb82b9de5d2bd3ac8218",
+          "upstreamPath": "third_party/thrift/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/thrift/LICENSE"
+        },
+        {
+          "path": "ladybug-a5e7b50d6cf3-LICENSE.md",
+          "sha256": "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256",
+          "upstreamPath": "third_party/utf8proc/LICENSE.md",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/utf8proc/LICENSE.md"
+        },
+        {
+          "path": "ladybug-bfe90cecfdfb-LICENSE",
+          "sha256": "45e384d3d52c73cba3a64d6e6c25d47cd738cd8a55c30629e3201046eda62947",
+          "upstreamPath": "third_party/yyjson/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/yyjson/LICENSE"
+        },
+        {
+          "path": "ladybug-3979187560b6-LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+          "upstreamPath": "third_party/zstd/LICENSE",
+          "source": "https://raw.githubusercontent.com/LadybugDB/ladybug/v0.19.1/third_party/zstd/LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/alexbrainman/sspi@v0.0.0-20210105120005-909beea2cc74",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/alexbrainman/sspi/@v/v0.0.0-20210105120005-909beea2cc74.zip",
+      "files": [
+        {
+          "path": "native-ebe97086ac9c-LICENSE",
+          "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/avast/retry-go@v2.4.2+incompatible",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/avast/retry-go/@v/v2.4.2+incompatible.zip",
+      "files": [
+        {
+          "path": "native-c78631659730-LICENSE",
+          "sha256": "2fc9e8c374cacc9c0e0c7214911cc2f90f1ade45af2cef646460de278042d930"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/davecgh/go-spew@v1.1.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/davecgh/go-spew/@v/v1.1.1.zip",
+      "files": [
+        {
+          "path": "native-5b8631587092-LICENSE",
+          "sha256": "1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/dpotapov/go-spnego@v0.0.0-20210315154721-298b63a54430",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/dpotapov/go-spnego/@v/v0.0.0-20210315154721-298b63a54430.zip",
+      "files": [
+        {
+          "path": "native-af48640037b0-LICENSE",
+          "sha256": "74e635bc5b835cbac01362dc69dcf5d84c4e8f69aa4207ed7301b1a9f238214c"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/git-lfs/gitobj/v2@v2.1.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/git-lfs/gitobj/v2/@v/v2.1.1.zip",
+      "files": [
+        {
+          "path": "native-7ec2546a338f-LICENSE.md",
+          "sha256": "49e9a8cbb772da6682b4613a36aa17934fa949e5e30e58b3f0f24d6ea3265c69"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/git-lfs/go-netrc@v0.0.0-20250218165306-ba0029b43d11",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/git-lfs/go-netrc/@v/v0.0.0-20250218165306-ba0029b43d11.zip",
+      "files": [
+        {
+          "path": "native-7e651ddf3ba9-LICENSE",
+          "sha256": "c3880f30146c2ad11c85a243858027e8a1d61e241e53284d7cef3aa9452f16df"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/git-lfs/pktline@v0.0.0-20210330133718-06e9096e2825",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/git-lfs/pktline/@v/v0.0.0-20210330133718-06e9096e2825.zip",
+      "files": [
+        {
+          "path": "native-78e0a837f5c7-LICENSE.md",
+          "sha256": "09c5e6c848991ae3a8884ce05457102a474e00ca237b92745eef333a9b0e813a"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/git-lfs/wildmatch/v2@v2.0.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/git-lfs/wildmatch/v2/@v/v2.0.1.zip",
+      "files": [
+        {
+          "path": "native-4d057feb2123-LICENSE.md",
+          "sha256": "34ece938f52ea9d3b706a780db52c14ba4544c2e0fdbccaa2701283000182c23"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/golang/groupcache@v0.0.0-20241129210726-2c02b8208cf8",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/golang/groupcache/@v/v0.0.0-20241129210726-2c02b8208cf8.zip",
+      "files": [
+        {
+          "path": "native-426d7ef74a00-LICENSE",
+          "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/hashicorp/go-uuid@v1.0.2",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/hashicorp/go-uuid/@v/v1.0.2.zip",
+      "files": [
+        {
+          "path": "native-9780aaf84e2f-LICENSE",
+          "sha256": "60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/inconshreveable/mousetrap@v1.1.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/inconshreveable/mousetrap/@v/v1.1.0.zip",
+      "files": [
+        {
+          "path": "native-ccac86414d9a-LICENSE",
+          "sha256": "4819582701f150b28a563a6cd8ed0bf5a754e3c67b90ad38d78ba4131bf77795"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/aescts/v2@v2.0.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/aescts/v2/@v/v2.0.0.zip",
+      "files": [
+        {
+          "path": "native-ce383fe7200d-LICENSE",
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/dnsutils/v2@v2.0.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/dnsutils/v2/@v/v2.0.0.zip",
+      "files": [
+        {
+          "path": "native-7476234026c1-LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/gofork@v1.0.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/gofork/@v/v1.0.0.zip",
+      "files": [
+        {
+          "path": "native-db868039e1d8-LICENSE",
+          "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/goidentity/v6@v6.0.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/goidentity/v6/@v/v6.0.1.zip",
+      "files": [
+        {
+          "path": "native-8e098556aa5b-LICENSE",
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/gokrb5/v8@v8.4.2",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/gokrb5/v8/@v/v8.4.2.zip",
+      "files": [
+        {
+          "path": "native-413902c5e500-LICENSE",
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jcmturner/rpc/v2@v2.0.3",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jcmturner/rpc/v2/@v/v2.0.3.zip",
+      "files": [
+        {
+          "path": "native-fb2acb901528-LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/jmhodges/clock@v1.2.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/jmhodges/clock/@v/v1.2.0.zip",
+      "files": [
+        {
+          "path": "native-fe1d2dff8806-LICENSE",
+          "sha256": "6fd396f2d21c26cac28597b7aea66706684fe7e0aede98c7ce08e8d7886409a1"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/leonelquinteros/gotext@v1.5.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/leonelquinteros/gotext/@v/v1.5.0.zip",
+      "files": [
+        {
+          "path": "native-1590991919cf-LICENSE",
+          "sha256": "bf78e51361b486dc8b97c5be426574ffb5ce736414db00af90a11f8e4f9dccdf"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/mattn/go-isatty@v0.0.4",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/mattn/go-isatty/@v/v0.0.4.zip",
+      "files": [
+        {
+          "path": "native-6ac1762d96cd-LICENSE",
+          "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/olekukonko/ts@v0.0.0-20171002115256-78ecb04241c0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/olekukonko/ts/@v/v0.0.0-20171002115256-78ecb04241c0.zip",
+      "files": [
+        {
+          "path": "native-d0189bb7bea9-LICENCE",
+          "sha256": "eb472e25a1963b3078249c9bbcff5e7ed81e5f0e1ceb8fc8ecc4b43f45e87867"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/pkg/errors@v0.0.0-20170505043639-c605e284fe17",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/pkg/errors/@v/v0.0.0-20170505043639-c605e284fe17.zip",
+      "files": [
+        {
+          "path": "native-ebaaec945788-LICENSE",
+          "sha256": "8d427fd87bc9579ea368fde3d49f9ca22eac857f91a9dec7e3004bdfab7dee86"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/pmezard/go-difflib@v1.0.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/pmezard/go-difflib/@v/v1.0.0.zip",
+      "files": [
+        {
+          "path": "native-e5a7521992c8-LICENSE",
+          "sha256": "2eb550be6801c1ea434feba53bf6d12e7c71c90253e0a9de4a4f46cf88b56477"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/rubyist/tracerx@v0.0.0-20170927163412-787959303086",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/rubyist/tracerx/@v/v0.0.0-20170927163412-787959303086.zip",
+      "files": [
+        {
+          "path": "native-2d527904f3b5-LICENSE",
+          "sha256": "82f0d2a1029154f3184c82cc146f39ae8fd3f357b76832b58190c759cbb9105a"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/spf13/cobra@v1.7.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/spf13/cobra/@v/v1.7.0.zip",
+      "files": [
+        {
+          "path": "native-18b02cbca534-LICENSE.txt",
+          "sha256": "5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/spf13/pflag@v1.0.5",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/spf13/pflag/@v/v1.0.5.zip",
+      "files": [
+        {
+          "path": "native-cb08a94e453f-LICENSE",
+          "sha256": "b8514c577c1c4b46cee454d5a882b15fa411e72c5bd7f801f241591789fce61a"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/ssgelm/cookiejarparser@v1.0.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/ssgelm/cookiejarparser/@v/v1.0.1.zip",
+      "files": [
+        {
+          "path": "native-a7df91a5ad29-LICENSE.md",
+          "sha256": "5438a5672aec3e69f928ce05bdec56d887e023297129c17340f08d5d2572cfc7"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/stretchr/testify@v1.6.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/stretchr/testify/@v/v1.6.1.zip",
+      "files": [
+        {
+          "path": "native-bd1a3fa3259f-LICENSE",
+          "sha256": "f8e536c1c7b695810427095dc85f5f80d44ff7c10535e8a9486cf393e2599189"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/xeipuuv/gojsonpointer@v0.0.0-20180127040702-4e3ac2762d5f",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/xeipuuv/gojsonpointer/@v/v0.0.0-20180127040702-4e3ac2762d5f.zip",
+      "files": [
+        {
+          "path": "native-418a072b9af4-LICENSE-APACHE-2.0.txt",
+          "sha256": "745f8f53e61ad2f8463a27b77aac1636dc3a121ed8bd841e82397226fdcb4bae"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/xeipuuv/gojsonreference@v0.0.0-20180127040603-bd5ef7bd5415",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/xeipuuv/gojsonreference/@v/v0.0.0-20180127040603-bd5ef7bd5415.zip",
+      "files": [
+        {
+          "path": "native-89fb56ed997f-LICENSE-APACHE-2.0.txt",
+          "sha256": "745f8f53e61ad2f8463a27b77aac1636dc3a121ed8bd841e82397226fdcb4bae"
+        }
+      ]
+    },
+    {
+      "id": "go:github.com/xeipuuv/gojsonschema@v0.0.0-20170210233622-6b67b3fab74d",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/github.com/xeipuuv/gojsonschema/@v/v0.0.0-20170210233622-6b67b3fab74d.zip",
+      "files": [
+        {
+          "path": "native-b29442a734bb-LICENSE-APACHE-2.0.txt",
+          "sha256": "745f8f53e61ad2f8463a27b77aac1636dc3a121ed8bd841e82397226fdcb4bae"
+        },
+        {
+          "path": "native-b29442a734bb-LICENSE",
+          "sha256": "837402bd25fad9b704265801ca3f92566a98157c1f9a7acd6f446299ba1c305a"
+        }
+      ]
+    },
+    {
+      "id": "go:golang.org/x/crypto@v0.36.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/golang.org/x/crypto/@v/v0.36.0.zip",
+      "files": [
+        {
+          "path": "native-79672eaed1e5-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "id": "go:golang.org/x/net@v0.38.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/golang.org/x/net/@v/v0.38.0.zip",
+      "files": [
+        {
+          "path": "native-c8270420f5f4-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "id": "go:golang.org/x/sync@v0.12.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/golang.org/x/sync/@v/v0.12.0.zip",
+      "files": [
+        {
+          "path": "native-7d0392a0a6d6-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "id": "go:golang.org/x/sys@v0.31.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/golang.org/x/sys/@v/v0.31.0.zip",
+      "files": [
+        {
+          "path": "native-3d651b4d650e-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "id": "go:golang.org/x/text@v0.23.0",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/golang.org/x/text/@v/v0.23.0.zip",
+      "files": [
+        {
+          "path": "native-c884fd39b5ef-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        }
+      ]
+    },
+    {
+      "id": "go:gopkg.in/yaml.v3@v3.0.1",
+      "license": "See upstream license documents",
+      "source": "https://proxy.golang.org/gopkg.in/yaml.v3/@v/v3.0.1.zip",
+      "files": [
+        {
+          "path": "native-b53018f6fcaf-LICENSE",
+          "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b"
+        },
+        {
+          "path": "native-b53018f6fcaf-NOTICE",
+          "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Desktop@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.desktop/11.1.3/avalonia.desktop.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-a7921f0a4941-Avalonia.Desktop.nuspec",
+          "sha256": "9d36750f9e034c199bf19b64847f63a0bd5a88188e135d557dd0581189d17aa0"
+        },
+        {
+          "path": "native-a7921f0a4941-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.FreeDesktop@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.freedesktop/11.1.3/avalonia.freedesktop.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-eef2b880c1f6-Avalonia.FreeDesktop.nuspec",
+          "sha256": "92a0a10cd2daa42399fc2fd660fb96f53d08a28a87eed4b88c486e48b5b2e3c6"
+        },
+        {
+          "path": "native-eef2b880c1f6-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Native@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.native/11.1.3/avalonia.native.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-b698a02acf7b-Avalonia.Native.nuspec",
+          "sha256": "d16e0ffc037105cf212e81aebbe0e537fad951c73a5387e267db1b710f3d2291"
+        },
+        {
+          "path": "native-b698a02acf7b-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Remote.Protocol@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.remote.protocol/11.1.3/avalonia.remote.protocol.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-e44157939c2b-Avalonia.Remote.Protocol.nuspec",
+          "sha256": "4de3036980a14083ed2b2fba6e379dac84bda824136f717cd0b290574f30f3dd"
+        },
+        {
+          "path": "native-e44157939c2b-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Skia@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.skia/11.1.3/avalonia.skia.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-4e7cb9cd65af-Avalonia.Skia.nuspec",
+          "sha256": "47a2e9700e6b05bc57e6875d3349a61f8d9cac6be6768bd55a2b211753972306"
+        },
+        {
+          "path": "native-4e7cb9cd65af-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Themes.Fluent@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.themes.fluent/11.1.3/avalonia.themes.fluent.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-339480e30433-Avalonia.Themes.Fluent.nuspec",
+          "sha256": "5efaed9c3aa40c982c1fb7e72caeacdf9c9adeaaec8e2f31e60cc1293b13fe74"
+        },
+        {
+          "path": "native-339480e30433-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.Win32@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.win32/11.1.3/avalonia.win32.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-7e569e2b577e-Avalonia.Win32.nuspec",
+          "sha256": "c76a7622565b7a0b8ce751e4c23eb1126fc37dba8360e0fbe5e6e3820d3d669a"
+        },
+        {
+          "path": "native-7e569e2b577e-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia.X11@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia.x11/11.1.3/avalonia.x11.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-1322ee01d97e-Avalonia.X11.nuspec",
+          "sha256": "0abc27914fd48f431138e130341037032dfd37d459c25fbd82e89e3819e366fd"
+        },
+        {
+          "path": "native-1322ee01d97e-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Avalonia@11.1.3",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/avalonia/11.1.3/avalonia.11.1.3.nupkg",
+      "files": [
+        {
+          "path": "native-b989b00ca66c-Avalonia.nuspec",
+          "sha256": "20dfa6dcdcd3fe0df6df752d69e0afc222168930a99d7ae78946fa353d4c3e6b"
+        },
+        {
+          "path": "native-b989b00ca66c-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:HarfBuzzSharp.NativeAssets.Linux@7.3.0.2",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.linux/7.3.0.2/harfbuzzsharp.nativeassets.linux.7.3.0.2.nupkg",
+      "files": [
+        {
+          "path": "native-59dcd052b058-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-59dcd052b058-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-59dcd052b058-HarfBuzzSharp.NativeAssets.Linux.nuspec",
+          "sha256": "fdda727ea31da9fb34ea331a2a75e35cf7aef1f7a9c7af44381a781318120b1a"
+        }
+      ]
+    },
+    {
+      "id": "nuget:HarfBuzzSharp.NativeAssets.Win32@7.3.0.2",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.win32/7.3.0.2/harfbuzzsharp.nativeassets.win32.7.3.0.2.nupkg",
+      "files": [
+        {
+          "path": "native-b70be2987d01-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-b70be2987d01-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-b70be2987d01-HarfBuzzSharp.NativeAssets.Win32.nuspec",
+          "sha256": "ae2d296c250b67fbcdb0a26ba2815a395fc75446c7f2a27617d276629dfcb258"
+        }
+      ]
+    },
+    {
+      "id": "nuget:HarfBuzzSharp.NativeAssets.macOS@7.3.0.2",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp.nativeassets.macos/7.3.0.2/harfbuzzsharp.nativeassets.macos.7.3.0.2.nupkg",
+      "files": [
+        {
+          "path": "native-622fdee2b7b0-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-622fdee2b7b0-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-622fdee2b7b0-HarfBuzzSharp.NativeAssets.macOS.nuspec",
+          "sha256": "b8aee1c49cd27026a32fc10151262073d126c0eeb669d5afc876f6bf5bca63cc"
+        }
+      ]
+    },
+    {
+      "id": "nuget:HarfBuzzSharp@7.3.0.2",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/harfbuzzsharp/7.3.0.2/harfbuzzsharp.7.3.0.2.nupkg",
+      "files": [
+        {
+          "path": "native-ed468d52dd5d-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-ed468d52dd5d-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-ed468d52dd5d-HarfBuzzSharp.nuspec",
+          "sha256": "094411692e7ee63558a618d3b8fa4840c57130b7327f1c3ceaef151c29f88129"
+        }
+      ]
+    },
+    {
+      "id": "nuget:MicroCom.Runtime@0.11.0",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/microcom.runtime/0.11.0/microcom.runtime.0.11.0.nupkg",
+      "files": [
+        {
+          "path": "native-371b01529436-MicroCom.Runtime.nuspec",
+          "sha256": "74072c279aeaa6d5ab52dc8833a446f9f0f6cc8e6ecccd52684b732e0f88c495"
+        },
+        {
+          "path": "native-371b01529436-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Microsoft.Identity.Client.Extensions.Msal@4.84.2",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client.extensions.msal/4.84.2/microsoft.identity.client.extensions.msal.4.84.2.nupkg",
+      "files": [
+        {
+          "path": "native-f4cefa028ee8-Microsoft.Identity.Client.Extensions.Msal.nuspec",
+          "sha256": "af09c22c11fe18168842fbfe98f63cb9af119a8b405ac6455af75da6602a1872"
+        },
+        {
+          "path": "native-f4cefa028ee8-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Microsoft.Identity.Client@4.84.2",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/microsoft.identity.client/4.84.2/microsoft.identity.client.4.84.2.nupkg",
+      "files": [
+        {
+          "path": "native-87140d471551-Microsoft.Identity.Client.nuspec",
+          "sha256": "affb5e469a3eaa0355f1f62aacb9a4a4436dd94629e0e25344e9f5755599bfc2"
+        },
+        {
+          "path": "native-87140d471551-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Microsoft.IdentityModel.Abstractions@8.14.0",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/microsoft.identitymodel.abstractions/8.14.0/microsoft.identitymodel.abstractions.8.14.0.nupkg",
+      "files": [
+        {
+          "path": "native-f483c7318985-Microsoft.IdentityModel.Abstractions.nuspec",
+          "sha256": "4049fb99213889eee0d67fcc3f851732cbd49507b890a9c20fa89f572be22fcc"
+        },
+        {
+          "path": "native-f483c7318985-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:SkiaSharp.NativeAssets.Linux@2.88.8",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.linux/2.88.8/skiasharp.nativeassets.linux.2.88.8.nupkg",
+      "files": [
+        {
+          "path": "native-751068664479-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-751068664479-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-751068664479-SkiaSharp.NativeAssets.Linux.nuspec",
+          "sha256": "695306367d5f1957e3aea6b39f48cc224dadc26211e638018c39bad87c05499f"
+        }
+      ]
+    },
+    {
+      "id": "nuget:SkiaSharp.NativeAssets.Win32@2.88.8",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.win32/2.88.8/skiasharp.nativeassets.win32.2.88.8.nupkg",
+      "files": [
+        {
+          "path": "native-5a2159b8d9fe-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-5a2159b8d9fe-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-5a2159b8d9fe-SkiaSharp.NativeAssets.Win32.nuspec",
+          "sha256": "01aa81ca7fb04c7904634d94bc6de947528a26f3d09d2c2ac4000a3021b7b206"
+        }
+      ]
+    },
+    {
+      "id": "nuget:SkiaSharp.NativeAssets.macOS@2.88.8",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp.nativeassets.macos/2.88.8/skiasharp.nativeassets.macos.2.88.8.nupkg",
+      "files": [
+        {
+          "path": "native-9355e0e8382e-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-9355e0e8382e-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-9355e0e8382e-SkiaSharp.NativeAssets.macOS.nuspec",
+          "sha256": "2ecb4bc65cc5b8fcc4cdd8115aed05bae482928c3000d3fe572debb01c11f217"
+        }
+      ]
+    },
+    {
+      "id": "nuget:SkiaSharp@2.88.8",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/skiasharp/2.88.8/skiasharp.2.88.8.nupkg",
+      "files": [
+        {
+          "path": "native-2516840c97cc-LICENSE.txt",
+          "sha256": "89101e35a8c66fd4d6dffc1763259161d35cb564c169714ec227a768c89f2938"
+        },
+        {
+          "path": "native-2516840c97cc-THIRD-PARTY-NOTICES.txt",
+          "sha256": "21504c46c4c58aa64c1055bd2dcbc5f9a136b4b8c412ed3cc6740e22c5b127f5"
+        },
+        {
+          "path": "native-2516840c97cc-SkiaSharp.nuspec",
+          "sha256": "d525d071420136807eee6de192951cb7a7ad6440e722dd6280d7a37f336fd73e"
+        }
+      ]
+    },
+    {
+      "id": "nuget:System.CommandLine@2.0.0-beta4.22272.1",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/system.commandline/2.0.0-beta4.22272.1/system.commandline.2.0.0-beta4.22272.1.nupkg",
+      "files": [
+        {
+          "path": "native-e72ea6f6dd2d-System.CommandLine.nuspec",
+          "sha256": "1af8ac9da46db8d6a09f37ae89d00179aca651a087d5b5c759c896a25f5c724f"
+        },
+        {
+          "path": "native-e72ea6f6dd2d-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "id": "nuget:System.Security.Cryptography.ProtectedData@4.5.0",
+      "license": "See upstream license documents",
+      "source": "https://api.nuget.org/v3-flatcontainer/system.security.cryptography.protecteddata/4.5.0/system.security.cryptography.protecteddata.4.5.0.nupkg",
+      "files": [
+        {
+          "path": "native-daaf9b29a9c5-LICENSE.TXT",
+          "sha256": "d7a68596ab69b06f51ca278a6545148e4269a9381c26d597c13df5d88e08cf5b"
+        },
+        {
+          "path": "native-daaf9b29a9c5-THIRD-PARTY-NOTICES.TXT",
+          "sha256": "7864a01e2fdef7e8fdf81b906efb1466f083206affea7ba7e6dadea429754765"
+        },
+        {
+          "path": "native-daaf9b29a9c5-System.Security.Cryptography.ProtectedData.nuspec",
+          "sha256": "01eef7797263378955835e3cfe569ec9467f3974f4dadc0f8aa60628abae816d"
+        }
+      ]
+    },
+    {
+      "id": "nuget:Tmds.DBus.Protocol@0.16.0",
+      "license": "MIT",
+      "source": "https://api.nuget.org/v3-flatcontainer/tmds.dbus.protocol/0.16.0/tmds.dbus.protocol.0.16.0.nupkg",
+      "files": [
+        {
+          "path": "native-daa9e83dfac5-Tmds.DBus.Protocol.nuspec",
+          "sha256": "c87ed08e9f66e7429304527ff9ce3638d147cb1a9780e9142a83b7cf1b2ede12"
+        },
+        {
+          "path": "native-daa9e83dfac5-STANDARD-MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    }
+  ],
+  "ladybugVersion": "0.19.1"
+}

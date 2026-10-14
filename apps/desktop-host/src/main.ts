@@ -429,6 +429,14 @@ async function bootstrap(): Promise<void> {
     {
       label: 'Help',
       submenu: [
+        ...(app.isPackaged ? [{
+          label: 'Licenses and Notices',
+          click: () => {
+            void shell.openPath(path.join(process.resourcesPath, 'licenses')).then(error => {
+              if (error) logger.error('Failed to open release licenses', { error });
+            });
+          },
+        }] : []),
         {
           label: 'App Logs',
           click: () => {

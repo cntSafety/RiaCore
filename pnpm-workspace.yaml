@@ -11,5 +11,8 @@ allowBuilds:
   '@ladybugdb/core': true
   electron-winstaller: true
 overrides:
+  # The original buffers@0.1.1 archive has no license declaration. This fork
+  # declares MIT/X11 and retains the API used by unzipper/binary.
+  buffers: npm:node-buffers@0.1.1
   '@fast-csv/format>@types/node': 20.19.37
   '@fast-csv/parse>@types/node': 20.19.37

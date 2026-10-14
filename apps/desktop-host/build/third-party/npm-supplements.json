@@ -1,0 +1,82 @@
+{
+  "@simple-git/args-pathspec@1.0.3": {
+    "license": "MIT",
+    "files": [
+      "npm-args-pathspec.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/steveukx/git-js/01bb7ceae698831e9abd9310f7d61484970ab53c/LICENSE",
+    "sha256": {
+      "npm-args-pathspec.txt": "3a31277abe4e0a30eb17dad52addace2fd73580fd9d79d40590e69785fdf71d5"
+    }
+  },
+  "@simple-git/argv-parser@1.1.1": {
+    "license": "MIT",
+    "files": [
+      "npm-argv-parser.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/steveukx/git-js/0e485f7706f61e7b1f8dba7b0d82448d23bc4b53/LICENSE",
+    "sha256": {
+      "npm-argv-parser.txt": "3a31277abe4e0a30eb17dad52addace2fd73580fd9d79d40590e69785fdf71d5"
+    }
+  },
+  "simple-git@3.36.0": {
+    "license": "MIT",
+    "files": [
+      "npm-args-pathspec.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/steveukx/git-js/01bb7ceae698831e9abd9310f7d61484970ab53c/LICENSE",
+    "sha256": {
+      "npm-args-pathspec.txt": "3a31277abe4e0a30eb17dad52addace2fd73580fd9d79d40590e69785fdf71d5"
+    }
+  },
+  "@ant-design/icons-svg@4.5.0": {
+    "license": "MIT",
+    "files": [
+      "npm-icons-svg.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/ant-design/ant-design-icons/e6d33f4ba94ebe9f4b8648373342505b88e51a57/LICENSE",
+    "sha256": {
+      "npm-icons-svg.txt": "5d367fb0a07340571542eb4ee8eb1add62d37b71bad6786a57c2e9a86bf76c70"
+    }
+  },
+  "data-uri-to-buffer@4.0.1": {
+    "license": "MIT",
+    "files": [
+      "npm-data-uri-readme.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/TooTallNate/node-data-uri-to-buffer/85cd8c854aefbf1bb636789d80364cfac8ea1583/README.md",
+    "sha256": {
+      "npm-data-uri-readme.txt": "a7cc4332acfa1f9b6530e01aac77fefe74f2efa32579215fddaa473013f9a25c"
+    }
+  },
+  "isarray@1.0.0": {
+    "license": "MIT",
+    "files": [
+      "npm-isarray-readme.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/juliangruber/isarray/2a23a281f369e9ae06394c0fb4d2381355a6ba33/README.md",
+    "sha256": {
+      "npm-isarray-readme.txt": "ff138e683771b187f3629c383db72ee7d632009010a36d08e18e8d2a34222ec7"
+    }
+  },
+  "saxes@5.0.1": {
+    "license": "ISC",
+    "files": [
+      "npm-saxes.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/lddubeau/saxes/v5.0.1/LICENSE",
+    "sha256": {
+      "npm-saxes.txt": "0fac2374380621b22e6b50451057721a9c52935b02d16d106a9f04897f061d0e"
+    }
+  },
+  "@ai-sdk/provider-utils@5.0.27": {
+    "license": "Apache-2.0",
+    "files": [
+      "npm-provider-utils.txt"
+    ],
+    "source": "https://raw.githubusercontent.com/vercel/ai/6617f11b68273e743a66a271b2b5d91d1e1c6d44/LICENSE",
+    "sha256": {
+      "npm-provider-utils.txt": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529"
+    }
+  }
+}

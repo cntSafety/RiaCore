@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>Tmds.DBus.Protocol</id>
+    <version>0.16.0</version>
+    <authors>Tom Deseyn</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <description>Tmds.DBus.Protocol Library</description>
+    <copyright>Tom Deseyn</copyright>
+    <tags>dbus</tags>
+    <repository type="git" url="https://github.com/tmds/Tmds.DBus.git" commit="ee8c7b698b320c19c0e0e8acb05622d99ee8f157" />
+    <dependencies>
+      <group targetFramework="net6.0">
+        <dependency id="System.IO.Pipelines" version="6.0.0" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework=".NETStandard2.0">
+        <dependency id="Microsoft.Bcl.AsyncInterfaces" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="System.IO.Pipelines" version="6.0.0" exclude="Build,Analyzers" />
+        <dependency id="System.Threading.Channels" version="8.0.0" exclude="Build,Analyzers" />
+      </group>
+      <group targetFramework=".NETStandard2.1">
+        <dependency id="Microsoft.Bcl.AsyncInterfaces" version="8.0.0" exclude="Build,Analyzers" />
+        <dependency id="System.IO.Pipelines" version="6.0.0" exclude="Build,Analyzers" />
+        <dependency id="System.Threading.Channels" version="8.0.0" exclude="Build,Analyzers" />
+      </group>
+    </dependencies>
+  </metadata>
+</package>

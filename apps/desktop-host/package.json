@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc && electron dist/main.js",
-    "test": "vitest --run",
+    "test": "vitest --run && node --test scripts/__tests__/*.test.cjs",
     "prepare:package": "node scripts/prepare-package.cjs",
     "package:dir": "pnpm run prepare:package && electron-builder --config electron-builder.yml --dir",
     "package:win": "pnpm run prepare:package && electron-builder --config electron-builder.yml --win --x64 && node scripts/validate-package.cjs --platform win",

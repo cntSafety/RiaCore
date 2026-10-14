@@ -1,6 +1,6 @@
 {
   "name": "riacoredev",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -28,5 +28,6 @@
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "wait-on": "^9.1.0"
-  }
+  },
+  "license": "GPL-3.0-or-later"
 }
