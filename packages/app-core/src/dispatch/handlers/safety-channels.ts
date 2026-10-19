@@ -24,6 +24,7 @@ import type { createRegistry } from '../channel-registry.js';
 import { aggregateExportData } from './safety-export-aggregator.js';
 import { generateSphinxNeedsRst } from './sphinx-needs-generator.js';
 import { generateSafetyXlsx } from './safety-xlsx-generator.js';
+import { exportSafetyOkf } from './safety-okf-export.js';
 
 /**
  * Register all safety channels.
@@ -172,7 +173,7 @@ export function registerSafetyChannels(
       if (!rawAttributes) return undefined;
       try {
         const attrs = typeof rawAttributes === 'string' ? JSON.parse(rawAttributes) : rawAttributes;
-        return String(attrs.short_name || attrs.has_name || attrs.name || '') || undefined;
+        return String(attrs.short_name || attrs.has_name || attrs.name || attrs.title || attrs.id || '') || undefined;
       } catch { return undefined; }
     }
 
@@ -1047,6 +1048,13 @@ export function registerSafetyChannels(
     return result.data;
   }, { requiresWorkspace: true, category: CATEGORY });
 
+  registry.register('safety.getRelationships', async (payload, deps, _ctx) => {
+    if (!deps.instanceService) throw new Error('Instance service not configured');
+    const result = await deps.instanceService.getRelationships(payload.nodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
   registry.register('safety.getInstanceByUuid', async (payload, deps, _ctx) => {
     if (!deps.instanceService) throw new Error('Instance service not configured');
     const result = await deps.instanceService.getInstanceByUuid(payload.uuid);
@@ -1139,6 +1147,9 @@ export function registerSafetyChannels(
     if (!result.ok) throw new Error(result.error);
     return result.data;
   }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.exportOkf', (payload, deps) => exportSafetyOkf(payload, deps),
+    { requiresWorkspace: true, category: CATEGORY });
 
   // ── Sphinx-Needs RST Export ──────────────────────────────────────────────────
 

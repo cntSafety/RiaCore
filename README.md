@@ -109,6 +109,31 @@ For a given working directory:
 
 ---
 
+## Exporting safety analyses as OKF
+
+Open a safety-analysis namespace and choose **Report → Export Safety Report (OKF)**.
+Select a new folder or the folder of a previous export of the same analysis.
+The export contains linked Markdown documents with YAML metadata, following
+Open Knowledge Format v0.2.
+
+Documents follow the source namespace and element hierarchy. Component malfunctions
+sit beneath their component; port malfunctions sit beneath the particular port.
+Tasks, requirements, SOTIF details, notes, reviews, and tags are shared documents.
+Start with `index.md` to browse the analysis.
+
+Use the **Report Export** preference to omit Severity, Occurrence, Detection,
+and RPN while retaining risk assessment notes. Generated filenames use authored
+names; persistent source identities, including native ARXML and SysML UUIDs,
+remain in metadata alongside source paths. Internal database IDs and generated
+Excel/RST report IDs are excluded. Renaming a record may change its filename;
+links are regenerated for each snapshot. Exporting again to the same folder refreshes generated documents
+and removes stale generated files while preserving unrelated files. Re-exporting
+without content changes leaves existing files and their timestamps untouched.
+After deleting all exported documents, the folder can be reused for another analysis;
+the leftover export manifest is refreshed, and Git history and macOS Finder files are preserved.
+Exports made with earlier versions are recognized automatically. Folders containing
+a different analysis or unrelated content without a RiaCore export are not overwritten.
+
 ## Building from source
 
 Only needed if you want to develop RiaCore or build your own packages. For normal use, take a

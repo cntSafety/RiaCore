@@ -32,9 +32,28 @@ export interface BeginSessionParams {
   metamodel: string;
   sourceName: string;
   sourceType: string;
+  /**
+   * The config YAML's path in **stored form** — workspace-relative whenever the
+   * file lives inside the workspace, which it does for every provisioned source.
+   *
+   * This is the value that gets persisted on the Source node, so it must not be
+   * absolute: `ria-data/sourcemaster/RIA_SRC_Source.json` is committed, and an
+   * absolute path there makes the workspace unusable on another machine (and
+   * unusable even on the same machine from a different checkout). The caller
+   * relativises at the orchestration boundary, where the workspace root is
+   * known; `ImporterContext.configPath` keeps the absolute form for the runtime.
+   */
   configPath: string;
   configDigest: string;
-  metamodelPath: string;
+  /**
+   * Content digest of the metamodel the importer was built against.
+   *
+   * Content-addressed on purpose: the metamodel ships inside the application
+   * (`packages/importers/*‍/importer-data/metamodel/`), so its *path* is a
+   * property of the install, not of the workspace, and recording it would write
+   * an absolute application path into a committed file. The digest identifies
+   * the metamodel wherever it is installed.
+   */
   metamodelDigest: string;
   triggeredBy: 'cli' | 'gui';
   importerVersion: string;

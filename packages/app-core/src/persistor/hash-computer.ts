@@ -24,208 +24,159 @@ const OMIT_COLUMNS = ["node_id", "edge_id", "source_node_id", "target_node_id"];
 const JSON_COLUMNS = ["attributes"];
 
 /**
- * Compute a Universe_Hash (`sha256:<hex>`) over a universe-layer file's exact
- * serialized bytes. Uses the same `createHash('sha256')` primitive used for
- * `meta_hash`. Because the digest is taken over the serialized UTF-8 content,
- * it matches a hash computed from the file bytes on load — guaranteeing an
- * identical value across store (record), load (verify), and repair (recompute).
+ * Serialize the cross-namespace section of a namespace hash.
  *
- * This is the single shared per-file byte-hash helper for the universe layer.
- * It deliberately does NOT reuse `computeMetaHash` (which hashes a whole
- * directory into one hash); the universe layer needs a per-file byte hash so
- * load can identify the specific corrupted file and repair can rewrite only its
- * manifest entry. Shared by the universe-scoped store path, the full/namespace
- * store path (task 2.2), load-time verification, and repair, so `createHash`
- * stays confined to this hashing module.
+ * The one section of `computeNamespaceHashFromFileContents` that is derived
+ * from records rather than file bytes, because its file is shared across every
+ * namespace — see that function's doc comment for why.
+ */
+function serializeCrossNsSection(records: Record<string, unknown>[]): string {
+  const serialized = records
+    .map((r) => serializeRecord(r, JSON_COLUMNS, OMIT_COLUMNS))
+    .sort();
+  return serialized.length === 0
+    ? "[]\n"
+    : "[\n" + serialized.join(",\n") + "\n]\n";
+}
+
+/**
+ * Universe_Hash (`sha256:<hex>`) over a universe-layer file's exact serialized
+ * bytes. Per-file rather than per-directory (as `computeMetaHash` is) so load can
+ * name the specific corrupted file and repair can rewrite only its manifest entry.
+ * Store, load and repair all call this, so the three agree byte-for-byte.
  */
 export function computeUniverseFileHash(serializedContent: string): string {
   return `sha256:${createHash("sha256").update(serializedContent, "utf-8").digest("hex")}`;
 }
 
-/** Map of concept_type → sorted list of key/identity attribute names */
-type NodeKeyAttrMap = Map<string, string[]>;
-/** Map of relationship_type → sorted list of is_key edge attribute names */
-type EdgeKeyAttrMap = Map<string, string[]>;
+// ── Byte-based namespace hash ─────────────────────────────────────────────────
 
-export interface NamespaceHashInput {
-  namespace: string;
-  conceptInstances: Record<string, unknown>[];
-  relationshipInstances: Record<string, unknown>[];
-  crossNsEdgesAsSource: Record<string, unknown>[];
-  /** Pre-loaded from RIA_META_NodeAttribute (is_key/is_identity attrs per concept type) */
-  nodeKeyAttrs?: NodeKeyAttrMap;
-  /** Pre-loaded from RIA_META_EdgeAttribute (is_key attrs per relationship type) */
-  edgeKeyAttrs?: EdgeKeyAttrMap;
+/**
+ * One file belonging to a namespace's `concepts/` or `relationships/`
+ * directory, paired with its exact serialized content.
+ */
+export interface NamespaceSectionFile {
   /**
-   * Optional diagnostic callback. When provided, emits per-section counts,
-   * hashes, and identity-attribute usage without serializing model records.
+   * File name only — e.g. `malfunction.json`. Never a path, never a directory
+   * prefix: the section marker already identifies which directory the file
+   * belongs to, and including a path would make the digest depend on the
+   * platform's separator.
+   */
+  fileName: string;
+  /**
+   * The exact serialized UTF-8 content of the file: the string handed to
+   * `fs.writeFileSync` on the store side, and the string returned by
+   * `fs.readFileSync(..., 'utf-8')` on the file side. Not a re-serialization of
+   * parsed records — the whole point is that the digest covers the bytes that
+   * are actually on disk.
+   */
+  content: string;
+}
+
+export interface NamespaceFileHashInput {
+  namespace: string;
+  /** Files under `<namespace>/concepts/`. Order is irrelevant; see sorting below. */
+  conceptFiles: NamespaceSectionFile[];
+  /** Files under `<namespace>/relationships/`. Order is irrelevant; see sorting below. */
+  relationshipFiles: NamespaceSectionFile[];
+  /**
+   * Rows of `RIA_UNIV_CrossNSRelationshipInstance` whose `source_namespace` is
+   * this namespace. Records, not file content — see the cross-NS note below.
+   */
+  crossNsEdgesAsSource: Record<string, unknown>[];
+  /**
+   * Optional diagnostic callback. Emits per-section file counts and section
+   * digests without writing model records or project content to the log.
    */
   debugLog?: (msg: string) => void;
 }
 
-function parseAttrs(record: Record<string, unknown>): Record<string, unknown> {
-  const raw = record.attributes;
-  if (typeof raw === 'object' && raw !== null) return raw as Record<string, unknown>;
-  try { return JSON.parse(String(raw ?? '{}')) as Record<string, unknown>; }
-  catch { return {}; }
+/**
+ * Section markers. They exist to make the three sections non-splicable: without
+ * them a namespace with one concept file and no relationship files would digest
+ * identically to one with the same file under `relationships/` instead.
+ */
+const SECTION_MARKER_CONCEPTS = "concepts\n";
+const SECTION_MARKER_RELATIONSHIPS = "relationships\n";
+const SECTION_MARKER_CROSS_NS = "cross_ns\n";
+
+/** Sort by file name, ascending, by UTF-16 code unit — the same order `Array#sort` gives bare strings. */
+function sortSectionFiles(files: NamespaceSectionFile[]): NamespaceSectionFile[] {
+  return [...files].sort((a, b) =>
+    a.fileName < b.fileName ? -1 : a.fileName > b.fileName ? 1 : 0,
+  );
 }
 
-function sortConceptInstancesForHash(
-  instances: Record<string, unknown>[],
-  conceptType: string,
-  nodeKeyAttrs: NodeKeyAttrMap,
-): Record<string, unknown>[] {
-  const keyAttrs = nodeKeyAttrs.get(conceptType) ?? [];
-
-  return [...instances].sort((a, b) => {
-    const aAttrs = parseAttrs(a);
-    const bAttrs = parseAttrs(b);
-    const allAttrNames = [...new Set([...Object.keys(aAttrs), ...Object.keys(bAttrs)])].sort();
-    const nonKeyAttrs = allAttrNames.filter(n => !keyAttrs.includes(n));
-
-    for (const attrName of [...keyAttrs, ...nonKeyAttrs]) {
-      const aVal = String(aAttrs[attrName] ?? '');
-      const bVal = String(bAttrs[attrName] ?? '');
-      if (aVal < bVal) return -1;
-      if (aVal > bVal) return 1;
-    }
-    return 0;
-  });
-}
-
-function sortRelInstancesForHash(
-  instances: Record<string, unknown>[],
-  relType: string,
-  edgeKeyAttrs: EdgeKeyAttrMap,
-): Record<string, unknown>[] {
-  const keyAttrs = edgeKeyAttrs.get(relType) ?? [];
-
-  return [...instances].sort((a, b) => {
-    const aSrc = String(a.source_stable_id ?? '');
-    const bSrc = String(b.source_stable_id ?? '');
-    if (aSrc < bSrc) return -1;
-    if (aSrc > bSrc) return 1;
-
-    const aTgt = String(a.target_stable_id ?? '');
-    const bTgt = String(b.target_stable_id ?? '');
-    if (aTgt < bTgt) return -1;
-    if (aTgt > bTgt) return 1;
-
-    if (keyAttrs.length > 0) {
-      const aAttrs = parseAttrs(a);
-      const bAttrs = parseAttrs(b);
-      for (const attrName of keyAttrs) {
-        const aVal = String(aAttrs[attrName] ?? '');
-        const bVal = String(bAttrs[attrName] ?? '');
-        if (aVal < bVal) return -1;
-        if (aVal > bVal) return 1;
-      }
-    }
-    return 0;
-  });
+function updateWithSectionFiles(
+  hash: ReturnType<typeof createHash>,
+  marker: string,
+  files: NamespaceSectionFile[],
+): void {
+  hash.update(marker);
+  for (const file of sortSectionFiles(files)) {
+    hash.update(file.fileName);
+    hash.update(file.content, "utf-8");
+  }
 }
 
 /**
- * Compute a SHA-256 content hash over the canonical serialized data for a namespace.
+ * Namespace content hash (`sha256:<hex>`): a digest over the bytes of the
+ * namespace's written files, plus a record-based digest of its cross-namespace
+ * edges.
  *
- * When `debugLog` is provided, logs:
- *   - Per-section SHA-256 hashes and record counts
- *   - Identity attribute usage summary
+ * Both sides of the store/verify pair call this, so every digest input is fixed
+ * here: section order, an unconditional marker per section, files sorted by name
+ * with the name fed before its content, and UTF-8. Records are not sorted here --
+ * the writer already did. The digest is line-ending sensitive by construction.
  *
- * This makes hash mismatches diagnosable without writing model records or
- * project content to the workspace log.
+ * Cross-NS edges are the one record-based section: their file is shared across
+ * every namespace, so byte-hashing it would move every namespace's hash on any
+ * single edge change.
  */
-export function computeNamespaceHash(namespaceData: NamespaceHashInput): string {
-  const nodeKeyAttrs = namespaceData.nodeKeyAttrs ?? new Map();
-  const edgeKeyAttrs = namespaceData.edgeKeyAttrs ?? new Map();
-  const log = namespaceData.debugLog;
+export function computeNamespaceHashFromFileContents(
+  input: NamespaceFileHashInput,
+): string {
+  const log = input.debugLog;
+  const hash = createHash("sha256");
 
-  // ── Concepts ──────────────────────────────────────────────────────────────
-  const conceptsByType = new Map<string, Record<string, unknown>[]>();
-  for (const ci of namespaceData.conceptInstances) {
-    const conceptType = String(ci.concept ?? '');
-    const group = conceptsByType.get(conceptType) ?? [];
-    group.push(ci);
-    conceptsByType.set(conceptType, group);
-  }
-
+  updateWithSectionFiles(hash, SECTION_MARKER_CONCEPTS, input.conceptFiles);
   if (log) {
-    const identityAttrCounts: Record<string, number> = {};
-    for (const attrs of nodeKeyAttrs.values()) {
-      const attribute = attrs[0] ?? '(none)';
-      identityAttrCounts[attribute] = (identityAttrCounts[attribute] ?? 0) + 1;
-    }
+    const sectionHash = createHash("sha256");
+    updateWithSectionFiles(sectionHash, SECTION_MARKER_CONCEPTS, input.conceptFiles);
     log(
-      `hash:concepts identity_attr_counts=${JSON.stringify(identityAttrCounts)} concept_types=${nodeKeyAttrs.size}`,
+      `hash:concepts files=${input.conceptFiles.length} ` +
+      `names=[${sortSectionFiles(input.conceptFiles).map(f => f.fileName).join(',')}] ` +
+      `section_sha256=${sectionHash.digest("hex")}`,
     );
   }
 
-  const sortedConceptTypes = [...conceptsByType.keys()].sort();
-  const allSortedConcepts: Record<string, unknown>[] = [];
-  for (const conceptType of sortedConceptTypes) {
-    const sorted = sortConceptInstancesForHash(conceptsByType.get(conceptType)!, conceptType, nodeKeyAttrs);
-    allSortedConcepts.push(...sorted);
-  }
-
-  const serializedConcepts = allSortedConcepts.map(r => serializeRecord(r, JSON_COLUMNS, OMIT_COLUMNS));
-  const conceptBytes = serializedConcepts.length === 0
-    ? "[]\n"
-    : "[\n" + serializedConcepts.join(",\n") + "\n]\n";
-
+  updateWithSectionFiles(hash, SECTION_MARKER_RELATIONSHIPS, input.relationshipFiles);
   if (log) {
-    const sectionHash = createHash("sha256").update(conceptBytes).digest("hex");
-    log(`hash:concepts count=${serializedConcepts.length} section_sha256=${sectionHash}`);
+    const sectionHash = createHash("sha256");
+    updateWithSectionFiles(sectionHash, SECTION_MARKER_RELATIONSHIPS, input.relationshipFiles);
+    log(
+      `hash:relationships files=${input.relationshipFiles.length} ` +
+      `names=[${sortSectionFiles(input.relationshipFiles).map(f => f.fileName).join(',')}] ` +
+      `section_sha256=${sectionHash.digest("hex")}`,
+    );
   }
 
-  // ── Relationships ─────────────────────────────────────────────────────────
-  const relsByType = new Map<string, Record<string, unknown>[]>();
-  for (const ri of namespaceData.relationshipInstances) {
-    const relType = String(ri.relationship ?? '');
-    const group = relsByType.get(relType) ?? [];
-    group.push(ri);
-    relsByType.set(relType, group);
-  }
-
-  const sortedRelTypes = [...relsByType.keys()].sort();
-  const allSortedRels: Record<string, unknown>[] = [];
-  for (const relType of sortedRelTypes) {
-    const sorted = sortRelInstancesForHash(relsByType.get(relType)!, relType, edgeKeyAttrs);
-    allSortedRels.push(...sorted);
-  }
-
-  const serializedRels = allSortedRels.map(r => serializeRecord(r, JSON_COLUMNS, OMIT_COLUMNS));
-  const relationshipBytes = serializedRels.length === 0
-    ? "[]\n"
-    : "[\n" + serializedRels.join(",\n") + "\n]\n";
-
+  const crossNsBytes = serializeCrossNsSection(input.crossNsEdgesAsSource);
+  hash.update(SECTION_MARKER_CROSS_NS);
+  hash.update(crossNsBytes, "utf-8");
   if (log) {
-    const sectionHash = createHash("sha256").update(relationshipBytes).digest("hex");
-    log(`hash:relationships count=${serializedRels.length} section_sha256=${sectionHash}`);
+    const sectionHash = createHash("sha256")
+      .update(SECTION_MARKER_CROSS_NS)
+      .update(crossNsBytes, "utf-8")
+      .digest("hex");
+    log(
+      `hash:cross_ns count=${input.crossNsEdgesAsSource.length} section_sha256=${sectionHash}`,
+    );
   }
 
-  // ── Cross-NS edges ────────────────────────────────────────────────────────
-  const serializedCrossNs = namespaceData.crossNsEdgesAsSource
-    .map(r => serializeRecord(r, JSON_COLUMNS, OMIT_COLUMNS))
-    .sort();
-  const crossNsBytes = serializedCrossNs.length === 0
-    ? "[]\n"
-    : "[\n" + serializedCrossNs.join(",\n") + "\n]\n";
-
-  if (log) {
-    const sectionHash = createHash("sha256").update(crossNsBytes).digest("hex");
-    log(`hash:cross_ns count=${serializedCrossNs.length} section_sha256=${sectionHash}`);
-  }
-
-  // ── Final hash ────────────────────────────────────────────────────────────
-  const hash = createHash("sha256");
-  hash.update(conceptBytes);
-  hash.update(relationshipBytes);
-  hash.update(crossNsBytes);
   const result = `sha256:${hash.digest("hex")}`;
-
   if (log) {
-    log(`hash:final namespace=${namespaceData.namespace} sha256=${result}`);
+    log(`hash:final namespace=${input.namespace} sha256=${result}`);
   }
-
   return result;
 }

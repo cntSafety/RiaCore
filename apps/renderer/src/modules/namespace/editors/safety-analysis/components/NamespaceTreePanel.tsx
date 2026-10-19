@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { Tree, Empty, Spin, AutoComplete, Input, Button, Popover, Modal, theme } from 'antd';
+import { App, Tree, Empty, Spin, AutoComplete, Input, Button, Popover, Modal, theme } from 'antd';
 import { FolderOutlined, EditOutlined, LinkOutlined, LeftOutlined, RightOutlined, HistoryOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
   useState, useCallback, createElement, useEffect,
@@ -27,13 +27,14 @@ import type { DataNode, EventDataNode } from 'antd/es/tree';
 import { useAllNamespaces } from '../hooks/useTreeQueries';
 import { useNamespaceConnections } from '../../../../../hooks/useNamespaceConnections';
 import { selectAnalysisRootNamespaces } from '../utils/treeUtils';
-import { getNodeDecoration, buildSysmlDecorations, type NodeDecoration } from '../config/nodeTypeConfig';
+import { getNodeDecoration, type NodeDecoration } from '../config/nodeTypeConfig';
 import { getAsilHexColor } from '../config/asilColors';
-import { useMetamodelRendering } from '../../../../../hooks/useMetamodelRendering';
+import { useTreeDecorations } from '../hooks/useTreeDecorations';
+import { navigateScopedTree, type TreeNavigationScope } from '../utils/scopedTreeNavigation';
 import { getNamespaceDecorationByMetamodel } from '../../../../../lib/namespaceTypeDecoration';
 import { api } from '../../../../../api/riacore';
-import type { SelectedTreeElement } from '../types';
-import type { TreeChildNode, TreeReferenceNode, SearchResultNode } from '@riacore/app-contracts';
+import type { SelectedTreeElement, ScopedTreeNavigator } from '../types';
+import type { TreeChildNode, TreeReferenceNode, SearchResultNode, TreeNodeLocation } from '@riacore/app-contracts';
 import { TreeContextMenu } from './TreeContextMenu';
 import { CreateMalfunctionModal } from './CreateMalfunctionModal';
 import { ReconnectOrphanedModal } from './ReconnectOrphanedModal';
@@ -92,6 +93,8 @@ export interface NamespaceTreePanelProps {
 export interface NamespaceTreePanelHandle {
   renameNode: (nodeId: number, namespace: string, name: string) => void;
   navigateToNode: (nodeId: number, namespace: string, concept: string) => Promise<void>;
+  /** Strict navigation for relationship rows; never widens the tree's scope. */
+  navigateToNodeInScope: ScopedTreeNavigator;
   /**
    * Navigate to a cross-namespace reference child.
    * Expands the structural host node (hostNodeId in hostNamespace) and then
@@ -150,6 +153,17 @@ export interface SafetyTreeNode extends DataNode {
 }
 
 const PAGE_SIZE = 200;
+
+/**
+ * Upper bound on pages a single reveal may load per branch. A resolved node
+ * location bounds paging to the element's own position, so this only guards the
+ * unresolved fallback (and a branch that keeps reporting `hasMore`) against
+ * draining an unbounded number of pages.
+ */
+const MAX_NAVIGATION_PAGES = 50;
+
+/** Key for the toast shown while a reveal is still loading pages. */
+const NAV_PROGRESS_KEY = 'tree-reveal-progress';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -291,6 +305,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   function NamespaceTreePanel({ onSelect, safetyNamespace, browseNamespace, onRequestAddNote, onReady, onNavigateToNode, onNavigateToReference, triggerAutoSave, onStartPropagation, onEndPropagation, onCopyMalfunction, onPasteMalfunction, hasCopiedMalfunction, onOpenInTableView }, ref) {
 
   const { token } = theme.useToken();
+  const { message } = App.useApp();
 
   // Pending propagation source for this namespace (read directly from store)
   const pendingPropagationSource = useWorkspaceStore(
@@ -334,16 +349,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   // for SysML concepts it does not already cover (see nodeTypeConfig.getNodeDecoration).
   // Both the JSON importer (SysMLv2) and the textual importer (SysMLv2Textual) are
   // fetched and merged so elements from either source get the correct icon/color.
-  const { data: renderingConfigJson } = useMetamodelRendering('SysMLv2');
-  const { data: renderingConfigTextual } = useMetamodelRendering('SysMLv2Textual');
-  const sysmlDecorations = useMemo(
-    () => {
-      if (!renderingConfigJson && !renderingConfigTextual) return undefined;
-      const merged = { ...renderingConfigJson, ...renderingConfigTextual };
-      return buildSysmlDecorations(merged);
-    },
-    [renderingConfigJson, renderingConfigTextual],
-  );
+  const sysmlDecorations = useTreeDecorations();
   // Bump a version counter whenever the overlay identity changes so the
   // module-level icon cache (keyed by configVersion) rebuilds icons after a
   // metamodel reload instead of serving stale cached elements.
@@ -365,7 +371,13 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
 
   // Mutation hook for right-click delete — uses workspaceKey so tree.children is invalidated
   const deleteMalfunction = useDeleteMalfunction(safetyNamespace, workspaceKey, triggerAutoSave);
-  const deleteSafetyNote = useDeleteSafetyNote(safetyNamespace, workspaceKey, triggerAutoSave);
+  const deleteSafetyNote = useDeleteSafetyNote(safetyNamespace, workspaceKey, triggerAutoSave, (nodeId) => {
+    const key = stateRef.current.selectedKey;
+    if (key && stateRef.current.nodesByKey[key]?.nodeId === nodeId) {
+      dispatch({ type: 'SET_SELECTED', key: null });
+      onSelect(null);
+    }
+  });
   const deleteTag = useDeleteTag(safetyNamespace, workspaceKey, triggerAutoSave);
   const deleteTask = useDeleteSafetyTask(safetyNamespace, workspaceKey, triggerAutoSave);
   const deleteRiskRating = useDeleteRiskRatingFromTree(safetyNamespace, workspaceKey, triggerAutoSave);
@@ -445,6 +457,22 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   // always re-seeds with the same scoped key the tree loaded from.
   const scopeNamespaceRef = useRef<string | undefined>(browseNamespace ? undefined : safetyNamespace);
   scopeNamespaceRef.current = browseNamespace ? undefined : safetyNamespace;
+
+  const navigationScope: TreeNavigationScope = {
+    contextKey: JSON.stringify([workspaceKey, safetyNamespace, browseNamespace, showAllTreeElements]),
+    analysisNamespace: safetyNamespace,
+    browseNamespace,
+    namespaces: allNamespaces,
+    connections: connectionGraph?.connections,
+    ready: wsState.phase === 'db_open' && !!allNamespaces && (!!browseNamespace || !!connectionGraph),
+  };
+  const navigationScopeRef = useRef(navigationScope);
+  navigationScopeRef.current = navigationScope;
+  const navigationMountedRef = useRef(true);
+  useEffect(() => {
+    navigationMountedRef.current = true;
+    return () => { navigationMountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     const queryCache = queryClient.getQueryCache();
@@ -844,7 +872,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
     name?: string;
     ancestorPath?: number[];
     suppressSelect?: boolean;
-  }) => {
+  }): Promise<boolean> => {
     const { nodeId, namespace, concept, name, suppressSelect } = params;
     const nsKey = `ns:${namespace}`;
 
@@ -855,7 +883,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
     if (!nsExists) {
       // Namespace not in tree — just notify parent
       if (!suppressSelect) onSelect({ nodeId, namespace, concept, name });
-      return;
+      return false;
     }
 
     // Ensure namespace root is in the store
@@ -891,119 +919,200 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       dispatch({ type: 'INIT_NAMESPACES', namespaces });
     }
 
-    // Resolve ancestor path if not provided
+    // Resolve where the node sits in the tree's own page order. Each level's
+    // child index tells us which pages to load, so every level of the path can
+    // be materialized — not just page zero of each ancestor.
+    let location: TreeNodeLocation | null = null;
+    try {
+      location = await api.namespaces.getNodeLocation(namespace, nodeId, showAllTreeElementsRef.current);
+    } catch (err) {
+      treeDebug.warn('[navigate] Failed to resolve node location', { err: String(err) });
+    }
+
+    // Fall back to the ancestor-id path when the node is not a visible
+    // containment child at every level — an orphan, a concept hidden by the
+    // display settings, or an authored element the tree shows only as a
+    // reference child. Paging then runs without index hints.
     let ancestorPath = params.ancestorPath;
-    if (!ancestorPath) {
+    if (!location?.resolved && !ancestorPath) {
       try {
         ancestorPath = await api.namespaces.getAncestorPath(namespace, nodeId);
       } catch (err) {
         treeDebug.warn('[navigate] Failed to fetch ancestor path', { err: String(err) });
         if (!suppressSelect) onSelect({ nodeId, namespace, concept, name });
-        return;
+        return false;
       }
     }
 
     const localNodesByKey: Record<string, TreeNodeRecord> = { ...state.nodesByKey };
     const localLoadedParents = new Set<string>(Object.keys(state.loadedParents));
-
-    // Step 1: Ensure the target node is loaded into the namespace root.
-    // If the namespace root has already been loaded but the target is beyond the
-    // first page (pagination), keep fetching pages until the node appears or
-    // all pages are exhausted.
     const targetKey = `${namespace}:${nodeId}`;
 
-    // Helper: fetch all remaining pages for a parent until the target key is found
-    const fetchUntilFound = async (parentKey: string, parentNodeId: number | undefined, ns: string) => {
-      let pagination = paginationRef.current.get(parentKey);
-      while (pagination?.hasMore && !localNodesByKey[targetKey]) {
-        try {
-          const pageResult = await fetchChildren(ns, parentNodeId, pagination.offset, PAGE_SIZE);
-          const pageRecords = pageResult.children.map((c: TreeChildNode) =>
-            toModelRecord(c, ns, parentKey),
+    // Child index per parent branch, keyed the way the store keys parents.
+    const indexByParentKey = new Map<string, number>();
+    for (const level of location?.levels ?? []) {
+      const levelParentKey = level.parentNodeId === undefined ? nsKey : `${namespace}:${level.parentNodeId}`;
+      indexByParentKey.set(levelParentKey, level.childIndex);
+    }
+
+    // Loading pages is the slow part of a reveal on a large branch, and a silent
+    // pause is indistinguishable from a reveal that did nothing. Show the toast
+    // lazily, so the common single-page case stays silent.
+    let progressShown = false;
+    const showProgress = () => {
+      if (progressShown || suppressSelect) return;
+      progressShown = true;
+      void message.loading({ content: 'Locating element in the tree…', key: NAV_PROGRESS_KEY, duration: 0 });
+    };
+    const clearProgress = () => {
+      if (!progressShown) return;
+      progressShown = false;
+      void message.destroy(NAV_PROGRESS_KEY);
+    };
+
+    // Load page zero of a branch that nothing has opened yet. Model parents go
+    // through refreshNode so boundary validation, cross-namespace reference
+    // children and the Load more sentinel behave exactly as on manual expansion.
+    const loadFirstPage = async (parentKey: string, parentNodeId: number | undefined): Promise<void> => {
+      if (localLoadedParents.has(parentKey)) return;
+      try {
+        if (parentNodeId === undefined) {
+          const rootResult = await fetchChildren(namespace, undefined, 0, PAGE_SIZE);
+          const childRecords = rootResult.children.map((c: TreeChildNode) =>
+            toModelRecord(c, namespace, parentKey),
           );
           dispatch({
             type: 'LOAD_BRANCH_PAGE',
             parentKey,
-            children: pageRecords,
-            loadedCount: pagination.offset + pageResult.children.length,
-            totalCount: pageResult.totalCount,
+            children: childRecords,
+            loadedCount: childRecords.length,
+            totalCount: rootResult.totalCount,
           });
-          const newOffset = pagination.offset + pageResult.children.length;
-          paginationRef.current.set(parentKey, { offset: newOffset, hasMore: pageResult.hasMore });
-          if (!pageResult.hasMore) {
-            dispatch({ type: 'REMOVE_CHILD', parentKey, childKey: sentinelKey(parentKey) });
+          paginationRef.current.set(parentKey, { offset: childRecords.length, hasMore: rootResult.hasMore });
+          if (rootResult.hasMore) {
+            dispatch({ type: 'INSERT_CHILD', parentKey, child: toSentinelRecord(parentKey, namespace) });
           }
-          for (const r of pageRecords) localNodesByKey[r.key] = r;
-          pagination = paginationRef.current.get(parentKey);
-        } catch {
-          break;
+          for (const r of childRecords) localNodesByKey[r.key] = r;
+        } else {
+          const record = localNodesByKey[parentKey];
+          if (!record) return;
+          await refreshNode({
+            nodeId: record.nodeId,
+            namespace: record.namespace,
+            concept: record.concept,
+            name: record.title,
+          });
+          // refreshNode dispatches to the reducer; mirror the same page locally,
+          // because `state` is stale inside this async closure. Page zero is
+          // cached, so this re-read does not hit the backend again.
+          const mirrored = await fetchChildren(namespace, parentNodeId, 0, PAGE_SIZE);
+          for (const c of mirrored.children) {
+            const cr = toModelRecord(c, namespace, parentKey);
+            localNodesByKey[cr.key] = cr;
+          }
         }
+        localLoadedParents.add(parentKey);
+      } catch (err) {
+        treeDebug.warn('[navigate] first page load failed', { parentKey, err: String(err) });
       }
     };
 
-    if (!localLoadedParents.has(nsKey)) {
-      // Namespace root not yet loaded at all — fetch first page
-      try {
-        const rootResult = await fetchChildren(namespace, undefined, 0, PAGE_SIZE);
-        const childRecords = rootResult.children.map((c: TreeChildNode) =>
-          toModelRecord(c, namespace, nsKey),
+    // Append pages under `parentKey` until `wantedKey` is in the store. With a
+    // child index from namespaces.getNodeLocation the element's page is known, so
+    // this stops there; without one it pages until found or exhausted.
+    const loadPagesUntilPresent = async (
+      parentKey: string,
+      parentNodeId: number | undefined,
+      wantedKey: string,
+    ): Promise<void> => {
+      const wantedIndex = indexByParentKey.get(parentKey);
+      // Resume from whatever this branch already loaded. Re-fetching page zero
+      // would drop previously loaded siblings and their expanded branches.
+      let cursor = paginationRef.current.get(parentKey) ?? { offset: 0, hasMore: true };
+      for (let page = 0; page < MAX_NAVIGATION_PAGES; page++) {
+        if (localNodesByKey[wantedKey] || !cursor.hasMore) return;
+        // Past the known index: no later page can contain the element, so a
+        // missing record means hidden or stale rather than not yet loaded.
+        if (wantedIndex !== undefined && cursor.offset > wantedIndex) return;
+        showProgress();
+        let result: Awaited<ReturnType<typeof fetchChildren>>;
+        try {
+          result = await fetchChildren(namespace, parentNodeId, cursor.offset, PAGE_SIZE);
+        } catch (err) {
+          treeDebug.warn('[navigate] page fetch failed', { parentKey, offset: cursor.offset, err: String(err) });
+          return;
+        }
+        if (result.children.length === 0) return; // no progress — do not spin
+        const pageRecords = result.children.map((c: TreeChildNode) =>
+          toModelRecord(c, namespace, parentKey),
         );
+        const nextOffset = cursor.offset + result.children.length;
+        // Drop the sentinel before appending so it stays the last child.
+        dispatch({ type: 'REMOVE_CHILD', parentKey, childKey: sentinelKey(parentKey) });
         dispatch({
           type: 'LOAD_BRANCH_PAGE',
-          parentKey: nsKey,
-          children: childRecords,
-          loadedCount: childRecords.length,
-          totalCount: rootResult.totalCount,
+          parentKey,
+          children: pageRecords,
+          loadedCount: nextOffset,
+          totalCount: result.totalCount,
         });
-        paginationRef.current.set(nsKey, { offset: childRecords.length, hasMore: rootResult.hasMore });
-        if (rootResult.hasMore) {
-          dispatch({ type: 'INSERT_CHILD', parentKey: nsKey, child: toSentinelRecord(nsKey, namespace) });
+        for (const r of pageRecords) localNodesByKey[r.key] = r;
+        cursor = { offset: nextOffset, hasMore: result.hasMore };
+        paginationRef.current.set(parentKey, cursor);
+        if (result.hasMore) {
+          dispatch({ type: 'INSERT_CHILD', parentKey, child: toSentinelRecord(parentKey, namespace) });
         }
-        for (const r of childRecords) localNodesByKey[r.key] = r;
-        localLoadedParents.add(nsKey);
-      } catch { /* best-effort */ }
-    }
-
-    // If the target is a direct child of the namespace root and still not found,
-    // keep paginating until we find it (handles the >200 items case).
-    if (!localNodesByKey[targetKey] && ancestorPath.length === 0) {
-      await fetchUntilFound(nsKey, undefined, namespace);
-    }
-
-    // Step 2: Walk ancestor path, loading each level
-    for (const ancestorId of ancestorPath) {
-      const ancestorKey = `${namespace}:${ancestorId}`;
-      const record = localNodesByKey[ancestorKey];
-      if (!record) {
-        treeDebug.warn('[navigate] ancestor not found in store', { ancestorKey });
-        break;
       }
-      if (record.nodeType === 'namespace' || localLoadedParents.has(ancestorKey)) continue;
-      try {
-        await refreshNode({ nodeId: record.nodeId, namespace: record.namespace, concept: record.concept, name: record.title });
-        const childResult = await fetchChildren(record.namespace, record.nodeId);
-        for (const c of childResult.children) {
-          const cr = toModelRecord(c, record.namespace, ancestorKey);
-          localNodesByKey[cr.key] = cr;
+      treeDebug.warn('[navigate] page budget exhausted', { parentKey, wantedKey, offset: cursor.offset });
+    };
+
+    // The chain of nodes to materialize, root-level first. A resolved location is
+    // authoritative: it is same-namespace and carries indexes. The ancestor-id
+    // path is the fallback for everything it could not resolve.
+    const chain = location?.resolved && location.levels.length > 0
+      ? location.levels.map((level) => level.nodeId)
+      : [...(ancestorPath ?? []), nodeId];
+
+    // Walk the chain, loading each level far enough to contain the next one.
+    // Loading only page zero per level is what previously stranded a reveal at
+    // the first ancestor sitting beyond its parent's first page.
+    let parentKey = nsKey;
+    let parentNodeId: number | undefined;
+    let located = true;
+    try {
+      for (const wantedId of chain) {
+        const wantedKey = `${namespace}:${wantedId}`;
+        if (!localNodesByKey[wantedKey]) {
+          await loadFirstPage(parentKey, parentNodeId);
+          await loadPagesUntilPresent(parentKey, parentNodeId, wantedKey);
         }
-        localLoadedParents.add(ancestorKey);
-      } catch { break; }
+        if (!localNodesByKey[wantedKey]) {
+          treeDebug.warn('[navigate] level not found in store', { parentKey, wantedKey });
+          located = false;
+          break;
+        }
+        parentKey = wantedKey;
+        parentNodeId = wantedId;
+      }
+    } finally {
+      // The toast has no duration, so it must not outlive an unexpected throw.
+      clearProgress();
     }
 
-    // Step 3: Expand ancestors
-    const ancestorKeys = [nsKey, ...ancestorPath.map((id) => `${namespace}:${id}`)];
+    // Expand the resolved ancestors (the chain without the target itself).
+    const ancestorKeys = [nsKey, ...chain.slice(0, -1).map((id) => `${namespace}:${id}`)];
     dispatch({ type: 'EXPAND_ANCESTOR_PATH', keys: ancestorKeys });
 
-    // Step 4: Select and scroll.
-    // If the node is still not in localNodesByKey after all fetching, it means
-    // it's paginated under a parent that hasn't been fully loaded yet.
-    // Try one more round of pagination on the immediate parent before giving up.
-    if (!localNodesByKey[targetKey]) {
-      const immediateParentId = ancestorPath.length > 0 ? ancestorPath[ancestorPath.length - 1] : undefined;
-      const immediateParentKey = immediateParentId !== undefined
-        ? `${namespace}:${immediateParentId}`
-        : nsKey;
-      await fetchUntilFound(immediateParentKey, immediateParentId, namespace);
+    if (!located) {
+      // Never select a key the tree cannot render: a selection with no visible
+      // row is exactly the "reveal silently did nothing" symptom. Open the
+      // element in the center panel and say the tree could not show it.
+      if (!suppressSelect) {
+        message.warning('This element could not be revealed in the tree. It may be hidden by the tree display settings, or no longer present.');
+        navHistory.push({ nodeId, namespace, concept, name });
+        onSelect({ nodeId, namespace, concept, name });
+      }
+      return false;
     }
 
     dispatch({ type: 'SET_SELECTED', key: targetKey });
@@ -1013,7 +1122,8 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       onSelect({ nodeId, namespace, concept, name });
       setTimeout(() => { treeRef.current?.scrollTo({ key: targetKey }); }, 0);
     }
-  }, [state.loadedParents, state.nodesByKey, refreshNode, fetchChildren, onSelect, allNamespaces, navHistory]);
+    return true;
+  }, [state.loadedParents, state.nodesByKey, refreshNode, fetchChildren, onSelect, allNamespaces, navHistory, message]);
 
   // Resolve the cross-namespace reference target for a node. This is the single
   // source of truth shared by the right-click context menu (handleRightClick) and
@@ -1060,6 +1170,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       refConcept: string,
       hostNodeId: number,
       hostNamespace: string,
+      options: { name?: string; recordHistory?: boolean } = {},
     ) => {
       const refKey = `ref:${refNamespace}:${refNodeId}@${hostNamespace}:${hostNodeId}`;
 
@@ -1079,21 +1190,44 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       // the reference child key. Poll stateRef (always current) rather than using
       // a fixed timeout — avoids the race where the key isn't in nodesByKey yet
       // when the timeout fires (cold cache, slow machine, large tree).
-      const waitForKeyAndSelect = (attempts = 0) => {
-        if (stateRef.current.nodesByKey[refKey]) {
-          dispatch({ type: 'SET_SELECTED', key: refKey });
-          onSelect({ nodeId: refNodeId, namespace: refNamespace, concept: refConcept });
-          setTimeout(() => { treeRef.current?.scrollTo({ key: refKey }); }, 50);
-        } else if (attempts < 20) {
-          // Retry up to 20 × 50ms = 1s
-          setTimeout(() => waitForKeyAndSelect(attempts + 1), 50);
-        } else {
-          treeDebug.warn('[performNavigateToReference] refKey never appeared in nodesByKey', { refKey });
-        }
-      };
-      setTimeout(() => waitForKeyAndSelect(), 50);
+      return new Promise<boolean>((resolve) => {
+        const waitForKeyAndSelect = (attempts = 0) => {
+          if (stateRef.current.nodesByKey[refKey]) {
+            const element = {
+              nodeId: refNodeId, namespace: refNamespace, concept: refConcept,
+              name: options.name ?? stateRef.current.nodesByKey[refKey].title,
+              hostNodeId, hostNamespace,
+            };
+            dispatch({ type: 'SET_SELECTED', key: refKey });
+            if (options.recordHistory) navHistory.push({ ...element, treeKey: refKey });
+            onSelect(element);
+            // rc-tree keeps the previous flattened rows during its expand
+            // animation. Retry scrolling until the selected row is rendered;
+            // the reference can exist in our store before rc-tree can scroll to it.
+            const scrollToReference = (attempt = 0) => {
+              if (stateRef.current.selectedKey !== refKey || !containerRef.current) return;
+              // Keep the current viewport when the reference already fits;
+              // otherwise reveal it with the smallest necessary scroll.
+              treeRef.current?.scrollTo({ key: refKey });
+              const selectedRow = containerRef.current.querySelector('[role="treeitem"][aria-selected="true"]');
+              if (!selectedRow && attempt < 20) {
+                setTimeout(() => scrollToReference(attempt + 1), 50);
+              }
+            };
+            setTimeout(() => scrollToReference(), 50);
+            resolve(true);
+          } else if (attempts < 20) {
+            // Retry up to 20 × 50ms = 1s
+            setTimeout(() => waitForKeyAndSelect(attempts + 1), 50);
+          } else {
+            treeDebug.warn('[performNavigateToReference] refKey never appeared in nodesByKey', { refKey });
+            resolve(false);
+          }
+        };
+        setTimeout(() => waitForKeyAndSelect(), 50);
+      });
     },
-    [navigateToTreeNode, refreshNode, onSelect],
+    [navigateToTreeNode, refreshNode, onSelect, navHistory],
   );
 
   // Imperative handle
@@ -1111,6 +1245,43 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
       } catch (err) {
         treeDebug.error('[NamespaceTreePanel] navigateToNode failed', { err: String(err) });
       }
+    },
+    async navigateToNodeInScope(target) {
+      return navigateScopedTree(target, {
+        getScope: () => ({ ...navigationScopeRef.current, ready: navigationScopeRef.current.ready && navigationMountedRef.current }),
+        hasRoot: ns => !!stateRef.current.nodesByKey[`ns:${ns}`],
+        getAncestorPath: (ns, nodeId) => api.namespaces.getAncestorPath(ns, nodeId),
+        fetchPage: (ns, parentNodeId, offset) => fetchChildren(ns, parentNodeId, offset, PAGE_SIZE),
+        applyPage: (ns, parentNodeId, page) => {
+          const parentKey = parentNodeId === undefined ? `ns:${ns}` : `${ns}:${parentNodeId}`;
+          const children = [
+            ...page.children.map(child => toModelRecord(child, ns, parentKey)),
+            ...(parentNodeId === undefined ? [] : page.references.map(ref => toReferenceRecord(ref, ns, parentNodeId, parentKey))),
+          ];
+          // Merge navigation pages: replacing page zero would remove previously
+          // loaded siblings and their expanded branches. Never rewind pagination.
+          const previous = paginationRef.current.get(parentKey);
+          const nextOffset = page.offset + page.children.length;
+          const advancesPage = !previous || nextOffset >= previous.offset;
+          if (advancesPage) dispatch({ type: 'REMOVE_CHILD', parentKey, childKey: sentinelKey(parentKey) });
+          dispatch({
+            type: 'LOAD_BRANCH_PAGE', parentKey, children,
+            loadedCount: Math.max(previous?.offset ?? 0, nextOffset), totalCount: page.totalCount,
+          });
+          if (advancesPage) {
+            paginationRef.current.set(parentKey, { offset: nextOffset, hasMore: page.hasMore });
+            if (page.hasMore) dispatch({ type: 'INSERT_CHILD', parentKey, child: toSentinelRecord(parentKey, ns) });
+          }
+        },
+        select: (node, ancestors) => {
+          const key = `${node.namespace}:${node.nodeId}`;
+          dispatch({ type: 'EXPAND_ANCESTOR_PATH', keys: [`ns:${node.namespace}`, ...ancestors.map(id => `${node.namespace}:${id}`)] });
+          dispatch({ type: 'SET_SELECTED', key });
+          navHistory.push(node);
+          onSelect(node);
+          setTimeout(() => { treeRef.current?.scrollTo({ key }); }, 0);
+        },
+      });
     },
     async navigateToReference(
       refNodeId: number,
@@ -1388,7 +1559,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
           }
         }
         navHistory.push({ ...element, treeKey, hostNodeId, hostNamespace });
-        onSelect(element);
+        onSelect({ ...element, hostNodeId, hostNamespace });
       }
       return;
     }
@@ -1429,36 +1600,29 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   const handleFailureModeCreated = useCallback(async (created: { nodeId: number; name: string }) => {
     if (!createModalTarget) return;
 
-    const parentKey = `${createModalTarget.namespace}:${createModalTarget.nodeId}`;
-
-    // Directly refresh the structural parent so the new malfunction reference
-    // appears immediately, regardless of whether the node was previously expanded.
-    // The cache subscription guard (loadedParents check) silently skips nodes that
-    // were never expanded — which is common for port/leaf nodes in large models.
-    // Calling refreshNode here is deterministic: it always re-fetches, dispatches
-    // LOAD_BRANCH (which sets loadedParents and flips isLeaf to false when children
-    // exist), and works even when the node was a structural leaf with no prior expansion.
-    await refreshNode({
-      nodeId: createModalTarget.nodeId,
-      namespace: createModalTarget.namespace,
-      concept: createModalTarget.concept,
-      name: createModalTarget.name,
-    });
-
-    // Expand the structural parent so the malfunction reference is visible.
-    if (!state.expandedKeys[parentKey]) {
-      dispatch({ type: 'TOGGLE_EXPAND', key: parentKey });
-    }
-
     // The new malfunction lives in the analysis namespace it was authored
     // into, not createModalTarget.namespace — normally safetyNamespace, but in
     // browse mode (no fixed safetyNamespace) it is whatever the user picked in
     // SelectAnalysisNamespaceModal.
     const malfunctionNamespace = browseNamespace ? (browseCreateNamespace ?? safetyNamespace) : safetyNamespace;
-    const createdKey = `${malfunctionNamespace}:${created.nodeId}`;
-    dispatch({ type: 'SET_SELECTED', key: createdKey });
-    onSelect({ nodeId: created.nodeId, namespace: malfunctionNamespace, concept: 'malfunction', name: created.name });
-  }, [createModalTarget, onSelect, refreshNode, state.expandedKeys, safetyNamespace, browseNamespace, browseCreateNamespace]);
+    try {
+      // Refresh even a previously unexpanded leaf, then select the reference
+      // only once React has committed it. Keep the authoring and host namespaces
+      // distinct, and record this location for Back/Forward navigation.
+      const revealed = await performNavigateToReference(
+        created.nodeId, malfunctionNamespace, 'malfunction',
+        createModalTarget.nodeId, createModalTarget.namespace,
+        { name: created.name, recordHistory: true },
+      );
+      if (revealed) return;
+    } catch (err) {
+      treeDebug.error('[NamespaceTreePanel] reveal created malfunction failed', { err: String(err) });
+    }
+    // Creation already succeeded. A navigation failure must not look like a
+    // failed create or encourage the user to create a duplicate malfunction.
+    onSelect(createModalTarget);
+    void message.warning('Malfunction created, but its reference could not be shown in the tree.');
+  }, [createModalTarget, onSelect, performNavigateToReference, message, safetyNamespace, browseNamespace, browseCreateNamespace]);
 
   // ---------------------------------------------------------------------------
   // Back / Forward navigation handlers
@@ -1475,7 +1639,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
           setTimeout(() => {
             if (entry.treeKey) {
               dispatch({ type: 'SET_SELECTED', key: entry.treeKey });
-              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name });
+              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name, hostNodeId: entry.hostNodeId, hostNamespace: entry.hostNamespace });
               setTimeout(() => { treeRef.current?.scrollTo({ key: entry.treeKey! }); }, 50);
             }
           }, 50);
@@ -1498,7 +1662,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
           setTimeout(() => {
             if (entry.treeKey) {
               dispatch({ type: 'SET_SELECTED', key: entry.treeKey });
-              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name });
+              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name, hostNodeId: entry.hostNodeId, hostNamespace: entry.hostNamespace });
               setTimeout(() => { treeRef.current?.scrollTo({ key: entry.treeKey! }); }, 50);
             }
           }, 50);
@@ -1520,7 +1684,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
           setTimeout(() => {
             if (entry.treeKey) {
               dispatch({ type: 'SET_SELECTED', key: entry.treeKey });
-              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name });
+              onSelect({ nodeId: entry.nodeId, namespace: entry.namespace, concept: entry.concept, name: entry.name, hostNodeId: entry.hostNodeId, hostNamespace: entry.hostNamespace });
               setTimeout(() => { treeRef.current?.scrollTo({ key: entry.treeKey! }); }, 50);
             }
           }, 50);
@@ -1707,7 +1871,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
               }
               return <span style={{ color: '#1677ff', cursor: 'pointer' }}>Load more…</span>;
             }
-            return treeNode.title as React.ReactNode;
+            return <span data-tree-key={String(treeNode.key)}>{treeNode.title as React.ReactNode}</span>;
           }}
         />
       </div>

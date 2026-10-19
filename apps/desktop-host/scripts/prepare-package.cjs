@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { stageReleaseLicenses } = require('./license-bundle.cjs');
+const { validateRendererPackage } = require('./renderer-package.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const desktopHostDir = path.resolve(__dirname, '..');
@@ -644,6 +645,7 @@ function main() {
 
   copyDir(desktopDistDir, path.join(appDir, 'dist'));
   copyDir(rendererDistDir, path.join(appDir, 'renderer'));
+  validateRendererPackage(appDir);
   removeDevOnlyArtifacts();
 
   workspacePackages.forEach(copyWorkspacePackage);

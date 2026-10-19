@@ -14,12 +14,13 @@
  * identical in every UNION ALL branch. Regenerating is safer than hand-editing
  * 15 copies of the same CASE.
  *
- * **Drift warning:** this script overwrites the whole file. If you hand-edit
- * `view-queries.json`, either port the edit here or delete this script — do not
- * leave the two disagreeing. Whatever you do, `catalog-queries.test.ts`
- * validates the JSON itself and does not care how it was produced.
+ * **Drift warning:** the default overwrites the whole file. Use --mapping to
+ * regenerate just one mapping while preserving hand-maintained entries for
+ * the others. `catalog-queries.test.ts` validates the JSON itself regardless
+ * of how it was produced.
  *
  * Run: node packages/app-core/queries/generate-view-queries.js <repo-root>
+ * Scoped: node packages/app-core/queries/generate-view-queries.js <repo-root> --mapping sphinx_needs
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -217,6 +218,20 @@ const SN_NEED_GUARD = (alias) => `MATCH (parent:RIA_META_Concept) WHERE parent.m
 MATCH (child:RIA_META_Concept)-[:RIA_META_CONCEPT_SUBTYPEOF]->(parent) WHERE child.metamodel = ${alias}.metamodel AND child.name = ${alias}.concept`;
 
 const SN_LINK_GUARD = (relAlias, riAlias) => `MATCH (${relAlias}:RIA_META_Relationship) WHERE ${relAlias}.metamodel = ${riAlias}.metamodel AND ${relAlias}.name = ${riAlias}.relationship AND ${relAlias}.source_concept = 'need_base' AND ${relAlias}.target_concept = 'need_base'`;
+
+/** Documents are containers, separate from the per-project need subtypes. */
+const SN_DOCUMENT_ROWS = (filter) => `MATCH (doc:RIA_UNIV_ConceptInstance)
+WHERE doc.concept = 'need_document' AND doc.namespace IN $sourceNamespaces${filter}
+${repRow('doc', `'StructuralElement'`, 'doc.namespace')}`;
+
+const SN_OWNERSHIP_ROWS = (filter = '') => `MATCH (contains:RIA_UNIV_RelationshipInstance)
+WHERE contains.namespace IN $sourceNamespaces AND contains.relationship = 'contains_need'${filter}
+MATCH (doc:RIA_UNIV_ConceptInstance)
+WHERE doc.node_id = contains.source_node_id AND doc.concept = 'need_document' AND doc.namespace = contains.namespace
+MATCH (need:RIA_UNIV_ConceptInstance)
+WHERE need.node_id = contains.target_node_id AND need.namespace = contains.namespace
+${SN_NEED_GUARD('need')}
+${relRow(`'Ownership'`, 'CAST(contains.source_node_id AS STRING)', 'CAST(contains.target_node_id AS STRING)')}`;
 
 /** Sphinx traversal is unrolled per hop: a dynamic relationship name cannot be
  *  used inside a recursive relationship pattern, which is why MAX depth is 3. */
@@ -496,7 +511,7 @@ ${relRow(`'ConnectionOwner'`, 'CAST(ri5.target_node_id AS STRING)', 'CAST(ri5.so
 // ── Sphinx-Needs ────────────────────────────────────────────────────────────
 add({
   id: 'sphinx_needs.common_model.whole',
-  description: 'Whole-view projection of a Sphinx-Needs namespace onto CommonModel: every need becomes a Requirement, every need-to-need link becomes a Refinement. The source metamodel name is per-project dynamic (SN_<namespace>), so needs and links are resolved structurally through RIA_META_CONCEPT_SUBTYPEOF and RIA_META_Relationship rather than by literal name lists.',
+  description: 'Projects Sphinx-Needs documents as StructuralElements, needs as Requirements, contains_need as Ownership, and need-to-need links as Refinement. Dynamic need subtypes and links are resolved through the metamodel.',
   sourceMetamodel: '',
   mode: 'whole',
   parameters: ['sourceNamespaces'],
@@ -508,34 +523,42 @@ UNION ALL
 UNWIND $sourceNamespaces AS ns2
 MATCH (ri:RIA_UNIV_RelationshipInstance) WHERE ri.namespace = ns2
 ${SN_LINK_GUARD('rel', 'ri')}
-${relRow(`'Refinement'`, 'CAST(ri.source_node_id AS STRING)', 'CAST(ri.target_node_id AS STRING)')}`,
+${relRow(`'Refinement'`, 'CAST(ri.source_node_id AS STRING)', 'CAST(ri.target_node_id AS STRING)')}
+UNION ALL
+${SN_DOCUMENT_ROWS('')}
+UNION ALL
+${SN_OWNERSHIP_ROWS()}`,
 });
 
 add({
   id: 'sphinx_needs.common_model.element',
-  description: 'Resolves a single Sphinx-Needs need to its CommonModel Requirement representative, without loading the rest of the namespace.',
+  description: 'Resolves a single Sphinx-Needs document or need to its CommonModel representative, without loading the rest of the namespace.',
   sourceMetamodel: '',
   mode: 'element',
   parameters: ['elementNodeId', 'sourceNamespaces'],
   cypher: `MATCH (ci:RIA_UNIV_ConceptInstance) WHERE ci.node_id = $elementNodeId AND ci.namespace IN $sourceNamespaces
 ${SN_NEED_GUARD('ci')}
-${repRow('ci', `'Requirement'`, 'ci.namespace')}`,
+${repRow('ci', `'Requirement'`, 'ci.namespace')}
+UNION ALL
+${SN_DOCUMENT_ROWS(' AND doc.node_id = $elementNodeId')}`,
 });
 
 add({
   id: 'sphinx_needs.common_model.elements',
-  description: 'Resolves a list of Sphinx-Needs needs to their CommonModel Requirement representatives, without loading the rest of the namespace.',
+  description: 'Resolves a list of Sphinx-Needs documents and needs to their CommonModel representatives, without loading the rest of the namespace.',
   sourceMetamodel: '',
   mode: 'elements',
   parameters: ['elementNodeIds', 'sourceNamespaces'],
   cypher: `UNWIND $elementNodeIds AS nid
 MATCH (ci:RIA_UNIV_ConceptInstance) WHERE ci.node_id = nid AND ci.namespace IN $sourceNamespaces
 ${SN_NEED_GUARD('ci')}
-${repRow('ci', `'Requirement'`, 'ci.namespace')}`,
+${repRow('ci', `'Requirement'`, 'ci.namespace')}
+UNION ALL
+${SN_DOCUMENT_ROWS(' AND doc.node_id IN $elementNodeIds')}`,
 });
 
 // Sphinx-Needs, like the other two, gets one entry per (relationship,
-// direction) — here a single relationship, so two entries. Its hops are still
+// direction). Refinement hops are still
 // unrolled *within* an entry, because a dynamic relationship name cannot appear
 // in a recursive pattern; that unrolling is bounded by SN_MAX_DEPTH and each
 // branch is a plain join, so it carries none of the recursive-expansion risk
@@ -562,16 +585,45 @@ LIMIT $maxResults`);
   });
 }
 
+// Document containment is exactly one hop: need_document -> need_base.
+// It must never walk requirement links or pull in another document's needs.
+for (const dir of ['outgoing', 'incoming']) {
+  const outgoing = dir === 'outgoing';
+  add({
+    id: `sphinx_needs.common_model.traversal.Ownership.${dir}`,
+    description: `Walks document containment ${dir} in a Sphinx-Needs namespace, bounded to one hop and the requested result limit.`,
+    sourceMetamodel: '',
+    mode: 'traversal',
+    parameters: ['representativeIds', 'relationship', 'direction', 'depth', 'maxResults', 'sourceNamespaces'],
+    cypher: `UNWIND $representativeIds AS ridStr
+WITH CAST(ridStr AS INT64) AS rid
+WHERE $relationship = 'Ownership' AND $direction = '${dir}' AND $depth >= 1
+MATCH (contains:RIA_UNIV_RelationshipInstance)
+WHERE contains.${outgoing ? 'source' : 'target'}_node_id = rid
+  AND contains.relationship = 'contains_need' AND contains.namespace IN $sourceNamespaces
+MATCH (doc:RIA_UNIV_ConceptInstance)
+WHERE doc.node_id = contains.source_node_id AND doc.concept = 'need_document' AND doc.namespace = contains.namespace
+MATCH (need:RIA_UNIV_ConceptInstance)
+WHERE need.node_id = contains.target_node_id AND need.namespace = contains.namespace
+${SN_NEED_GUARD('need')}
+WITH DISTINCT ${outgoing ? 'need' : 'doc'} AS b
+${repRow('b', outgoing ? `'Requirement'` : `'StructuralElement'`, 'b.namespace')}
+LIMIT $maxResults`,
+  });
+}
+
 add({
   id: 'sphinx_needs.common_model.edges',
-  description: 'Returns the Refinement relationships whose source and target are both in $nodeIds. Completes element/elements/traversal results with their edges.',
+  description: 'Returns Refinement and document Ownership relationships whose source and target are both in $nodeIds. Completes element/elements/traversal results with their edges.',
   sourceMetamodel: '',
   mode: 'edges',
   parameters: ['nodeIds', 'sourceNamespaces'],
   cypher: `MATCH (ri:RIA_UNIV_RelationshipInstance)
 WHERE ri.namespace IN $sourceNamespaces AND ri.source_node_id IN $nodeIds AND ri.target_node_id IN $nodeIds
 ${SN_LINK_GUARD('rel', 'ri')}
-${relRow(`'Refinement'`, 'CAST(ri.source_node_id AS STRING)', 'CAST(ri.target_node_id AS STRING)')}`,
+${relRow(`'Refinement'`, 'CAST(ri.source_node_id AS STRING)', 'CAST(ri.target_node_id AS STRING)')}
+UNION ALL
+${SN_OWNERSHIP_ROWS(' AND contains.source_node_id IN $nodeIds AND contains.target_node_id IN $nodeIds')}`,
 });
 
 // ---------------------------------------------------------------------------
@@ -605,6 +657,27 @@ for (const entry of entries) {
 }
 
 const out = path.join(repoRoot, 'packages', 'app-core', 'queries', 'view-queries.json');
-fs.writeFileSync(out, JSON.stringify(entries, null, 2) + '\n', 'utf-8');
-console.log(`wrote ${entries.length} entries to ${out}`);
-for (const e of entries) console.log(`  ${e.id.padEnd(36)} ${e.mode.padEnd(10)} ${e.cypher.length} chars`);
+// Other mappings have catalog refinements maintained outside this generator.
+// A scoped regeneration preserves those entries, including numbered continuations.
+// Usage: node generate-view-queries.js <repo-root> --mapping sphinx_needs
+const mapping = process.argv[3] === '--mapping' ? process.argv[4] : undefined;
+let outputEntries = entries;
+if (process.argv[3] && !mapping) throw new Error('Expected --mapping <mapping-prefix>');
+if (mapping) {
+  const prefix = `${mapping}.`;
+  const generated = entries.filter(entry => entry.id.startsWith(prefix));
+  if (generated.length === 0) throw new Error(`Unknown mapping prefix: ${mapping}`);
+  const existing = JSON.parse(fs.readFileSync(out, 'utf-8'));
+  outputEntries = [];
+  let inserted = false;
+  for (const entry of existing) {
+    if (entry.id.startsWith(prefix)) {
+      if (!inserted) outputEntries.push(...generated);
+      inserted = true;
+    } else outputEntries.push(entry);
+  }
+  if (!inserted) outputEntries.push(...generated);
+}
+fs.writeFileSync(out, JSON.stringify(outputEntries, null, 2) + '\n', 'utf-8');
+console.log(`wrote ${outputEntries.length} entries to ${out}`);
+for (const e of outputEntries) console.log(`  ${e.id.padEnd(36)} ${e.mode.padEnd(10)} ${e.cypher.length} chars`);

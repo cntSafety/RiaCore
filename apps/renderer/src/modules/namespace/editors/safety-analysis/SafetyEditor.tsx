@@ -26,7 +26,7 @@ import { useResizablePanel } from './hooks/useResizablePanel';
 import { NamespaceTreePanel } from './components/NamespaceTreePanel';
 import type { NamespaceTreePanelHandle } from './components/NamespaceTreePanel';
 import { CenterPanel } from './components/CenterPanel';
-import type { SelectedTreeElement } from './types';
+import type { SelectedTreeElement, ScopedTreeNavigator } from './types';
 import { useWorkspaceState } from '../../../../hooks/useWorkspaceState';
 import { useAutoSave } from '../../../../hooks/useAutoSave';
 import { useAutoSaveStatusStore } from '../../../../store/autoSaveStatusStore';
@@ -364,6 +364,12 @@ export function SafetyEditor({ ns }: SafetyEditorProps) {
     [],
   );
 
+  const handleShowRelationshipInTree: ScopedTreeNavigator = useCallback(async (target) => {
+    const tree = treePanelRef.current;
+    if (!tree) return { status: 'unavailable', message: 'The analysis tree is not available. Please try again.' };
+    return tree.navigateToNodeInScope(target);
+  }, []);
+
   // Clear showDetailsFor when the tree selection changes (user navigated away)
   const handleTreeSelect = useCallback((element: SelectedTreeElement | null) => {
     setSelectedTreeElement(element);
@@ -490,8 +496,14 @@ export function SafetyEditor({ ns }: SafetyEditorProps) {
           </div>
         </div>
         <CenterPanel
+            onShowRelationshipInTree={handleShowRelationshipInTree}
           namespace={ns.name}
           selectedTreeElement={selectedTreeElement}
+          onElementDeleted={(nodeId) => {
+            if (selectedTreeElementRef.current?.nodeId !== nodeId) return;
+            setSelectedTreeElement(null);
+            treePanelRef.current?.clearSelection();
+          }}
           onRenameSelectedTreeElement={handleTreeElementRename}
           addNoteRequested={addNoteRequested}
           onAddNoteHandled={() => setAddNoteRequested(false)}

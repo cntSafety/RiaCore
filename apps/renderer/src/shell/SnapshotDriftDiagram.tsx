@@ -55,6 +55,15 @@
  * A verb is only ever claimed when the data supports it. With no reason the
  * label degrades to the neutral "synced" and the arrow keeps its default
  * direction rather than asserting one.
+ *
+ * ## Two shapes, because one of them is not a comparison
+ *
+ * Everything above describes the ordinary drift case, where two snapshots were
+ * compared and found to differ. `manifestUnreadable` is not that case: the
+ * manifest on disk could not be parsed, so NOTHING was compared, and the whole
+ * two-sided vocabulary — peer stacks, a step-2 arrow naming what happened to the
+ * files, two dashed resolutions — asserts a comparison that did not occur. It
+ * gets its own single-sided shape instead. See `UnreadableManifestPanel`.
  */
 import { theme } from 'antd';
 import type { SnapshotSyncReason } from '@riacore/app-contracts';
@@ -78,6 +87,14 @@ interface Props {
   syncedReason: SnapshotSyncReason | null;
   /** When the files on disk were last written. */
   filesChangedAt: string | null;
+  /**
+   * `ria-data/manifest.json` is present but could not be parsed, so no hash on
+   * disk was compared with anything. Switches to the single-sided panel.
+   *
+   * Required rather than optional on purpose: defaulting it to false would let a
+   * future consumer forget it and silently get the two-sided comparison back.
+   */
+  manifestUnreadable: boolean;
 }
 
 /** Keep long branch names from overflowing — SVG text does not wrap or ellipsise. */
@@ -150,8 +167,18 @@ function EventLabel({
   );
 }
 
-/** A stack of three offset sheets, representing the ria-data JSON files. */
-function FileStack({ x, y, color, fill }: { x: number; y: number; color: string; fill: string }) {
+/**
+ * A stack of three offset sheets, representing the ria-data JSON files.
+ *
+ * `dashed` means "these files exist but their state is unknown" — used only by
+ * the unreadable-manifest panel, where a solid outline would claim the same
+ * certainty as the snapshot the database actually came from.
+ */
+function FileStack({
+  x, y, color, fill, dashed = false,
+}: {
+  x: number; y: number; color: string; fill: string; dashed?: boolean;
+}) {
   return (
     <g>
       {[4, 2, 0].map((offset) => (
@@ -165,6 +192,7 @@ function FileStack({ x, y, color, fill }: { x: number; y: number; color: string;
           fill={fill}
           stroke={color}
           strokeWidth={1.5}
+          {...(dashed ? { strokeDasharray: '4 3' } : {})}
         />
       ))}
     </g>
@@ -189,9 +217,167 @@ function Cylinder({ x, y, color, fill }: { x: number; y: number; color: string; 
   );
 }
 
+/**
+ * The unreadable-manifest shape: one known side, one unknown side, no comparison.
+ *
+ * ## Why the ordinary diagram cannot be reused here, captioned or otherwise
+ *
+ * The two-sided diagram is a drawing of a comparison. Every part of it is a
+ * claim that only a comparison can license, and with `manifestUnreadable` set,
+ * no comparison happened — the change lists are empty because nothing could be
+ * read, not because nothing changed. Three specific falsehoods result:
+ *
+ *  1. **`driftKind` is a deduction that no longer holds.** It reads "drift was
+ *     detected AND git identity is identical on both sides, therefore the
+ *     working tree was rewritten in place" and captions step 2 "files rewritten
+ *     — same commit, e.g. git discard". That inference is sound only when drift
+ *     came from differing hashes. Here drift came from unreadability, and the
+ *     unreadable manifest is overwhelmingly a half-written or conflicted file
+ *     rather than a branch move — so git identity is usually identical and the
+ *     diagram would name a `git discard` that never happened. §4.5 of
+ *     RiaDataChangeDetection.md refused exactly this shape of error for the real
+ *     undo case: an arrow stating something git itself would deny.
+ *  2. **Two peer stacks under identical branch labels read as "these were
+ *     compared".** That is the whole point of drawing them level and in the same
+ *     visual vocabulary. Here the left snapshot is known (it is the baseline,
+ *     held in memory and unaffected) and the right one is not characterisable at
+ *     all, which is an asymmetry the symmetric layout cannot express.
+ *  3. **Two dashed resolutions offer an affordance that does not exist.** Load
+ *     and manifest repair both parse the same unparseable file and throw, so
+ *     Store is the only one that works — the contract's own
+ *     `manifestUnreadable` doc and `describeDrift` both say so. Drawing Load as
+ *     an equal option sends the user into a dead end first.
+ *
+ * So: database on the left with its session moments, the files on disk on the
+ * right drawn dashed and explicitly uncharacterised, nothing between them that
+ * claims an event, and the single dashed arrow for the one recovery that runs.
+ * Omitting the Load arrow is an omission, not a claim — the dialog owns the
+ * button set and the explanation of why Load and Repair fail.
+ *
+ * ## Every timestamp is still an event
+ *
+ * The §4.5 rule holds, and the unreadable case makes one of the three verbs
+ * unavailable: `filesChangedAt` is captioned from the branch/commit comparison
+ * in the ordinary path, and that derivation is precisely what is invalid here.
+ * It degrades to "manifest last written", which is what the stat actually
+ * measures and the strongest true statement available — not "broken at", which
+ * would assert a cause nothing here establishes. `openedAt` and `syncedAt` keep
+ * their ordinary verbs: both are properties of this session and the baseline,
+ * neither depends on reading the file on disk, and together they say the
+ * database holds real work saved at a known moment.
+ */
+function UnreadableManifestPanel({
+  openedLabel, syncedVerb, syncedLabel, writtenLabel,
+}: {
+  openedLabel: string | null;
+  syncedVerb: string;
+  /** Null when the sync event IS the open, so the same moment is not shown twice. */
+  syncedLabel: string | null;
+  /** `filesChangedAt`, the manifest mtime. */
+  writtenLabel: string | null;
+}) {
+  const { token } = useToken();
+
+  const blue = token.colorPrimary;
+  /**
+   * A fourth hue, and the only one introduced for this panel. Blue is the
+   * database, orange is what happened to the files, purple is the pending
+   * question — none of them means "this is broken", which is the whole subject
+   * here. Taken from the theme token so it tracks light/dark like the rest.
+   */
+  const error = token.colorError;
+  const purple = token.purple;
+  const text = token.colorText;
+  const dim = token.colorTextSecondary;
+  const bg = token.colorBgContainer;
+
+  const dbX = 96;
+  const diskX = 404;
+
+  return (
+    <svg
+      viewBox="0 0 580 210"
+      width="100%"
+      role="img"
+      aria-label={
+        'The analysis you have open is intact. The manifest in ria-data on disk cannot be read, ' +
+        'so the files there could not be compared with this database. Storing to ria-data is the ' +
+        'only action that can run.'
+      }
+      style={{ display: 'block', margin: '4px 0 12px' }}
+    >
+      <defs>
+        <marker id="drift-unreadable-arrow-purple" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill={purple} />
+        </marker>
+      </defs>
+
+      {/* ── What happened, and what it rules out ──────────────────────────── */}
+      {/* No arrow carries this, unlike step 2 of the ordinary diagram: an arrow
+          between the two sides would itself be the comparison claim. */}
+      <text x={290} y={22} textAnchor="middle" fontSize={12} fontWeight={600} fill={error}>
+        ria-data/manifest.json could not be read
+      </text>
+      <text x={290} y={40} textAnchor="middle" fontSize={11} fill={dim}>
+        so nothing on disk could be compared with this database
+      </text>
+
+      {/* ── Left: the database. The side that is known. ───────────────────── */}
+      <text x={dbX + 27} y={70} textAnchor="middle" fontSize={12} fontWeight={600} fill={text}>
+        RiaCore database
+      </text>
+      <Cylinder x={dbX} y={80} color={blue} fill={bg} />
+      {/* The session moments, stacked under the thing they belong to. Shown here
+          rather than on an arrow because there is no step-1 arrow to hang them
+          on: the snapshot the database was loaded from is not drawn, since its
+          only role in the ordinary diagram is to be the thing compared. */}
+      {openedLabel && (
+        <EventLabel
+          x={dbX + 27} y={146} anchor="middle" fill={dim}
+          verb="opened" moment={openedLabel}
+        />
+      )}
+      {syncedLabel && (
+        <EventLabel
+          x={dbX + 27} y={176} anchor="middle" fill={dim}
+          verb={syncedVerb} moment={syncedLabel}
+        />
+      )}
+
+      {/* ── Right: the files on disk. The side that is not knowable. ──────── */}
+      <text x={diskX + 13} y={70} textAnchor="middle" fontSize={12} fontWeight={600} fill={text}>
+        ria-data on disk
+      </text>
+      <FileStack x={diskX} y={84} color={error} fill={bg} dashed />
+      <text x={diskX + 13} y={138} textAnchor="middle" fontSize={11} fill={error}>
+        contents unknown
+      </text>
+      <EventLabel
+        x={diskX + 13} y={158} anchor="middle" fill={dim}
+        verb="manifest last written" moment={writtenLabel}
+      />
+
+      {/* ── The one resolution that can run ───────────────────────────────── */}
+      {/* Dashed and purple for the same reason as the ordinary pair: it has not
+          happened, it is the question. There is no second arrow because there is
+          no second answer — Load and Repair read the same unparseable file. */}
+      <text x={277} y={95} textAnchor="middle" fontSize={11} fontWeight={600} fill={text}>
+        Store to ria-data?
+      </text>
+      <line
+        x1={dbX + 62} y1={103} x2={diskX - 8} y2={103}
+        stroke={purple} strokeWidth={1.5} strokeDasharray="5 4"
+        markerEnd="url(#drift-unreadable-arrow-purple)"
+      />
+    </svg>
+  );
+}
+
 export function SnapshotDriftDiagram({
   dbBranch, diskBranch, dbCommit, diskCommit,
   openedAt, syncedAt, syncedReason, filesChangedAt,
+  manifestUnreadable,
 }: Props) {
   const { token } = useToken();
 
@@ -256,6 +442,27 @@ export function SnapshotDriftDiagram({
    * repair is rare, and a brand-new workspace has no manifest to drift from.
    */
   const syncWroteFilesFromDb = syncedReason === 'store';
+
+  /**
+   * Branch here, and not later with a caption: everything below this line is
+   * derived from comparing the two sides, starting with `driftKind`, and with an
+   * unreadable manifest no comparison took place. A caption cannot retract the
+   * claims the geometry makes — see `UnreadableManifestPanel` for the three it
+   * would be making falsely.
+   *
+   * Placed AFTER the three moment labels so they are shared: those are facts
+   * about this session and the baseline, true in both shapes.
+   */
+  if (manifestUnreadable) {
+    return (
+      <UnreadableManifestPanel
+        openedLabel={openedLabel}
+        syncedVerb={syncedVerb}
+        syncedLabel={syncedLabel}
+        writtenLabel={changedLabel}
+      />
+    );
+  }
 
   /**
    * What happened, named as precisely as the data allows.

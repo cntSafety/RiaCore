@@ -20,6 +20,7 @@
 import type { createRegistry } from '../channel-registry.js';
 import { runAllCleanups } from '../../infra/cleanup-service.js';
 import { buildSnapshotDriftInfo } from '../../workspace/snapshot-baseline.js';
+import { buildSyncReport } from '../../workspace/sync-report.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -110,13 +111,17 @@ export function registerWorkspaceChannels(
   registry.register('workspace.getSnapshotDrift', async (_payload, deps, _ctx) => {
     // Read-only. Reports whether ria-data/ still matches the snapshot the DB was
     // loaded from, so the UI can offer the Store/Load decision instead of
-    // surfacing a failed save. See docs/coreSpecs/RiaDataChangeDetection.md §4.3.
+    // surfacing a failed save.
     const status = await deps.workspaceService.getStatus();
     if (status.state !== 'open') {
       return {
         drifted: false,
         changedNamespaces: [],
         universeChanged: false,
+        sourcemasterChanged: false,
+        crossNamespaceChanged: false,
+        manifestUnreadable: false,
+        pendingDecision: null,
         dirtyNamespaces: [],
         dbBranch: null,
         diskBranch: null,
@@ -129,6 +134,21 @@ export function registerWorkspaceChannels(
       };
     }
     return await buildSnapshotDriftInfo(status.info.workingDir, deps.dbModule);
+  }, {
+    requiresWorkspace: true,
+    category: 'workspace',
+  });
+
+  registry.register('workspace.getSyncReport', async (_payload, deps, _ctx) => {
+    // Read-only, and deliberately RECOMPUTED rather than read from whatever the
+    // last open cached: this is a diagnostic, and a diagnostic that reports a
+    // snapshot of the past is worse than none at all. The cost is one hash per
+    // ria-data file, which is why it is a command and not a poll.
+    const status = await deps.workspaceService.getStatus();
+    if (status.state !== 'open') {
+      throw new Error('No workspace is open');
+    }
+    return await buildSyncReport(status.info.workingDir, deps.dbModule);
   }, {
     requiresWorkspace: true,
     category: 'workspace',

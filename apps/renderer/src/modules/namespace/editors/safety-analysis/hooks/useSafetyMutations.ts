@@ -185,6 +185,8 @@ async function invalidateElementInTree(
   // the drift is exactly how the view came to need several switches before a
   // new malfunction appeared (spec-view.md Phase 5.2).
   tasks.push(invalidateModelViewQueries(qc));
+  // The window editing a malfunction may never have opened a relationship view.
+  requestCrossWindowInvalidation(['safety.relationships']);
 
   await Promise.all(tasks);
 }
@@ -808,11 +810,33 @@ export function useUpdateSafetyNote(namespace: string, workspaceKey: string | nu
   });
 }
 
-export function useDeleteSafetyNote(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void) {
+export function useDeleteSafetyNote(namespace: string, workspaceKey: string | null = null, triggerAutoSave?: () => void, onDeleted?: (nodeId: number) => void) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ nodeId }: { nodeId: number; parentNodeId?: number; parentNamespace?: string }) => api.safety.deleteSafetyNote(nodeId),
-    onSuccess: async (_data, { parentNodeId, parentNamespace }) => {
+    onMutate: async ({ nodeId, parentNodeId, parentNamespace }) => {
+      // A note deleted from its authored root has no structural parent in the
+      // tree. Resolve the has_notes host before deletion removes that link.
+      const parent = parentNodeId !== undefined && parentNamespace
+        ? { node_id: parentNodeId, namespace: parentNamespace }
+        : qc.getQueryData<import('@riacore/app-contracts').ConceptInstanceData | null>(['safety.noteParent', nodeId])
+          ?? await api.safety.getNoteParent(nodeId);
+      return { parent };
+    },
+    onSuccess: async (_data, { nodeId }, context) => {
+      const parent = context?.parent;
+      // Clear selection before invalidations can refetch Details for the note
+      // that the backend just deleted. Also cancel/remove reads and expanded
+      // branches of that note, while retaining the surviving parent's caches.
+      onDeleted?.(nodeId);
+      const deletedNoteReads = (query: { queryKey: readonly unknown[] }) => {
+        const key = query.queryKey;
+        if (key[0] === 'safety.relationships') return key[1] === workspaceKey && key[2] === nodeId;
+        if (key[0] === 'tree.children') return key[1] === workspaceKey && key[3] === nodeId;
+        return ['safety.instance', 'safety.noteParent', 'safety.notesForElement', 'safety.notesForFm'].includes(String(key[0])) && key[1] === nodeId;
+      };
+      await qc.cancelQueries({ predicate: deletedNoteReads });
+      qc.removeQueries({ predicate: deletedNoteReads });
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['safety.safetyNotes', namespace] }),
         qc.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith('safety.notesFor') }),
@@ -821,8 +845,8 @@ export function useDeleteSafetyNote(namespace: string, workspaceKey: string | nu
         // key when it lives in a different (imported) namespace.
         invalidateElementInTree(qc, workspaceKey, namespace, {
           structuralParent:
-            parentNodeId !== undefined && parentNamespace && parentNamespace !== namespace
-              ? { nodeId: parentNodeId, namespace: parentNamespace }
+            parent && parent.namespace !== namespace
+              ? { nodeId: parent.node_id, namespace: parent.namespace }
               : null,
         }),
       ]);
@@ -942,6 +966,7 @@ export function useOccursAtMutation(
     // *both*. This path does not go through `invalidateElementInTree`, so it
     // states the model-view refresh itself.
     promises.push(invalidateModelViewQueries(qc));
+    requestCrossWindowInvalidation(['safety.relationships']);
     await Promise.all(promises);
   };
 
@@ -1105,7 +1130,9 @@ export function useLinkDirectRequirementToFm(triggerAutoSave?: () => void) {
     onSuccess: async (_data, { failureModeNodeId }) => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['safety.directRequirementsForFm', failureModeNodeId] }),
+        qc.invalidateQueries({ queryKey: ['safety.relationships'] }),
       ]);
+      requestCrossWindowInvalidation(['safety.relationships']);
       triggerAutoSave?.();
     },
   });
@@ -1119,7 +1146,9 @@ export function useUnlinkDirectRequirementFromFm(triggerAutoSave?: () => void) {
     onSuccess: async (_data, { failureModeNodeId }) => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['safety.directRequirementsForFm', failureModeNodeId] }),
+        qc.invalidateQueries({ queryKey: ['safety.relationships'] }),
       ]);
+      requestCrossWindowInvalidation(['safety.relationships']);
       triggerAutoSave?.();
     },
   });

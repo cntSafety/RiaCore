@@ -25,7 +25,7 @@ import { useWorkspaceState } from '../../../../hooks/useWorkspaceState';
 import { NamespaceTreePanel } from '../safety-analysis/components/NamespaceTreePanel';
 import type { NamespaceTreePanelHandle } from '../safety-analysis/components/NamespaceTreePanel';
 import { CenterPanel } from '../safety-analysis/components/CenterPanel';
-import type { SelectedTreeElement } from '../safety-analysis/types';
+import type { SelectedTreeElement, ScopedTreeNavigator } from '../safety-analysis/types';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -42,6 +42,8 @@ interface GenericModelBrowserModalProps {
 export function GenericModelBrowserModal({ open, onClose, namespace }: GenericModelBrowserModalProps) {
   const { token } = useToken();
   const [selected, setSelected] = useState<SelectedTreeElement | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const treePanelRef = useRef<NamespaceTreePanelHandle>(null);
 
   // The modal itself stays mounted permanently (only `open` toggles), so
@@ -70,8 +72,20 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
     setSelected(element);
   }, []);
 
+  const handleElementDeleted = useCallback((nodeId: number) => {
+    if (selectedRef.current?.nodeId !== nodeId) return;
+    setSelected(null);
+    treePanelRef.current?.clearSelection();
+  }, []);
+
   const handleNavigateToNode = useCallback((nodeId: number, ns: string, concept: string) => {
     void treePanelRef.current?.navigateToNode(nodeId, ns, concept);
+  }, []);
+
+  const handleShowRelationshipInTree: ScopedTreeNavigator = useCallback(async (target) => {
+    const tree = treePanelRef.current;
+    if (!tree) return { status: 'unavailable', message: 'The model tree is not available. Please try again.' };
+    return tree.navigateToNodeInScope(target);
   }, []);
 
   return (
@@ -115,12 +129,15 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
         {/* Right: CenterPanel — rich element details from the analysis view */}
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <CenterPanel
+            onShowRelationshipInTree={handleShowRelationshipInTree}
             namespace={namespace}
             selectedTreeElement={selected}
+            onElementDeleted={handleElementDeleted}
             onNavigateToNode={handleNavigateToNode}
             workspaceKey={workspaceKey}
             allowCreateTag={false}
             allowAddTag={false}
+            allowEditNotes={false}
           />
         </div>
       </div>

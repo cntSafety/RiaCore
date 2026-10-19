@@ -18,25 +18,19 @@
  *
  */
 /**
- * PortConnectorDiagram — the Diagram lens.
- *
- * Kept as the lens's entry point so `CenterPanel` and the model browser are
- * unchanged, but the diagram itself now lives in
- * `model-view/ModelViewCanvas.tsx` (spec-view.md Phase 5.3).
- *
- * What was here before was a fixed three-column grid — senders left, focus
- * centre, receivers right — with an SVG overlay that measured every port pin's
- * bounding rectangle and drew Bezier paths between them. It could show exactly
- * one thing, and the columns were the layout, so there was nothing to pan, zoom
- * or rearrange. The canvas that replaces it reproduces the same reading order
- * through an ELK left-to-right layout, and adds the three things the grid could
- * not have: a pannable and zoomable viewport, tiles the user can rearrange for
- * the current session, and expansion of an element's contained elements or
- * connections from its own menu.
+ * Model lens entry point. Individual Sphinx needs use a one-hop relationship
+ * diagram after checking their source namespace's metamodel. Documents, SysML,
+ * and ARXML retain the existing CommonModel containment/port canvas.
  */
 
 import { ModelViewCanvas } from '../../model-view/ModelViewCanvas';
-import type { SelectedTreeElement } from '../types';
+import { Alert, Button, Spin } from 'antd';
+import type { ReactNode } from 'react';
+import { useNamespaces } from '../../../../../hooks/useNamespaces';
+import { useWorkspaceQueryEnabled } from '../../../../../hooks/useWorkspaceQueryEnabled';
+import { SphinxRelationshipDiagram } from './SphinxRelationshipDiagram';
+import { isSphinxNeedConcept, usesSphinxRelationshipModel } from '../utils/sphinxRelationshipGraph';
+import type { SelectedTreeElement, ScopedTreeNavigator } from '../types';
 
 export interface PortConnectorDiagramProps {
   selectedTreeElement: SelectedTreeElement;
@@ -48,6 +42,8 @@ export interface PortConnectorDiagramProps {
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
   /** Called when the user selects "Show details" on an element tile. */
   onShowDetails?: () => void;
+  /** Scope-checked in-place navigation, also used by the Details relationship table. */
+  onShowInTree?: ScopedTreeNavigator;
 }
 
 export function PortConnectorDiagram({
@@ -57,8 +53,9 @@ export function PortConnectorDiagram({
   onNavigateToNode,
   onNavigateToReference,
   onShowDetails,
+  onShowInTree,
 }: PortConnectorDiagramProps) {
-  return (
+  const model = (
     <ModelViewCanvas
       // Remounting on selection change keeps the canvas from carrying one
       // element's expansions, hand-placed tiles and viewport into the next.
@@ -72,4 +69,30 @@ export function PortConnectorDiagram({
       onShowDetails={onShowDetails}
     />
   );
+  // Only candidate need concepts resolve metadata here. The SysML/ARXML path
+  // mounts exactly the existing canvas without another query or layout setting.
+  if (!isSphinxNeedConcept(selectedTreeElement.concept)) return model;
+  return (
+    <SphinxNeedModelRoute
+      key={`${workspaceKey}:${selectedTreeElement.namespace}#${selectedTreeElement.nodeId}`}
+      selectedTreeElement={selectedTreeElement}
+      workspaceKey={workspaceKey}
+      onShowInTree={onShowInTree}
+      onShowDetails={onShowDetails}
+      fallback={model}
+    />
+  );
+}
+
+function SphinxNeedModelRoute({ fallback, ...props }: Pick<PortConnectorDiagramProps, 'selectedTreeElement' | 'workspaceKey' | 'onShowInTree' | 'onShowDetails'> & { fallback: ReactNode }) {
+  const workspaceEnabled = useWorkspaceQueryEnabled();
+  const enabled = workspaceEnabled && props.workspaceKey !== null;
+  const namespaces = useNamespaces(enabled, props.workspaceKey);
+  if (!enabled) return <Alert type="info" title="Open a workspace to view relationships" />;
+  if (namespaces.isError) return <Alert type="error" title="Could not resolve the source namespace" action={<Button onClick={() => { void namespaces.refetch(); }}>Retry</Button>} />;
+  if (namespaces.isPlaceholderData || namespaces.isPending) return <div style={{ margin: 'auto' }}><Spin /></div>;
+  const metamodel = namespaces.data?.find(item => item.name === props.selectedTreeElement.namespace)?.metamodel;
+  return usesSphinxRelationshipModel(metamodel, props.selectedTreeElement.concept)
+    ? <SphinxRelationshipDiagram {...props} />
+    : fallback;
 }

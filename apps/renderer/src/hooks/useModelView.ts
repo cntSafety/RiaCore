@@ -63,6 +63,7 @@ import type {
 import { api } from '../api/riacore';
 import {
   ACTIVE_ELEMENT_CONCEPT,
+  CONNECTION_CONCEPT,
   PORT_CONCEPTS,
   isDiagramAnchorConcept,
 } from '../modules/namespace/editors/safety-analysis/components/diagramModel';
@@ -297,7 +298,9 @@ async function loadMalfunctions(
   // Every tile and port row can carry malfunctions, so this asks for the whole
   // drawn set at once. One batched call, not one per pin.
   const targets = representatives
-    .filter((rep) => PORT_CONCEPTS.has(rep.concept) || rep.concept === ACTIVE_ELEMENT_CONCEPT)
+    // Every non-connector representative is a tile or port row, including
+    // document containers and requirements. They can host malfunctions too.
+    .filter((rep) => rep.concept !== CONNECTION_CONCEPT)
     .map((rep) => rep.sources[0]?.nodeId ?? Number(rep.id))
     .filter(Number.isFinite);
   if (targets.length === 0) return {};
@@ -484,8 +487,8 @@ function expansionKey(expansions: ModelExpansion[]): string {
   return [...new Set(expansions.map((e) => `${e.kind}:${e.representativeId}`))].sort().join('|');
 }
 
-/** Every React Query key this file owns. */
-const MODEL_VIEW_QUERY_PREFIXES = ['views.modelView', 'views.anchorRepresentative'];
+/** Model data plus the stored relationships shared by the Sphinx diagram and Details. */
+const MODEL_VIEW_QUERY_PREFIXES = ['views.modelView', 'views.anchorRepresentative', 'safety.relationships'];
 
 /**
  * Refresh the model view after something changed the model underneath it.

@@ -30,18 +30,26 @@ import { serializeTable, serializeMetadata, parseTable } from './serializer.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
 import { getTablesByLayer } from './table-registry.js';
 import { replaceNodeIdsWithStableIds, resolveStableIdFromMeta } from './stable-id.js';
-import { computeNamespaceHash, computeUniverseFileHash } from './hash-computer.js';
+import { computeNamespaceHashFromFileContents, computeUniverseFileHash } from './hash-computer.js';
 import { sanitizeDirectoryName, detectDirectoryConflicts } from './sanitize-directory.js';
-import type { PersistorStoreParams, StoreResult, Manifest } from './persistor-types.js';
-import { assertNoSnapshotDrift, stampBaseline } from '../workspace/snapshot-baseline.js';
+import type {
+  PersistorStoreParams,
+  StoreResult,
+  Manifest,
+  SkippedTypeReport,
+  NodeKeyAttrMap,
+  EdgeKeyAttrMap,
+} from './persistor-types.js';
+import { assertNoSnapshotDrift, setPendingSyncDecision, stampBaseline } from '../workspace/snapshot-baseline.js';
 import { e, exportLayer, loadAttributeMetadata, writeFileAtomic } from './persistor-helpers.js';
 import { sortConceptInstances, sortRelationshipInstances } from './persistor-sort.js';
 import { computeMetaHash, computeNamespaceHashFromFiles } from './persistor.js';
+import { originFromManifest, writeSnapshotOrigin } from './snapshot-origin.js';
 
 /**
  * Universe-layer file paths, relative to the ria-data export directory. Shared
  * between the universe-scoped store path and the full/namespace store path so
- * both write and hash exactly the same files (Req 6.1, 6.2, 10.1).
+ * both write and hash exactly the same files.
  */
 export const UNIVERSE_CANVAS_LAYOUT_REL = 'universe/RIA_UNIV_CanvasLayout.json';
 export const UNIVERSE_NAMESPACE_CONNECTION_REL = 'universe/RIA_UNIV_NamespaceConnection.json';
@@ -58,6 +66,169 @@ export const UNIVERSE_VIEW_CATEGORIZEDBY_REL = 'universe/RIA_UNIV_VIEW_CATEGORIZ
  * single helper for hash computation.
  */
 export { computeUniverseFileHash };
+
+// ── Namespace export plan ────────────────────────────────────────────────────
+
+/**
+ * Everything the store has decided about one namespace's `concepts/` and
+ * `relationships/` directories, computed once before anything is hashed or
+ * written.
+ *
+ * The plan exists so the recorded hash and the written files cannot be derived
+ * independently: the hash is taken over the `content` of the entries it holds,
+ * and the write loop writes exactly those. A declined type lands in `skipped`,
+ * outside both the hash and the files. `content` is the exact serialized UTF-8
+ * string handed to `fs.writeFileSync`, which is what lets the file side of the
+ * contract reproduce the digest.
+ */
+interface NamespaceExportPlan {
+  /** One entry per file that WILL be written, with its serialized content. */
+  conceptFiles: Array<{ conceptType: string; content: string; count: number }>;
+  relationshipFiles: Array<{ relType: string; content: string; count: number }>;
+  /** Types deliberately not written, with the reason. Reported, never silent. */
+  skipped: Array<{ kind: 'concept' | 'relationship'; type: string; reason: string; count: number }>;
+  /** Instances dropped for an empty type field, counted so the drop is visible. */
+  droppedUntyped: { concepts: number; relationships: number };
+}
+
+/**
+ * Decide what one namespace's export will contain and serialize it.
+ *
+ * Pure: it reads rows and metadata and returns a plan. It does not log, write,
+ * or hash — the caller does all three from the single plan, which is the point.
+ *
+ * `relInstances` must already carry `source_stable_id` / `target_stable_id`
+ * (i.e. have been through `replaceNodeIdsWithStableIds`), because that is the
+ * shape the relationship files are serialized from.
+ */
+function buildNamespaceExportPlan(
+  conceptInstances: Record<string, unknown>[],
+  relInstances: Record<string, unknown>[],
+  nodeKeyAttrs: NodeKeyAttrMap,
+  edgeKeyAttrs: EdgeKeyAttrMap,
+): NamespaceExportPlan {
+  const plan: NamespaceExportPlan = {
+    conceptFiles: [],
+    relationshipFiles: [],
+    skipped: [],
+    droppedUntyped: { concepts: 0, relationships: 0 },
+  };
+
+  // ── Concepts ───────────────────────────────────────────────────────────────
+  const conceptsByType = new Map<string, Record<string, unknown>[]>();
+  for (const ci of conceptInstances) {
+    const conceptType = String(ci.concept ?? '');
+    if (!conceptType) {
+      plan.droppedUntyped.concepts++;
+      continue;
+    }
+    // node_id is a DB-assigned ephemeral integer that changes across DB
+    // recreations. Stripping it here keeps the serialized JSON stable and
+    // prevents false diffs when the same logical data gets new node_ids.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { node_id, ...rest } = ci;
+    const group = conceptsByType.get(conceptType);
+    if (group) {
+      group.push(rest as Record<string, unknown>);
+    } else {
+      conceptsByType.set(conceptType, [rest as Record<string, unknown>]);
+    }
+  }
+
+  for (const conceptType of [...conceptsByType.keys()].sort()) {
+    const instances = conceptsByType.get(conceptType)!;
+
+    let sorted: Record<string, unknown>[];
+    try {
+      sorted = sortConceptInstances(instances, conceptType, nodeKeyAttrs);
+    } catch (err) {
+      plan.skipped.push({
+        kind: 'concept',
+        type: conceptType,
+        reason: err instanceof Error ? err.message : String(err),
+        count: instances.length,
+      });
+      continue;
+    }
+
+    plan.conceptFiles.push({
+      conceptType,
+      content: serializeTable(sorted, 'attributes', ['attributes'], []),
+      count: instances.length,
+    });
+  }
+
+  // ── Relationships ──────────────────────────────────────────────────────────
+  const relsByType = new Map<string, Record<string, unknown>[]>();
+  for (const ri of relInstances) {
+    const relType = String(ri.relationship ?? '');
+    if (!relType) {
+      plan.droppedUntyped.relationships++;
+      continue;
+    }
+    const group = relsByType.get(relType);
+    if (group) {
+      group.push(ri);
+    } else {
+      relsByType.set(relType, [ri]);
+    }
+  }
+
+  for (const relType of [...relsByType.keys()].sort()) {
+    const instances = relsByType.get(relType)!;
+    // Unlike sortConceptInstances this cannot throw: an undeclared type falls
+    // back to (source_stable_id, target_stable_id). Relationship entries in
+    // `skipped` therefore stay empty today; the field exists so a future
+    // decline is reported through the same channel rather than a new one.
+    const sorted = sortRelationshipInstances(instances, relType, edgeKeyAttrs);
+    plan.relationshipFiles.push({
+      relType,
+      content: serializeTable(sorted, 'source_stable_id', ['attributes'], []),
+      count: instances.length,
+    });
+  }
+
+  return plan;
+}
+
+/**
+ * Report a plan's declined writes: a WARN per skipped type and per dropped
+ * untyped group, naming the type and the count, plus the `StoreResult` entries.
+ *
+ * Called on both the write path and the delta-skip path. On the skip path the
+ * files on disk are the previous store's, so the types the plan declines are
+ * just as absent from `ria-data/` as they would be after a write — the report
+ * is about what the snapshot is missing, not about what this particular run
+ * wrote.
+ */
+function reportPlanOmissions(
+  namespace: string,
+  plan: NamespaceExportPlan,
+  logger: ImportLogger,
+  into: SkippedTypeReport[],
+): void {
+  for (const s of plan.skipped) {
+    logger.warn(
+      `${namespace}: skipping ${s.kind} type '${s.type}' (${s.count} instance(s)) — ${s.reason}`,
+      { namespace, kind: s.kind, type: s.type, count: s.count },
+    );
+    into.push({ namespace, kind: s.kind, type: s.type, reason: s.reason, count: s.count });
+  }
+
+  const untyped: Array<['concept' | 'relationship', number, string]> = [
+    ['concept', plan.droppedUntyped.concepts, 'concept'],
+    ['relationship', plan.droppedUntyped.relationships, 'relationship'],
+  ];
+  for (const [kind, count, field] of untyped) {
+    if (count === 0) continue;
+    const reason = `instance has an empty '${field}' field, so it belongs to no file`;
+    logger.warn(
+      `${namespace}: dropping ${count} ${kind} instance(s) with an empty '${field}' field`,
+      { namespace, kind, count },
+    );
+    into.push({ namespace, kind, type: '', reason, count });
+  }
+}
 
 /**
  * Read the current `RIA_UNIV_NamespaceConnection` rows from the DB, in the
@@ -127,16 +298,30 @@ async function queryViewCategorizedByRows(dbModule: IDbModule): Promise<Record<s
 }
 
 /**
- * Universe-scoped store (Req 1.4, 2.3, 4.4, 5.1, 5.2, 6.1, 6.2, 10.1–10.3).
+ * Universe-scoped store.
  *
  * Writes ONLY the two universe-layer files, reading the current DB rows at
  * execution time (never a snapshot captured at scheduling time). Each file is
  * written atomically (temp-file + fsync + rename) so an interrupted save never
  * corrupts it. Only the `universe_hashes` and `file_inventory` entries for the
  * two written files are updated in the manifest — every `namespace_hashes`
- * entry, `meta_hash`, and every other inventory entry is preserved
- * byte-identical by parsing the existing manifest and mutating only those two
- * nested maps before re-serializing.
+ * entry, `meta_hash`, `sourcemaster_hashes`, `cross_namespace_hashes` and every
+ * other inventory entry is preserved byte-identical by parsing the existing
+ * manifest and mutating only those two nested maps before re-serializing.
+ *
+ * ## The carrier-preservation invariant
+ *
+ * This path writes no namespace, meta, sourcemaster or cross-namespace file, so
+ * it must record no hash for one either. Preservation is achieved by
+ * *omission*: the parsed
+ * manifest is mutated in place and re-serialized, so any carrier this function
+ * does not name survives with its exact recorded value. Nothing extra is
+ * needed — which is precisely what makes the invariant fragile, because a
+ * future edit that adds a carrier write here (or recomputes one "for
+ * consistency") would silently record a hash for a file this store never
+ * touched, and the next load would verify fresh hashes against stale files.
+ * The only carrier this function may touch is `universe_hashes`, and only for
+ * the files it just wrote.
  */
 async function storeUniverseOnly(
   params: PersistorStoreParams,
@@ -149,7 +334,7 @@ async function storeUniverseOnly(
   const universeDir = path.join(exportDir, 'universe');
   fs.mkdirSync(universeDir, { recursive: true });
 
-  // Read current DB rows at execution time (Req 4.4), then serialize with the
+  // Read current DB rows at execution time, then serialize with the
   // same primitives / sort keys as the full store path so bytes are identical.
   const connectionRows = await queryConnectionRows(dbModule);
   const layoutRows = await queryLayoutRows(dbModule);
@@ -173,7 +358,7 @@ async function storeUniverseOnly(
   const viewCategorizedByFilePath = path.join(exportDir, UNIVERSE_VIEW_CATEGORIZEDBY_REL);
 
   // Atomic writes: an interrupted or failed write leaves the previous complete
-  // file untouched (Req 5.1–5.4). A failure rethrows so the caller's failure
+  // file untouched. A failure rethrows so the caller's failure
   // path engages.
   writeFileAtomic(layoutFilePath, layoutContent);
   writeFileAtomic(connectionFilePath, connectionContent);
@@ -183,9 +368,15 @@ async function storeUniverseOnly(
   writeFileAtomic(viewCategorizedByFilePath, viewCategorizedByContent);
 
   // Load the existing manifest and mutate ONLY the universe entries written here.
-  // This preserves namespace_hashes, meta_hash, and every other inventory entry
-  // byte-identical (Req 10.2, 10.3). A universe-scoped store only runs on a
-  // loaded workspace, which always has a manifest on disk.
+  // This preserves namespace_hashes, meta_hash, sourcemaster_hashes,
+  // cross_namespace_hashes, and every other inventory entry byte-identical. A
+  // universe-scoped store only runs on a loaded workspace, which always has a
+  // manifest on disk.
+  //
+  // Do not add a carrier write below. `sourcemaster_hashes`,
+  // `cross_namespace_hashes`, `namespace_hashes` and `meta_hash` are preserved
+  // because nothing here assigns to them; see the carrier-preservation
+  // invariant in this function's doc comment.
   const manifestPath = path.join(exportDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
     throw new Error(
@@ -210,7 +401,17 @@ async function storeUniverseOnly(
   manifest.file_inventory[UNIVERSE_VIEW_DEFINEDBY_REL] = viewDefinedByRows.length;
   manifest.file_inventory[UNIVERSE_VIEW_CATEGORIZEDBY_REL] = viewCategorizedByRows.length;
 
-  writeFileAtomic(manifestPath, serializeMetadata(manifest as unknown as Record<string, unknown>));
+  const manifestBytes = serializeMetadata(manifest as unknown as Record<string, unknown>);
+  writeFileAtomic(manifestPath, manifestBytes);
+
+  // Third write point for D (task 5.2). This path is easy to overlook because it
+  // writes no namespace content — but it rewrites `manifest.json`, so it moves
+  // both the manifest's own digest and the universe entries. Omitting it would
+  // leave the manifest domain in S2 after every canvas auto-save: harmless in
+  // itself, because the next open then runs a cheap full evaluation and finds
+  // everything S1, but it would retire the manifest short-circuit permanently
+  // after the first auto-save of a session.
+  await writeSnapshotOrigin(dbModule, originFromManifest(manifest, manifestBytes), logger);
 
   const totalRecords = layoutRows.length + connectionRows.length + viewRows.length +
     viewSourceRows.length + viewDefinedByRows.length + viewCategorizedByRows.length;
@@ -259,7 +460,7 @@ export function store(
   const key = path.resolve(params.workingDir);
   const prior = storeChains.get(key) ?? Promise.resolve();
   const run = prior.then(async () => {
-    // ── Write fence (RiaDataChangeDetection.md §4.2) ──────────────────────────
+    // ── Write fence ──────────────────────────
     // Refuse to write when ria-data/ no longer matches the snapshot the DB was
     // loaded from — a git checkout, a pull on the same branch, a reset, a stash
     // pop, a restore from backup, or a concurrent CLI store. Throwing here also
@@ -277,7 +478,20 @@ export function store(
     // new baseline. Doing this here rather than in the dispatch handler covers
     // the auto-save coordinator too, which calls the persistor directly and
     // never passes through the dispatcher.
+    //
+    // CONFIRMED BEHAVIOUR the hash-epoch migration depends on: the re-stamp is
+    // unconditional, so the store that moves a workspace into a new epoch also
+    // replaces a baseline holding previous-epoch hashes. Without it the next
+    // detectDrift would compare across epochs and report drift for files this
+    // store just wrote.
     stampBaseline(params.workingDir, undefined, { reason: 'store' });
+    // The dialog's explicit full Store resolves the open-time decision as well
+    // as file drift. Clear it only after export succeeds, inside this queue, so
+    // the next save can proceed. A scoped store may leave disputed domains
+    // untouched and must not dismiss their decision.
+    if (params.allowSnapshotMismatch && params.namespace === undefined && params.scope === undefined) {
+      setPendingSyncDecision(params.workingDir, null);
+    }
     return result;
   });
   // Keep the chain alive regardless of this run's outcome so a failed store
@@ -292,7 +506,7 @@ async function storeImpl(
   logger: ImportLogger,
 ): Promise<StoreResult> {
   // Universe-scoped store: write only the two universe-layer files and touch
-  // only their manifest entries (Req 10). Handled by a dedicated path so
+  // only their manifest entries. Handled by a dedicated path so
   // frequent auto-saves never re-serialize or re-hash namespace layers.
   //
   // Bootstrap guard: storeUniverseOnly requires an existing manifest.json (it
@@ -346,8 +560,20 @@ async function storeImpl(
   // Step 1b: Determine whether schema version requires a full re-export.
   // Also capture the on-disk namespace hashes so the delta-skip can detect
   // external changes (e.g. git checkout) that replaced files behind the app.
+  //
+  // CONFIRMED BEHAVIOUR the hash-epoch migration depends on: a manifest written
+  // in a previous epoch sets `forceFullReExport`, so this one store rewrites
+  // every file and every carrier and stamps `schema_version` at the current
+  // value — which is what moves the workspace into the current epoch and makes
+  // the comparisons `persistor-load` and `checkConsistency` suspended live
+  // again. Do not narrow this to a delta: a delta-skipped namespace would keep
+  // its previous-epoch hash in the manifest and stay unverifiable forever
   const existingManifestPath = path.join(exportDir, 'manifest.json');
   let forceFullReExport = false;
+  // Tracked separately from forceFullReExport, which is also set for
+  // line-ending normalization. Only an epoch difference invalidates the hashes
+  // of namespaces this store is not writing, so only it may promote a scope.
+  let epochMismatch = false;
   let onDiskNamespaceHashes: Record<string, string> = {};
   if (!fs.existsSync(existingManifestPath)) {
     forceFullReExport = true;
@@ -357,6 +583,7 @@ async function storeImpl(
       const existingSchemaVersion = String(existingManifest.schema_version ?? '');
       if (existingSchemaVersion !== SCHEMA_VERSION) {
         forceFullReExport = true;
+        epochMismatch = true;
         logger.info(
           `full re-export triggered: schema version mismatch (manifest=${existingSchemaVersion || 'unknown'}, code=${SCHEMA_VERSION})`
         );
@@ -407,15 +634,33 @@ async function storeImpl(
     content_hash: String(r.content_hash ?? ''),
   }));
 
+  // An epoch change must rewrite EVERY namespace hash, so a scoped store is
+  // promoted to a full export. Honouring the scope would stamp the manifest at
+  // the current SCHEMA_VERSION while seeding every other namespace's hash from
+  // the previous-epoch manifest. Those hashes then no longer suspend comparison
+  // and cannot be recomputed from the files, so the next open reports the
+  // untouched namespaces corrupt and the workspace opens read-only with Save
+  // blocked. Auto-save issues namespace-scoped stores, so that is the ordinary
+  // path after a bump, not an edge case.
+  const scopeNamespace =
+    epochMismatch && params.namespace !== undefined ? undefined : params.namespace;
+  if (scopeNamespace === undefined && params.namespace !== undefined) {
+    logger.info(
+      `scoped store promoted to a full export: the manifest was written in a ` +
+      `different hash epoch, so every namespace hash must be rewritten ` +
+      `(requested: ${params.namespace})`
+    );
+  }
+
   // When a specific namespace is requested, filter to only that namespace.
   // The full allNamespaces list is still needed for manifest metadata.
-  const namespaces = params.namespace
-    ? allNamespaces.filter(ns => ns.name === params.namespace)
+  const namespaces = scopeNamespace
+    ? allNamespaces.filter(ns => ns.name === scopeNamespace)
     : allNamespaces;
 
-  const scopedStore = params.namespace !== undefined;
+  const scopedStore = scopeNamespace !== undefined;
 
-  logger.info(`store started — ${namespaces.length} namespace(s) to export (${allNamespaces.length} total in DB)${scopedStore ? ` [scoped to: ${params.namespace}]` : ''}`);
+  logger.info(`store started — ${namespaces.length} namespace(s) to export (${allNamespaces.length} total in DB)${scopedStore ? ` [scoped to: ${scopeNamespace}]` : ''}`);
 
   // Step 2b: Compute sanitized directory names and detect conflicts
   const nsDirMap = new Map<string, string>();
@@ -445,6 +690,8 @@ async function storeImpl(
   const namespacesWritten: string[] = [];
   const namespacesSkipped: string[] = [];
   const namespaceHashes: Record<string, string> = {};
+  /** Declined writes across every namespace, surfaced on StoreResult. */
+  const allSkippedTypes: SkippedTypeReport[] = [];
 
   // For a scoped store, seed namespaceHashes AND fileInventory with existing
   // values from the manifest for all namespaces that are NOT being stored.
@@ -456,7 +703,7 @@ async function storeImpl(
       const existingManifest = JSON.parse(fs.readFileSync(existingManifestPath, 'utf-8')) as Partial<Manifest>;
       const existingHashes = existingManifest.namespace_hashes ?? {};
       for (const [ns, hash] of Object.entries(existingHashes)) {
-        if (ns !== params.namespace) {
+        if (ns !== scopeNamespace) {
           namespaceHashes[ns] = hash;
         }
       }
@@ -465,7 +712,7 @@ async function storeImpl(
       // sourcemaster/, cross_namespace/) are excluded — they will be
       // rewritten by this store run.
       const existingInventory = existingManifest.file_inventory ?? {};
-      const targetDirPrefix = (nsDirMap.get(params.namespace ?? '') ?? params.namespace ?? '') + '/';
+      const targetDirPrefix = (nsDirMap.get(scopeNamespace ?? '') ?? scopeNamespace ?? '') + '/';
       const sharedPrefixes = ['meta/', 'sourcemaster/', 'cross_namespace/'];
       for (const [filePath, count] of Object.entries(existingInventory)) {
         const isTargetNs = filePath.startsWith(targetDirPrefix);
@@ -491,28 +738,79 @@ async function storeImpl(
 
   // Step 3: Export meta layer
   const metaDir = path.join(exportDir, 'meta');
-  const metaRecords = await exportLayer('meta', metaDir, dbModule, fileInventory, exportDir);
+  // `meta_hash` deliberately does not use the returned file content: it stays a
+  // whole-directory digest via computeMetaHash(metaDir), because
+  // checkConsistency must be able to recompute it from disk with no store in
+  // progress.
+  const { totalRecords: metaRecords } =
+    await exportLayer('meta', metaDir, dbModule, fileInventory, exportDir);
   totalRecords += metaRecords;
   filesWritten += getTablesByLayer('meta').length;
 
   // Step 4: Export sourcemaster layer
   const sourcemasterDir = path.join(exportDir, 'sourcemaster');
-  const sourcemasterRecords = await exportLayer('sourcemaster', sourcemasterDir, dbModule, fileInventory, exportDir);
+  // The returned `files` carry the exact bytes written to each sourcemaster
+  // file. The per-file hash carrier is built from them rather than from a
+  // read-back, so what gets recorded is what the writer intended to write —
+  // see ExportedLayerFile in persistor-helpers.ts.
+  const { totalRecords: sourcemasterRecords, files: sourcemasterFiles } =
+    await exportLayer('sourcemaster', sourcemasterDir, dbModule, fileInventory, exportDir);
   totalRecords += sourcemasterRecords;
   filesWritten += getTablesByLayer('sourcemaster').length;
 
+  // The carrier for the sourcemaster layer. Keyed by the same
+  // ria-data-relative forward-slash path `exportLayer` put in `fileInventory`,
+  // and hashed with `computeUniverseFileHash` — the one helper load and
+  // repairManifest also use — so all three agree byte-for-byte.
+  const sourcemasterHashes: Record<string, string> = {};
+  for (const file of sourcemasterFiles) {
+    sourcemasterHashes[file.relPath] = computeUniverseFileHash(file.content);
+  }
+
   // Step 5: Export cross_namespace layer
   const crossNsDir = path.join(exportDir, 'cross_namespace');
-  const crossNsRecords = await exportLayer('cross_namespace', crossNsDir, dbModule, fileInventory, exportDir);
+  const crossNsFilePath = path.join(crossNsDir, 'RIA_UNIV_CrossNSRelationshipInstance.json');
+  const crossNsSourceNamespaces = new Set<string>();
+  // Retain the previous sources before overwriting the shared table. A deleted
+  // last edge removes its source from the new file, but still changes its hash.
+  if (scopedStore && fs.existsSync(crossNsFilePath)) {
+    try {
+      for (const edge of parseTable(fs.readFileSync(crossNsFilePath, 'utf-8'))) {
+        const source = String(edge.source_namespace ?? '');
+        if (source && source !== scopeNamespace) crossNsSourceNamespaces.add(source);
+      }
+    } catch {
+      // The DB will replace the damaged file. Since its previous sources cannot
+      // be determined, refresh every non-targeted hash after the replacement.
+      for (const ns of allNamespaces) {
+        if (ns.name !== scopeNamespace) crossNsSourceNamespaces.add(ns.name);
+      }
+    }
+  }
+  const { totalRecords: crossNsRecords, files: crossNsFiles } =
+    await exportLayer('cross_namespace', crossNsDir, dbModule, fileInventory, exportDir);
   totalRecords += crossNsRecords;
   filesWritten += getTablesByLayer('cross_namespace').length;
+
+  // The carrier for the cross-namespace layer, built exactly like the
+  // sourcemaster one above: keyed by the same ria-data-relative forward-slash
+  // path `exportLayer` put in `fileInventory`, and hashed with
+  // `computeUniverseFileHash` over the exact bytes that were written — the one
+  // helper load and repairManifest also use, so all three agree byte-for-byte.
+  // Deliberately NOT the per-namespace record-based cross-NS digest inside
+  // computeNamespaceHashFromFileContents: that answers a different question
+  // (does this namespace's slice agree?) at a different granularity.
+  const crossNamespaceHashes: Record<string, string> = {};
+  for (const file of crossNsFiles) {
+    crossNamespaceHashes[file.relPath] = computeUniverseFileHash(file.content);
+  }
 
   // Step 5b: Export per-pair namespace connections (RIA_UNIV_NamespaceConnection).
   // This universe-layer rel table is keyed by namespace name and is global (not
   // scoped to a single namespace), so it is exported once here alongside the other
   // shared layers. Written for both full and scoped stores so the on-disk file
   // always reflects the complete current connection set. Restored on load with
-  // dangling-reference handling (Requirements 8.1, 8.5).
+  // dangling-reference handling.
   const universeDir = path.join(exportDir, 'universe');
   fs.mkdirSync(universeDir, { recursive: true });
   const connectionRows = await dbModule.runQuery(
@@ -533,7 +831,7 @@ async function storeImpl(
   // a single namespace), so — like RIA_UNIV_NamespaceConnection — it is exported once
   // here alongside the other shared layers, NOT by any generic layer export. Written for
   // both full and scoped stores so the on-disk file always reflects the complete current
-  // layout set (Requirements 5.1, 5.7).
+  // layout set.
   const layoutRows = await dbModule.runQuery(
     `MATCH (l:RIA_UNIV_CanvasLayout)
      RETURN l.layout_id AS layout_id, l.element_kind AS element_kind,
@@ -577,7 +875,7 @@ async function storeImpl(
   // Record a Universe_Hash for each universe-layer file over the exact same
   // serialized bytes just written (reused, not re-read from disk), using the
   // shared hash-computation path (task 2.1 / 2.2) so store, load, and repair
-  // all produce identical values (Req 6.1, 6.2).
+  // all produce identical values.
   const universeHashes: Record<string, string> = {
     [UNIVERSE_CANVAS_LAYOUT_REL]: computeUniverseFileHash(layoutContent),
     [UNIVERSE_NAMESPACE_CONNECTION_REL]: computeUniverseFileHash(connectionContent),
@@ -618,13 +916,24 @@ async function storeImpl(
       { namespace }
     );
 
-    // Build node_id → stableId lookup
+    // Build node_id → stableId lookup.
+    //
+    // Guard, not try/catch: this tests the same condition `resolveIdentityAttr`
+    // and `sortConceptInstances` throw on (no key attributes), so the instances
+    // skipped here are exactly the ones the export plan declines and reports via
+    // `plan.skipped` / `StoreResult.skipped_types`. A catch would also swallow an
+    // unrelated failure in stable-id resolution. No declared identity attribute
+    // means there is no stable id to resolve, not that something went wrong.
     const nodeIdToStableId = new Map<number, string>();
     for (const ci of conceptInstances) {
+      const conceptType = String(ci.concept ?? '');
+      const keyAttrs = nodeKeyAttrs.get(conceptType);
+      if (!keyAttrs || keyAttrs.length === 0) continue;
+
       const nodeId = Number(ci.node_id);
       const stableId = resolveStableIdFromMeta(
         String(ci.attributes ?? '{}'),
-        String(ci.concept ?? ''),
+        conceptType,
         nodeKeyAttrs,
       );
       if (stableId !== '') nodeIdToStableId.set(nodeId, stableId);
@@ -637,95 +946,82 @@ async function storeImpl(
       return replaceNodeIdsWithStableIds(ri, sourceStableId, targetStableId);
     });
 
-    // Bottom-up relationship type grouping: group relInstancesWithStableIds by their relationship field
-    const relsByType = new Map<string, Record<string, unknown>[]>();
-    for (const ri of relInstancesWithStableIds) {
-      const relType = String(ri.relationship ?? '');
-      if (!relType) continue;
-      const group = relsByType.get(relType);
-      if (group) {
-        group.push(ri);
-      } else {
-        relsByType.set(relType, [ri]);
-      }
-    }
-
-    // Compute namespace hash BEFORE writing files. The hash captures the
-    // canonical content that will be serialized, so on the next store() call
-    // we can compare the DB's current hash against the on-disk hash and skip
-    // namespaces whose content hasn't changed (delta-skip optimization).
-    const hash = computeNamespaceHash({
-      namespace,
+    // Decide the whole export for this namespace up front: which files will be
+    // written, with what bytes, and which types are declined. Both the hash
+    // below and the write loop further down read this one plan, so they cannot
+    // disagree about what the namespace contains.
+    const plan = buildNamespaceExportPlan(
       conceptInstances,
-      relationshipInstances: relInstancesWithStableIds,
-      crossNsEdgesAsSource,
+      relInstancesWithStableIds,
       nodeKeyAttrs,
       edgeKeyAttrs,
+    );
+
+    // Declined writes are reported before either branch below is taken, so a
+    // delta-skipped namespace reports them too.
+    reportPlanOmissions(namespace, plan, logger, allSkippedTypes);
+
+    // Compute the namespace hash BEFORE writing files, over the plan's
+    // serialized content — the exact bytes the write loop will put on disk.
+    // That makes the recorded value reproducible by
+    // `computeNamespaceHashFromFiles`, which is both the delta-skip comparison
+    // below and the integrity check at load. The cross-NS section stays
+    // record-based and filtered by `source_namespace`; see
+    // `computeNamespaceHashFromFileContents` for why.
+    const hash = computeNamespaceHashFromFileContents({
+      namespace,
+      conceptFiles: plan.conceptFiles.map(f => ({
+        fileName: `${f.conceptType}.json`,
+        content: f.content,
+      })),
+      relationshipFiles: plan.relationshipFiles.map(f => ({
+        fileName: `${f.relType}.json`,
+        content: f.content,
+      })),
+      crossNsEdgesAsSource,
     });
 
-    // Namespace metadata (namespace.json).
+    // `<namespace>/namespace.json` is no longer written. It duplicated identity
+    // from `manifest.namespaces[]` and carried `categorizational_metamodels`
+    // derived from category edges, unhashed -- so connecting an analysis to an
+    // imported namespace changed the derived value without changing the hash, and
+    // a delta-skip then left the stale value on disk. Identity now comes from the
+    // manifest alone; the category edges are covered by `meta_hash` at source.
     //
-    // Written UNCONDITIONALLY — including on the delta-skip path below — because
-    // `categorizational_metamodels` is derived from RIA_META_CATEGORIZEDBY edges,
-    // which the namespace content hash does not cover. Connecting an analysis to
-    // an imported namespace creates those edges without touching a single concept
-    // or relationship instance, so the hash still matches and the delta skip would
-    // leave the stale value on disk indefinitely — until some unrelated content
-    // change happened to force a re-export. That is exactly how an imported
-    // namespace ended up serialized with `"categorizational_metamodels": []`
-    // while the DB had three of them.
-    //
-    // Safe on the skip path: computeNamespaceHashFromFiles() reads concepts/,
-    // relationships/ and the cross-namespace file only, never namespace.json, so
-    // rewriting it cannot disturb the hash comparison.
-    const metamodelVersion = allMetamodelVersions.get(ns.metamodel) ?? '';
-    const writeNamespaceMetadata = async (): Promise<void> => {
-      const catRows = await dbModule.runQuery(
-        `MATCH (ns2:RIA_UNIV_Namespace)-[:RIA_META_CATEGORIZEDBY]->(mm:RIA_META_Metamodel)
-         WHERE ns2.name = '${e(namespace)}' AND mm.name <> '${e(ns.metamodel)}'
-         RETURN mm.name AS name ORDER BY mm.name`
-      );
-      const namespaceMetadata = {
-        categorizational_metamodels: catRows.map(r => String(r.name ?? '')).filter(Boolean),
-        directory: dirName,
-        metamodel: ns.metamodel,
-        metamodel_version: metamodelVersion,
-        name: namespace,
-        namespace_owning_application: ns.namespace_owning_application,
-        namespace_role: ns.namespace_role,
-      };
-      fs.mkdirSync(nsDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(nsDir, 'namespace.json'),
-        serializeMetadata(namespaceMetadata as Record<string, unknown>),
-        'utf-8',
-      );
-      fileInventory[`${dirName}/namespace.json`] = 1;
-    };
+    // An older store's file is deleted on both paths below so a workspace
+    // converges. Safe on the skip path: the file is not part of the digest.
 
-    // Delta skip: hash matches AND files exist on disk
-    const nsDirHasFiles = fs.existsSync(path.join(nsDir, 'namespace.json'));
+    // Delta skip: hash matches AND files exist on disk.
+    //
+    // "Previously written" is `concepts/` existing. The write path mkdirs both
+    // `concepts/` and `relationships/` unconditionally before writing anything,
+    // so the directory is present iff a prior store wrote this namespace —
+    // including a namespace with zero instances, which a probe for any
+    // particular file gets wrong. Everything past "was it written at all" is
+    // covered by the per-type file checks and the two hash guards below.
+    const nsDirHasFiles = fs.existsSync(path.join(nsDir, 'concepts'));
     // Also verify that all expected data files are present — if someone
     // manually deleted a file, we must re-export rather than skip.
+    //
+    // "Expected" means the plan's files, NOT every type present in the DB rows
+    // A type the plan declined has no file on disk *by design*, so
+    // probing for it would find it missing on every single store and force a
+    // full re-export of the namespace forever — a permanent delta-skip
+    // regression caused by nothing being wrong.
     let allFilesIntact = nsDirHasFiles;
     if (allFilesIntact) {
-      const conceptTypes = new Set<string>();
-      for (const ci of conceptInstances) {
-        const t = String(ci.concept ?? '');
-        if (t) conceptTypes.add(t);
-      }
-      for (const t of conceptTypes) {
-        if (!fs.existsSync(path.join(nsDir, 'concepts', `${t}.json`))) {
-          logger.warn(`${namespace}: missing file on disk concepts/${t}.json — forcing re-export`);
+      for (const f of plan.conceptFiles) {
+        if (!fs.existsSync(path.join(nsDir, 'concepts', `${f.conceptType}.json`))) {
+          logger.warn(`${namespace}: missing file on disk concepts/${f.conceptType}.json — forcing re-export`);
           allFilesIntact = false;
           break;
         }
       }
     }
     if (allFilesIntact) {
-      for (const relType of relsByType.keys()) {
-        if (!fs.existsSync(path.join(nsDir, 'relationships', `${relType}.json`))) {
-          logger.warn(`${namespace}: missing file on disk relationships/${relType}.json — forcing re-export`);
+      for (const f of plan.relationshipFiles) {
+        if (!fs.existsSync(path.join(nsDir, 'relationships', `${f.relType}.json`))) {
+          logger.warn(`${namespace}: missing file on disk relationships/${f.relType}.json — forcing re-export`);
           allFilesIntact = false;
           break;
         }
@@ -763,51 +1059,32 @@ async function storeImpl(
           namespacesSkipped.push(namespace);
           namespaceHashes[namespace] = hash;
 
-          // Populate file_inventory from the in-memory data we already queried.
-          // The files on disk are unchanged, but the manifest needs complete counts.
-          const conceptCounts = new Map<string, number>();
-          for (const ci of conceptInstances) {
-            const t = String(ci.concept ?? '');
-            if (t) conceptCounts.set(t, (conceptCounts.get(t) ?? 0) + 1);
+          // Populate file_inventory from the plan. The files on disk are
+          // unchanged, but the manifest needs complete counts — and they must
+          // come from the same plan the write path uses, or a skipped type
+          // would gain an inventory entry for a file that is not there.
+          for (const f of plan.conceptFiles) {
+            fileInventory[`${dirName}/concepts/${f.conceptType}.json`] = f.count;
           }
-          for (const [conceptType, count] of conceptCounts) {
-            fileInventory[`${dirName}/concepts/${conceptType}.json`] = count;
-          }
-          for (const [relType, instances] of relsByType) {
-            fileInventory[`${dirName}/relationships/${relType}.json`] = instances.length;
+          for (const f of plan.relationshipFiles) {
+            fileInventory[`${dirName}/relationships/${f.relType}.json`] = f.count;
           }
 
-          // Content is unchanged, but the derived metadata may not be — see the
-          // comment on writeNamespaceMetadata above. Also sets the inventory entry.
-          await writeNamespaceMetadata();
+          // Converge a workspace written by an older store even though its
+          // content is unchanged — a skipped namespace would
+          // otherwise keep its stale `namespace.json` until some unrelated
+          // content change forced a re-export.
+          fs.rmSync(path.join(nsDir, 'namespace.json'), { force: true });
 
           continue;
         }
       }
     }
 
-    // Group concept instances by type and sort within each group for
-    // deterministic, diff-friendly JSON output. Grouping by type produces
-    // one file per concept type; sorting by key attributes ensures that
-    // re-exports of unchanged data produce byte-identical files.
-    const conceptsByType = new Map<string, Record<string, unknown>[]>();
-    for (const ci of conceptInstances) {
-      const conceptType = String(ci.concept ?? '');
-      if (!conceptType) continue;
-      // node_id is a DB-assigned ephemeral integer that changes across
-      // DB recreations. Stripping it here keeps the serialized JSON stable
-      // and prevents false diffs when the same logical data gets new node_ids.
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { node_id, ...rest } = ci;
-      const group = conceptsByType.get(conceptType);
-      if (group) {
-        group.push(rest as Record<string, unknown>);
-      } else {
-        conceptsByType.set(conceptType, [rest as Record<string, unknown>]);
-      }
-    }
-
-    // Write concept files
+    // Write exactly the plan's files. Grouping, sorting and serialization all
+    // happened in buildNamespaceExportPlan, whose `content` strings are what
+    // the hash above was taken over — so nothing here may add, omit or
+    // re-serialize a file.
     const conceptsDir = path.join(nsDir, 'concepts');
     const relationshipsDir = path.join(nsDir, 'relationships');
     fs.mkdirSync(conceptsDir, { recursive: true });
@@ -818,14 +1095,20 @@ async function storeImpl(
     // (e.g. all risk_ratings were deleted), the old .json file would linger on
     // disk and cause a hash mismatch on the next load. Cleaning up here keeps
     // the on-disk state consistent with the DB.
-    const activeConceptFiles = new Set([...conceptsByType.keys()].map(t => `${t}.json`));
+    //
+    // The active set is the plan's files, so a declined type's file is removed
+    // rather than left behind. That is not merely tidiness: a lingering file
+    // would be read back by `computeNamespaceHashFromFiles` and would make the
+    // on-disk digest differ from the one recorded above, which is the very
+    // store/verify disagreement this change exists to end.
+    const activeConceptFiles = new Set(plan.conceptFiles.map(f => `${f.conceptType}.json`));
     for (const file of fs.readdirSync(conceptsDir).filter(f => f.endsWith('.json'))) {
       if (!activeConceptFiles.has(file)) {
         fs.unlinkSync(path.join(conceptsDir, file));
         logger.debug(`${namespace}: removed stale concept file ${file}`);
       }
     }
-    const activeRelFiles = new Set([...relsByType.keys()].map(t => `${t}.json`));
+    const activeRelFiles = new Set(plan.relationshipFiles.map(f => `${f.relType}.json`));
     for (const file of fs.readdirSync(relationshipsDir).filter(f => f.endsWith('.json'))) {
       if (!activeRelFiles.has(file)) {
         fs.unlinkSync(path.join(relationshipsDir, file));
@@ -834,52 +1117,33 @@ async function storeImpl(
     }
 
     let conceptFilesWritten = 0;
-    for (const conceptType of [...conceptsByType.keys()].sort()) {
-      const instances = conceptsByType.get(conceptType)!;
-
-      let sorted: Record<string, unknown>[];
-      try {
-        sorted = sortConceptInstances(instances, conceptType, nodeKeyAttrs);
-      } catch (err) {
-        logger.warn(
-          `${namespace}: skipping concept type '${conceptType}' — ` +
-          `${err instanceof Error ? err.message : String(err)}`
-        );
-        continue;
-      }
-
-      const content = serializeTable(sorted, 'attributes', ['attributes'], []);
-      const filePath = path.join(conceptsDir, `${conceptType}.json`);
-      fs.writeFileSync(filePath, content, 'utf-8');
+    for (const f of plan.conceptFiles) {
+      const filePath = path.join(conceptsDir, `${f.conceptType}.json`);
+      fs.writeFileSync(filePath, f.content, 'utf-8');
 
       const relPath = path.relative(exportDir, filePath).replace(/\\/g, '/');
-      fileInventory[relPath] = instances.length;
-      totalRecords += instances.length;
+      fileInventory[relPath] = f.count;
+      totalRecords += f.count;
       filesWritten++;
       conceptFilesWritten++;
     }
 
     // Write relationship files
     let relFilesWritten = 0;
-    for (const relType of [...relsByType.keys()].sort()) {
-      const instances = relsByType.get(relType)!;
-
-      const sorted = sortRelationshipInstances(instances, relType, edgeKeyAttrs);
-      const content = serializeTable(sorted, 'source_stable_id', ['attributes'], []);
-      const filePath = path.join(relationshipsDir, `${relType}.json`);
-      fs.writeFileSync(filePath, content, 'utf-8');
+    for (const f of plan.relationshipFiles) {
+      const filePath = path.join(relationshipsDir, `${f.relType}.json`);
+      fs.writeFileSync(filePath, f.content, 'utf-8');
 
       const relPath = path.relative(exportDir, filePath).replace(/\\/g, '/');
-      fileInventory[relPath] = instances.length;
-      totalRecords += instances.length;
+      fileInventory[relPath] = f.count;
+      totalRecords += f.count;
       filesWritten++;
       relFilesWritten++;
     }
 
-    // Write namespace.json (same helper the delta-skip path uses, so the two
-    // paths cannot drift in what metadata they emit).
-    await writeNamespaceMetadata();
-    filesWritten++;
+    // Delete a `namespace.json` left by an older store. Not written
+    // any more, and not in `file_inventory`.
+    fs.rmSync(path.join(nsDir, 'namespace.json'), { force: true });
 
     // Update content_hash in DB
     await dbModule.runQuery(
@@ -910,21 +1174,19 @@ async function storeImpl(
   // for every non-targeted namespace, which leaves those hashes stale.
   //
   // Fix: after the cross_namespace layer has been written, recompute the hash
-  // for every non-targeted namespace whose cross-NS edges appear in the shared
-  // file, and update namespaceHashes if the recomputed value differs.
+  // for every non-targeted namespace whose cross-NS edges appear in the old OR
+  // new shared file, including sources whose last edge was deleted.
   if (scopedStore) {
     // Read the freshly-written cross_namespace file once (it's already on disk).
-    const crossNsFilePath = path.join(crossNsDir, 'RIA_UNIV_CrossNSRelationshipInstance.json');
     let allCrossNsEdges: Record<string, unknown>[] = [];
     if (fs.existsSync(crossNsFilePath)) {
       allCrossNsEdges = parseTable(fs.readFileSync(crossNsFilePath, 'utf-8'));
     }
 
-    // Determine which non-targeted namespaces appear as source_namespace in the file.
-    const crossNsSourceNamespaces = new Set<string>();
+    // Include new sources alongside the sources captured before the export.
     for (const edge of allCrossNsEdges) {
       const srcNs = String(edge.source_namespace ?? '');
-      if (srcNs && srcNs !== params.namespace) {
+      if (srcNs && srcNs !== scopeNamespace) {
         crossNsSourceNamespaces.add(srcNs);
       }
     }
@@ -938,8 +1200,8 @@ async function storeImpl(
 
     for (const ns of allNamespaces) {
       // Skip the targeted namespace (already handled above) and any namespace
-      // that has no cross-NS edges in the shared file (hash cannot change).
-      if (ns.name === params.namespace) continue;
+      // that had no cross-NS edges before or after this store.
+      if (ns.name === scopeNamespace) continue;
       if (!crossNsSourceNamespaces.has(ns.name)) continue;
 
       const dirName = nsDirMap.get(ns.name)!;
@@ -999,10 +1261,17 @@ async function storeImpl(
     meta_hash: computeMetaHash(metaDir),
     metamodel_versions: metamodelVersions,
     namespace_hashes: namespaceHashes,
+    // Built in Step 4 from the exact bytes exportLayer wrote. Complete on a
+    // scoped store too: the sourcemaster layer is shared, so it is rewritten in
+    // full on every store regardless of `params.namespace`.
+    sourcemaster_hashes: sourcemasterHashes,
+    // Built in Step 5 from the exact bytes exportLayer wrote. Complete on a
+    // scoped store too: the cross-namespace layer is shared, so it is rewritten
+    // in full on every store regardless of `params.namespace`.
+    cross_namespace_hashes: crossNamespaceHashes,
     // Universe_Hash for the two universe-layer files written in Steps 5b/5c,
     // computed over the exact serialized bytes via the shared hash path
     // (task 2.2) so full/namespace stores also protect the universe layer
-    // (Req 6.1, 6.2).
     universe_hashes: universeHashes,
     namespaces: allNamespaces.map(ns => ({
       directory: nsDirMap.get(ns.name)!,
@@ -1015,8 +1284,18 @@ async function storeImpl(
     schema_version: SCHEMA_VERSION,
   };
   const manifestPath = path.join(exportDir, 'manifest.json');
-  fs.writeFileSync(manifestPath, serializeMetadata(manifest as unknown as Record<string, unknown>), 'utf-8');
+  const manifestBytes = serializeMetadata(manifest as unknown as Record<string, unknown>);
+  fs.writeFileSync(manifestPath, manifestBytes, 'utf-8');
   filesWritten++;
+
+  // Record D — the file version this database is now synced to (task 5.2).
+  // Covers the full store and the namespace-scoped store alike: both rewrite the
+  // whole manifest and both rewrite the shared layers in full, so the origin
+  // record they produce is complete either way. Written after the manifest is on
+  // disk, so a crash between the two leaves D stale rather than ahead of the
+  // files — stale costs one extra load, ahead would license skipping a real
+  // divergence.
+  await writeSnapshotOrigin(dbModule, originFromManifest(manifest, manifestBytes), logger);
 
   // Remove directories for namespaces that no longer exist in the DB.
   // Without this cleanup, a deleted namespace would linger on disk and
@@ -1046,5 +1325,7 @@ async function storeImpl(
     namespaces_skipped: namespacesSkipped,
     namespaces_written: namespacesWritten,
     total_records: totalRecords,
+    // Omitted entirely when nothing was declined, so its presence is the signal
+    ...(allSkippedTypes.length > 0 ? { skipped_types: allSkippedTypes } : {}),
   };
 }

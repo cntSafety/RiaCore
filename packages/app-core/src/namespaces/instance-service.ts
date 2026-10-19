@@ -17,9 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import type { Result } from '@riacore/app-contracts';
+import type { Result, RelationshipData } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
 import type { ImportLogger } from '../infra/logger.js';
+
+export type { RelationshipData } from '@riacore/app-contracts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,20 +33,6 @@ export interface ConceptInstanceData {
   concept: string;
   metamodel: string;
   attributes: Record<string, unknown>;
-}
-
-export interface RelationshipData {
-  edge_id: number;
-  relationship: string;
-  metamodel: string;
-  direction: 'outgoing' | 'incoming';
-  type: 'intra' | 'cross';
-  connectedNode: {
-    node_id: number;
-    namespace: string;
-    concept: string;
-    name: string;
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +98,21 @@ export interface IInstanceService {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Labels for imported and authored elements; blank attributes must not hide a fallback. */
+function relationshipNodeLabel(attrs: Record<string, unknown>, concept: string, nodeId: number) {
+  const firstText = (keys: string[]) => keys
+    .map((key) => attrs[key])
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim();
+  const noteText = concept === 'safety_note' ? firstText(['note_text'])?.replace(/\s+/g, ' ') : undefined;
+  const notePreview = noteText ? (noteText.length > 80 ? `${noteText.slice(0, 80).trimEnd()}…` : noteText) : undefined;
+  return {
+    name: notePreview ?? firstText(['has_name', 'title', 'declared_name', 'short_name', 'name', 'qualified_name', 'id', 'stable_path'])
+      ?? `${concept} #${nodeId}`,
+    identifier: firstText(['id', 'short_name', 'stable_path', 'uuid']),
+    ...(concept === 'malfunction' ? { asil: firstText(['malfunction_asil']) ?? '' } : {}),
+  };
+}
 
 /** Escape single-quotes and backslashes for Cypher string literals. */
 function esc(s: string): string {
@@ -746,7 +749,7 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
             node_id: connectedId,
             namespace: String(connNode.namespace),
             concept: String(connNode.concept),
-            name: String(attrs.has_name ?? ''),
+            ...relationshipNodeLabel(attrs, String(connNode.concept), connectedId),
           },
         });
       }
@@ -771,7 +774,7 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
             node_id: Number(row.connected_node_id),
             namespace: String(row.connected_ns),
             concept: String(row.connected_concept),
-            name: String(attrs.has_name ?? ''),
+            ...relationshipNodeLabel(attrs, String(row.connected_concept), Number(row.connected_node_id)),
           },
         });
       }
@@ -796,7 +799,7 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
             node_id: Number(row.connected_node_id),
             namespace: String(row.connected_ns),
             concept: String(row.connected_concept),
-            name: String(attrs.has_name ?? ''),
+            ...relationshipNodeLabel(attrs, String(row.connected_concept), Number(row.connected_node_id)),
           },
         });
       }
@@ -821,7 +824,7 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
             node_id: Number(row.connected_node_id),
             namespace: String(row.connected_ns),
             concept: String(row.connected_concept),
-            name: String(attrs.has_name ?? ''),
+            ...relationshipNodeLabel(attrs, String(row.connected_concept), Number(row.connected_node_id)),
           },
         });
       }

@@ -31,7 +31,7 @@ export interface PersistorStoreParams {
    * When 'universe', write ONLY the universe-layer files
    * (RIA_UNIV_CanvasLayout.json, RIA_UNIV_NamespaceConnection.json), record
    * their Universe_Hash + inventory in the manifest, and leave every
-   * namespace-layer file and per-namespace hash byte-identical (Req 10).
+   * namespace-layer file and per-namespace hash byte-identical.
    * Mutually exclusive with `namespace`.
    */
   scope?: 'universe';
@@ -42,7 +42,6 @@ export interface PersistorStoreParams {
    * The escape hatch for the deliberate "port my work to this branch" flow: the
    * user has been shown what changed and chose to overwrite it. NEVER a default,
    * and never set by auto-save.
-   * See docs/coreSpecs/RiaDataChangeDetection.md §4.2.
    */
   allowSnapshotMismatch?: boolean;
 }
@@ -58,6 +57,19 @@ export type OnLoadProgress = (event: LoadProgressEvent) => void;
 
 export interface PersistorLoadParams {
   workingDir: string;
+  /** Explicitly adopt edited files: validate them and repair stale manifest hashes before a full load. */
+  acceptFileChanges?: boolean;
+  /**
+   * Which domains to clear and re-import. Anything the plan does not name keeps
+   * whatever the database already holds, so resolving one stale layer cannot
+   * wipe a layer that was never stale.
+   *
+   * Omitted: the load evaluates the sync state itself and plans from it, so a
+   * direct caller and the CLI behave exactly like the open path. An explicit
+   * plan is honoured as given — the drift dialog's Load button passes a full
+   * plan deliberately, overriding an evaluation that would have planned nothing.
+   */
+  plan?: import('../workspace/sync-state.js').LoadPlan;
   onProgress?: OnLoadProgress;
   /**
    * Optional callback for namespace-level progress events.
@@ -73,6 +85,33 @@ export interface PersistorRepairParams {
   workingDir: string;
 }
 
+/**
+ * One concept or relationship type that the store deliberately did not write to
+ * disk, or one group of instances dropped for having no type at all.
+ *
+ * Exists so a declined write is reported rather than silent. The two cases it
+ * covers both used to be invisible: a concept type whose sort threw was skipped
+ * with only a WARN in the workspace log, and an instance with an empty
+ * `concept`/`relationship` field was dropped by a bare `continue`. Both were
+ * nevertheless counted inside the recorded namespace hash, which is how a store
+ * that succeeded could produce a `ria-data/` that failed its own integrity
+ * check at the next load.
+ */
+export interface SkippedTypeReport {
+  /** The namespace whose export declined to write this. */
+  namespace: string;
+  kind: 'concept' | 'relationship';
+  /**
+   * The concept or relationship type. Empty string for the dropped-untyped
+   * case, where the absent type field is the reason itself.
+   */
+  type: string;
+  /** Why it was not written, in a form safe to show a user. */
+  reason: string;
+  /** How many instances were affected. */
+  count: number;
+}
+
 export interface StoreResult {
   files_written: number;
   total_records: number;
@@ -81,6 +120,12 @@ export interface StoreResult {
   exported_at: string;
   /** Universe files written in this store (ria-data-relative paths). */
   universe_files_written?: string[];
+  /**
+   * Types not written and instances dropped, across every namespace this store
+   * considered. Present only when there was at least one — absence means every
+   * instance in the DB reached a file.
+   */
+  skipped_types?: SkippedTypeReport[];
 }
 
 export interface LoadResult {
@@ -101,7 +146,6 @@ export interface LoadResult {
    * are absent from the loaded workspace (dangling reference). Each such
    * connection is omitted while all connections whose endpoints are both present
    * are restored. Present only when at least one connection was skipped
-   * (Requirement 8.5).
    */
   connections_skipped?: { source: string; target: string }[];
   /**
@@ -119,8 +163,37 @@ export interface RepairManifestResult {
   namespaces_repaired: string[];
   namespaces_unchanged: string[];
   manifest_updated: boolean;
+  /**
+   * `sourcemaster/` files (ria-data-relative paths) whose recorded hash was
+   * rewritten from the file's on-disk bytes. Includes files that had no
+   * manifest entry at all: repair enumerates the sourcemaster table registry
+   * rather than the manifest's existing keys, so it can *complete* the carrier
+   * and not merely correct it.
+   *
+   * This is the only field this result gained for `sourcemaster_hashes`.
+   * `repairManifest` stays synchronous with its `(params, logger)` signature and
+   * takes no `dbModule`: an earlier draft added a DB-backed backfill of the
+   * namespace identity fields, which was cut because repair recomputes digests
+   * from files and has no source for namespace identity once the manifest entry
+   * is gone. There is deliberately no `namespace_entries_backfilled` /
+   * `namespace_entries_unrepairable` here.
+   */
+  sourcemaster_files_repaired?: string[];
 }
 
+/**
+ * `ria-data/manifest.json`.
+ *
+ * A parse assertion, not runtime validation: it describes the manifest THIS
+ * version of the code writes, which is the only manifest whose hash carriers are
+ * comparable. A required field is therefore enforced on the write side -- a
+ * literal missing a carrier is a compile error -- but not on the read side,
+ * where `JSON.parse(...) as Manifest` hands back an object whose required fields
+ * may be absent because an older-epoch file predates them.
+ *
+ * Reading an older manifest is safe regardless: the epoch guard is evaluated
+ * before any carrier is dereferenced.
+ */
 export interface Manifest {
   schema_version: string;
   namespaces: {
@@ -128,8 +201,13 @@ export interface Manifest {
     directory: string;
     metamodel: string;
     metamodel_version: string;
-    namespace_role?: string;
-    namespace_owning_application?: string;
+    /**
+     * Required: the manifest entry is the sole authority for namespace identity.
+     * A silently-absent role defaults to `''`, which disables concept creation,
+     * view sourcing and imported↔authored wiring with no visible cause.
+     */
+    namespace_role: string;
+    namespace_owning_application: string;
   }[];
   metamodel_versions: Record<string, string>;
   namespace_hashes: Record<string, string>;
@@ -140,9 +218,26 @@ export interface Manifest {
    * the metamodel YAML changed (legitimate) or the files were manually edited.
    * Unlike namespace_hashes, a meta_hash mismatch is a warning, not an error:
    * the load proceeds and the post-load wiring step repairs any missing edges.
-   * Optional for backward compatibility with manifests written before this field.
+   * Required: it was optional only to tolerate manifests written before the
+   * field existed, a case the epoch guard now covers wholesale.
    */
-  meta_hash?: string;
+  meta_hash: string;
+  /**
+   * Content hash of each `sourcemaster/` file, keyed by its ria-data-relative
+   * path (e.g. "sourcemaster/RIA_SRC_Source.json"). Written on every full or
+   * namespace-scoped store from the exact bytes `exportLayer` wrote, verified on
+   * load, and completed by `repairManifest`.
+   *
+   * Hashed with the same `computeUniverseFileHash` the universe layer uses, so
+   * store, load and repair agree byte-for-byte rather than each deriving a
+   * digest its own way.
+   *
+   * A mismatch here is a hard failure at load, not a warning like `meta_hash`:
+   * sourcemaster is serialized DB record data that load clears and re-imports
+   * unconditionally, and nothing regenerates it from code. The `meta_hash`
+   * warning exists only because the meta layer *is* legitimately regenerated.
+   */
+  sourcemaster_hashes: Record<string, string>;
   /**
    * Content hash of each universe-layer file, keyed by its ria-data-relative
    * path (e.g. "universe/RIA_UNIV_CanvasLayout.json"). Recorded on every store
@@ -151,6 +246,21 @@ export interface Manifest {
    * is always written with a Universe_Hash.
    */
   universe_hashes: Record<string, string>;
+  /**
+   * Content hash of each `cross_namespace/` file, keyed by its ria-data-relative
+   * forward-slash path. Per file, like `universe_hashes` and
+   * `sourcemaster_hashes`, so load can name the offending file and repair can
+   * rewrite one entry.
+   *
+   * These files were previously unhashed AS FILES. The per-namespace content hash
+   * digests a namespace's cross-NS edges record-based, filtered by
+   * `source_namespace` -- a different question (does this namespace's slice
+   * agree?) at a different granularity. Do not reuse it here, and do not add a
+   * second derivation from DB rows: see "Namespace Content Hash / Why it is a
+   * digest over bytes" in PersistorGitFriendlyFormat.md for the failure that
+   * produced.
+   */
+  cross_namespace_hashes: Record<string, string>;
   file_inventory: Record<string, number>;
 }
 

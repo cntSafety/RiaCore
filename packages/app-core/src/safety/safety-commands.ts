@@ -328,10 +328,11 @@ export function isSafetyConcept(concept: string): concept is SafetyConcept {
 
 /**
  * Verify that `namespace` is the *authored* namespace for the safety
- * metamodel — i.e. it has a `RIA_META_DEFINEDBY` edge to a metamodel.
+ * metamodel — it has authored role and a `RIA_META_DEFINEDBY` binding
+ * whose metamodel defines the requested concept.
  *
- * Imported namespaces only have `RIA_META_CATEGORIZEDBY` edges (added during
- * connection wiring so cross-NS edges are allowed). They must NOT host
+ * Imported namespaces have their own source `DEFINEDBY` binding and may have
+ * safety `CATEGORIZEDBY` bindings from connections. Neither allows them to host
  * authored safety instances (malfunction, safety_note, safety_task,
  * requirement, tag, review_item, risk_rating).
  *
@@ -347,9 +348,10 @@ export async function assertAuthoredNamespace(
   concept: string,
 ): Promise<Result<void>> {
   const rows = await dbModule.runQuery(
-    `MATCH (ns:RIA_UNIV_Namespace {name: $namespace})-[:RIA_META_DEFINEDBY]->(:RIA_META_Metamodel)
+    `MATCH (ns:RIA_UNIV_Namespace {name: $namespace})-[:RIA_META_DEFINEDBY]->(:RIA_META_Metamodel)-[:RIA_META_DEFINES_CONCEPT]->(:RIA_META_Concept {name: $concept})
+     WHERE ns.namespace_role = 'authored'
      RETURN count(*) AS cnt`,
-    { namespace },
+    { namespace, concept },
   );
   if (Number(rows[0]?.cnt ?? 0) === 0) {
     return {
@@ -628,7 +630,7 @@ export function createSafetyCommands(
         let targetName: string | undefined;
         try {
           const tgtAttrs = JSON.parse(String(oaRows[0].attributes || '{}'));
-          targetName = String(tgtAttrs.short_name || tgtAttrs.has_name || tgtAttrs.name || '') || undefined;
+          targetName = String(tgtAttrs.short_name || tgtAttrs.has_name || tgtAttrs.name || tgtAttrs.title || tgtAttrs.id || '') || undefined;
         } catch { /* ignore parse errors */ }
         data.occursAtTarget = {
           node_id: Number(oaRows[0].node_id),
@@ -782,7 +784,7 @@ export function createSafetyCommands(
         if (!rawAttributes) return undefined;
         try {
           const attrs = typeof rawAttributes === 'string' ? JSON.parse(rawAttributes) : rawAttributes;
-          return String(attrs.short_name || attrs.has_name || attrs.name || '') || undefined;
+          return String(attrs.short_name || attrs.has_name || attrs.name || attrs.title || attrs.id || '') || undefined;
         } catch {
           return undefined;
         }
@@ -1423,6 +1425,12 @@ export function createSafetyCommands(
       const guard = await assertAuthoredNamespace(dbModule, namespace, 'safety_note');
       if (!guard.ok) return guard;
 
+      // Resolve the target before writing anything. A stale selection must not
+      // create an unlinked note and report success.
+      const tgtResult = await instanceService.getInstance(targetNodeId);
+      if (!tgtResult.ok) return tgtResult;
+      const metamodel = await resolveAuthoredMetamodel(dbModule, namespace);
+
       const attributes: Record<string, unknown> = {
         uuid: crypto.randomUUID(),
         note_text: noteText,
@@ -1435,36 +1443,42 @@ export function createSafetyCommands(
       // same pattern as has_review / has_safety_tasks (tag pattern: no parent ID in attributes).
       //   Same namespace  → RIA_UNIV_INSTANCE_REL     (element → note)
       //   Cross-namespace → RIA_UNIV_CROSSNS_INSTANCE_REL (element → note)
-      const tgtResult = await instanceService.getInstance(targetNodeId);
-      if (tgtResult.ok) {
-        if (tgtResult.data.namespace !== namespace) {
-          const crossResult = await instanceService.createCrossNsRelationship(
+      let linkError: string | undefined;
+      try {
+        const linkResult = tgtResult.data.namespace !== namespace
+          ? await instanceService.createCrossNsRelationship(
             targetNodeId,
             createResult.data.node_id,
             'has_notes',
-            await resolveAuthoredMetamodel(dbModule, namespace),
+            metamodel,
             tgtResult.data.namespace,
             namespace,
-          );
-          if (!crossResult.ok) {
-            return {
-              ok: false,
-              error: `Cross-namespace has_notes edge failed: ${crossResult.error}. Safety note created with node_id ${createResult.data.node_id}`,
-            };
-          }
-        } else {
-          const relResult = await instanceService.createRelationship(
+          )
+          : await instanceService.createRelationship(
             targetNodeId,
             createResult.data.node_id,
             'has_notes',
           );
-          if (!relResult.ok) {
-            return {
-              ok: false,
-              error: `has_notes edge failed: ${relResult.error}. Safety note created with node_id ${createResult.data.node_id}`,
-            };
-          }
+        if (!linkResult.ok) linkError = linkResult.error;
+      } catch (error) {
+        linkError = error instanceof Error ? error.message : String(error);
+      }
+      if (linkError !== undefined) {
+        // Remove only the note created by this request, including any partial
+        // link record. Existing notes and the selected element are untouched.
+        let cleanupError: string | undefined;
+        try {
+          const cleanup = await instanceService.deleteInstance(createResult.data.node_id);
+          if (!cleanup.ok) cleanupError = cleanup.error;
+        } catch (error) {
+          cleanupError = error instanceof Error ? error.message : String(error);
         }
+        return {
+          ok: false,
+          error: cleanupError === undefined
+            ? `Could not attach safety note: ${linkError}. The new note was removed.`
+            : `Could not attach safety note: ${linkError}. Could not remove safety note ${createResult.data.node_id}: ${cleanupError}`,
+        };
       }
 
       return createResult;

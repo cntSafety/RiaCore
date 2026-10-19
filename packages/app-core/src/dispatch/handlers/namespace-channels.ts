@@ -19,7 +19,9 @@
  */
 import type { NamespaceInfo, SearchResultNode, NamespaceCrossNsConnectionInfo } from '@riacore/app-contracts';
 import type { TreeReferenceNode } from '@riacore/app-contracts';
+import type { TreeNodeLocation, TreeNodeLocationLevel } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
+import type { IDbModule } from '../../db/db-module.js';
 import { resolveAncestorPath } from '../utils/ancestor-path.js';
 import { e } from '../utils/cypher.js';
 import { extractNodeName } from '../utils/node-name.js';
@@ -122,6 +124,139 @@ function paginateTreeChildren<T>(children: readonly T[], offset: number, limit?:
     : children.slice(offset, offset + limit);
 }
 
+/** An ordered tree sibling, before the page slice is applied. */
+interface TreeSiblingRow extends TreeChildSortKey {
+  attrs: Record<string, unknown>;
+}
+
+/**
+ * Resolve the complete, ordered, visibility-filtered sibling set under
+ * `parentNodeId` — or the namespace's root elements when it is `undefined`.
+ *
+ * This is the single definition of the tree's child ordering.
+ * `namespaces.getChildren` slices it into pages and `namespaces.getNodeLocation`
+ * reports indexes into it, so a reported index always identifies the page the
+ * element actually appears on. Keep both channels on this helper: a second
+ * ordering would silently desynchronize reveal from paging, which is the whole
+ * correctness precondition for index-based reveal.
+ */
+async function loadOrderedTreeSiblings(
+  dbModule: IDbModule,
+  namespace: string,
+  parentNodeId: number | undefined,
+  opts: {
+    containmentRels: readonly string[];
+    hiddenConcepts: ReadonlySet<string>;
+    showAll?: boolean;
+  },
+): Promise<{ rows: TreeSiblingRow[]; totalCount: number }> {
+  const { containmentRels, hiddenConcepts, showAll } = opts;
+  const applyHiddenFilter = !showAll && hiddenConcepts.size > 0;
+  const hiddenList = [...hiddenConcepts].map(c => `'${e(c)}'`).join(', ');
+  const ciHiddenClause = applyHiddenFilter ? ` AND NOT ci.concept IN [${hiddenList}]` : '';
+
+  // Display names live in the attributes JSON, so ordering cannot be expressed
+  // as a database ORDER BY and must happen here, over the whole sibling set.
+  const toOrderedRows = (dbRows: Record<string, unknown>[]): TreeSiblingRow[] => dbRows
+    .map((row) => {
+      const attrs = JSON.parse(String(row.attributes || '{}')) as Record<string, unknown>;
+      const concept = String(row.concept);
+      return {
+        node_id: Number(row.node_id),
+        concept,
+        name: extractNodeName(attrs, concept),
+        lineno: readLineno(attrs),
+        attrs,
+      };
+    })
+    .sort(compareTreeChildrenByConceptThenName);
+
+  // Flat namespace (no containment rels): every node is a root, nothing nests.
+  if (containmentRels.length === 0) {
+    if (parentNodeId !== undefined) return { rows: [], totalCount: 0 };
+    const flatWhere = `ci.namespace = $namespace${ciHiddenClause}`;
+    const [countRows, dataRows] = await Promise.all([
+      dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance)
+                 WHERE ${flatWhere}
+                 RETURN count(DISTINCT ci) AS cnt`,
+        { namespace },
+      ),
+      dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance)
+                 WHERE ${flatWhere}
+                 WITH DISTINCT ci
+                 RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`,
+        { namespace },
+      ),
+    ]);
+    return { rows: toOrderedRows(dataRows), totalCount: Number(countRows[0]?.cnt ?? 0) };
+  }
+
+  const relFilter = containmentRels.map(r => `'${e(r)}'`).join(', ');
+
+  if (parentNodeId === undefined) {
+    // The root branch pins on the *child* (`NOT EXISTS { ...->(ci) }`), which
+    // uses the backward direction and is safe.
+    const whereClause = `ci.namespace = $namespace
+                 AND NOT EXISTS {
+                   MATCH (parent:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(ci)
+                   WHERE r.relationship IN [${relFilter}]
+                 }${ciHiddenClause}`;
+    const [countRows, dataRows] = await Promise.all([
+      dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance)
+                 WHERE ${whereClause}
+                 RETURN count(DISTINCT ci) AS cnt`,
+        { namespace },
+      ),
+      dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance)
+                 WHERE ${whereClause}
+                 WITH DISTINCT ci
+                 RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`,
+        { namespace },
+      ),
+    ]);
+    return { rows: toOrderedRows(dataRows), totalCount: Number(countRows[0]?.cnt ?? 0) };
+  }
+
+  const parentRows = await dbModule.runQuery(
+    `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $parentNodeId}) RETURN ci.node_id`,
+    { parentNodeId },
+  );
+  if (parentRows.length === 0) throw new Error(`Node ${parentNodeId} not found`);
+
+  // Distinct containment child ids via RelationshipInstance. When filtering,
+  // join to the target ConceptInstance so hidden child concepts leave the id set
+  // *before* paging, keeping totals and the page slice consistent with the
+  // visible set (Req 5.3).
+  const childIdRows = await dbModule.runQuery(
+    applyHiddenFilter
+      ? `MATCH (ri:RIA_UNIV_RelationshipInstance)
+             WHERE ri.source_node_id = $parentNodeId AND ri.relationship IN [${relFilter}]
+             MATCH (tgt:RIA_UNIV_ConceptInstance {node_id: ri.target_node_id})
+             WHERE NOT tgt.concept IN [${hiddenList}]
+             RETURN DISTINCT ri.target_node_id AS node_id`
+      : `MATCH (ri:RIA_UNIV_RelationshipInstance)
+             WHERE ri.source_node_id = $parentNodeId AND ri.relationship IN [${relFilter}]
+             RETURN DISTINCT ri.target_node_id AS node_id`,
+    { parentNodeId },
+  );
+  const childIds = childIdRows.map(r => Number(r.node_id));
+
+  const dataRows = childIds.length > 0
+    ? await dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance)
+             WHERE ci.node_id IN $ids
+             RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`,
+        { ids: childIds },
+      )
+    : [];
+
+  return { rows: toOrderedRows(dataRows), totalCount: childIds.length };
+}
+
 /**
  * Register namespace channels: list, createAuthored, getChildren.
  * All require an open workspace.
@@ -129,9 +264,8 @@ function paginateTreeChildren<T>(children: readonly T[], offset: number, limit?:
  * TODO(multi-profile): This file currently mixes generic namespace channel logic
  * with safety-profile-specific domain knowledge. Examples:
  *
- *   - `getChildren`: hard-codes `occurs_at` as the relationship that determines
- *     `hasChildren` for structural nodes, and hard-codes `['occurs_at', 'has_notes',
- *     'has_tag']` as the cross-namespace reference relationships to return.
+ *   - `getChildren`: hard-codes `['occurs_at', 'has_notes', 'has_tag']` as
+ *     the cross-namespace reference relationships and expandability hints.
  *
  *   - `namespaces.search`: hard-codes concept name mappings (`malfunction`,
  *     `safety_task`, `safety_requirement`, `safety_note`, `review_item`) to derive
@@ -223,8 +357,6 @@ export function registerNamespaceChannels(
     const hiddenConcepts = await ctx.getHiddenConcepts(deps.dbModule, metamodel);
     const applyHiddenFilter = !showAll && hiddenConcepts.size > 0;
     const hiddenList = [...hiddenConcepts].map(c => `'${e(c)}'`).join(', ');
-    // Exclusion fragment for a ConceptInstance bound as `ci` (flat + root branches).
-    const ciHiddenClause = applyHiddenFilter ? ` AND NOT ci.concept IN [${hiddenList}]` : '';
 
     const effectiveOffset = (typeof offset === 'number' && offset >= 0) ? Math.floor(offset) : 0;
     const effectiveLimit = (typeof limit === 'number' && limit > 0) ? Math.floor(limit) : undefined;
@@ -232,134 +364,37 @@ export function registerNamespaceChannels(
     // Flat namespace (no containment rels): all nodes are roots, no node has children
     const isFlatNamespace = containmentRels.length === 0;
 
+    // Order the whole sibling set, then slice. Shared with
+    // namespaces.getNodeLocation so a reported child index and this page slice
+    // can never disagree.
+    const { rows: sortedRows, totalCount } = await loadOrderedTreeSiblings(
+      deps.dbModule,
+      namespace,
+      parentNodeId,
+      { containmentRels, hiddenConcepts, showAll },
+    );
+    const pageRows = paginateTreeChildren(sortedRows, effectiveOffset, effectiveLimit);
+
     if (isFlatNamespace) {
-      // Requesting children of a specific node in a flat namespace → always empty
-      if (parentNodeId !== undefined) {
-        return { children: [], references: [], totalCount: 0, offset: effectiveOffset, hasMore: false };
-      }
-      // Requesting roots → all concept instances in the namespace
-      const flatWhere = `ci.namespace = $namespace${ciHiddenClause}`;
-      const flatCountQuery = `MATCH (ci:RIA_UNIV_ConceptInstance)
-                 WHERE ${flatWhere}
-                 RETURN count(DISTINCT ci) AS cnt`;
-      const flatDataQuery = `MATCH (ci:RIA_UNIV_ConceptInstance)
-                 WHERE ${flatWhere}
-                 WITH DISTINCT ci
-                 RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`;
-      const [flatCountRows, flatRows] = await Promise.all([
-        deps.dbModule.runQuery(flatCountQuery, { namespace }),
-        deps.dbModule.runQuery(flatDataQuery, { namespace }),
-      ]);
-      const flatTotal = Number(flatCountRows[0]?.cnt ?? 0);
-      const flatChildren = flatRows.map((row) => {
-        const attrs = JSON.parse(String(row.attributes || '{}')) as Record<string, unknown>;
-        const concept = String(row.concept);
-        const asil = concept === 'malfunction' ? String(attrs.malfunction_asil ?? '') : '';
-        return {
-          node_id: Number(row.node_id),
-          concept,
-          name: extractNodeName(attrs, concept),
-          lineno: readLineno(attrs),
-          hasChildren: false,
-          asil,
-        };
-      });
-      flatChildren.sort(compareTreeChildrenByConceptThenName);
-      const pagedFlatChildren = paginateTreeChildren(flatChildren, effectiveOffset, effectiveLimit);
-      const flatHasMore = (effectiveOffset + pagedFlatChildren.length) < flatTotal;
+      // Nothing nests here, so no child has children and there is no structural
+      // parent to attach cross-namespace references to.
+      const flatChildren = pageRows.map(({ node_id: nodeId, concept, name, attrs }) => ({
+        node_id: nodeId,
+        concept,
+        name,
+        hasChildren: false,
+        asil: concept === 'malfunction' ? String(attrs.malfunction_asil ?? '') : '',
+      }));
       return {
-        children: pagedFlatChildren,
+        children: flatChildren,
         references: [],
-        totalCount: flatTotal,
+        totalCount,
         offset: effectiveOffset,
-        hasMore: flatHasMore,
+        hasMore: (effectiveOffset + flatChildren.length) < totalCount,
       };
     }
 
     const relFilter = containmentRels.map(r => `'${e(r)}'`).join(', ');
-
-    // Resolve the rows for this level + the total count.
-    // Containment child ids are resolved via the RIA_UNIV_RelationshipInstance
-    // node table and node data is fetched by id.
-    // The root branch pins on the *child* (`NOT EXISTS { ...->(ci) }`),
-    // which uses the backward direction and is safe.
-    let rows: Record<string, unknown>[];
-    let totalCount: number;
-
-    if (parentNodeId === undefined) {
-      const whereClause = `ci.namespace = $namespace
-                 AND NOT EXISTS {
-                   MATCH (parent:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(ci)
-                   WHERE r.relationship IN [${relFilter}]
-                 }${ciHiddenClause}`;
-
-      const countQuery = `MATCH (ci:RIA_UNIV_ConceptInstance)
-                 WHERE ${whereClause}
-                 RETURN count(DISTINCT ci) AS cnt`;
-
-      const dataQuery = `MATCH (ci:RIA_UNIV_ConceptInstance)
-                 WHERE ${whereClause}
-                 WITH DISTINCT ci
-                 RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`;
-      const params = { namespace };
-      const [countRows, dataRows] = await Promise.all([
-        deps.dbModule.runQuery(countQuery, params),
-        deps.dbModule.runQuery(dataQuery, params),
-      ]);
-      totalCount = Number(countRows[0]?.cnt ?? 0);
-      rows = dataRows;
-    } else {
-      const parentRows = await deps.dbModule.runQuery(
-        `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $parentNodeId}) RETURN ci.node_id`,
-        { parentNodeId },
-      );
-      if (parentRows.length === 0) throw new Error(`Node ${parentNodeId} not found`);
-
-      // Distinct containment child ids via RelationshipInstance.
-      // When filtering, join to the target ConceptInstance so hidden child
-      // concepts are excluded from the id set *before* pagination, keeping
-      // totalCount and the page slice consistent with the visible set (Req 5.3).
-      const childIdRows = await deps.dbModule.runQuery(
-        applyHiddenFilter
-          ? `MATCH (ri:RIA_UNIV_RelationshipInstance)
-             WHERE ri.source_node_id = $parentNodeId AND ri.relationship IN [${relFilter}]
-             MATCH (tgt:RIA_UNIV_ConceptInstance {node_id: ri.target_node_id})
-             WHERE NOT tgt.concept IN [${hiddenList}]
-             RETURN DISTINCT ri.target_node_id AS node_id`
-          : `MATCH (ri:RIA_UNIV_RelationshipInstance)
-             WHERE ri.source_node_id = $parentNodeId AND ri.relationship IN [${relFilter}]
-             RETURN DISTINCT ri.target_node_id AS node_id`,
-        { parentNodeId },
-      );
-      const childIds = childIdRows.map(r => Number(r.node_id));
-      totalCount = childIds.length;
-
-      // Fetch all sibling data before paging. Display names are extracted from
-      // attributes, so sorting by concept/name must happen in application code.
-      rows = childIds.length > 0
-        ? await deps.dbModule.runQuery(
-            `MATCH (ci:RIA_UNIV_ConceptInstance)
-             WHERE ci.node_id IN $ids
-             RETURN ci.node_id AS node_id, ci.concept AS concept, ci.attributes AS attributes`,
-            { ids: childIds },
-          )
-        : [];
-    }
-
-    // Sort the entire sibling set before selecting a page. Names are stored in
-    // the attributes JSON, so this cannot be expressed as a database ORDER BY.
-    const sortedRows = rows.map((row) => {
-      const attrs = JSON.parse(String(row.attributes || '{}')) as Record<string, unknown>;
-      const concept = String(row.concept);
-      return {
-        node_id: Number(row.node_id),
-        concept,
-        name: extractNodeName(attrs, concept),
-        lineno: readLineno(attrs),
-        attrs,
-      };
-    }).sort(compareTreeChildrenByConceptThenName);
-    const pageRows = paginateTreeChildren(sortedRows, effectiveOffset, effectiveLimit);
 
     const children = await Promise.all(pageRows.map(async ({ node_id: nodeId, concept, name, attrs }) => {
       const asil = concept === 'malfunction' ? String(attrs.malfunction_asil ?? '') : '';
@@ -380,9 +415,11 @@ export function registerNamespaceChannels(
                RETURN count(DISTINCT ri.target_node_id) AS cnt`, { nodeId },
         ),
         deps.dbModule.runQuery(
-          `MATCH (fm:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(tgt:RIA_UNIV_ConceptInstance {node_id: $nodeId})
-           WHERE r.relationship = 'occurs_at'${scope ? ' AND fm.namespace = $scope' : ''}
-           RETURN count(fm) AS cnt`, scope ? { nodeId, scope } : { nodeId },
+          // Match the references exposed on expansion. A need with only notes
+          // must still have an expand arrow, scoped to the current analysis.
+          `MATCH (ref:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]-(tgt:RIA_UNIV_ConceptInstance {node_id: $nodeId})
+           WHERE r.relationship IN ['occurs_at', 'has_notes', 'has_tag']${scope ? ' AND (ref.namespace = $scope OR tgt.namespace = $scope)' : ''}
+           RETURN count(ref) AS cnt`, scope ? { nodeId, scope } : { nodeId },
         ),
       ]);
       return {
@@ -474,6 +511,57 @@ export function registerNamespaceChannels(
 
     const metamodel = String(nsRows[0]?.metamodel ?? '');
     return resolveAncestorPath(deps.dbModule, nodeId, metamodel);
+  }, {
+    requiresWorkspace: true,
+    category: 'namespaces',
+  });
+
+  // ── namespaces.getNodeLocation ───────────────────────────────────────────────
+  // Where a node sits in the tree's own page order, level by level. A paginated
+  // client cannot reveal an element it has not loaded, and walking pages until
+  // the element appears costs one request per page at every level. Reporting the
+  // child index instead lets the client load only the pages that contain the
+  // path. The ordering comes from `loadOrderedTreeSiblings`, the same helper
+  // `namespaces.getChildren` pages over, so an index identifies the page the
+  // element will actually be on.
+  registry.register('namespaces.getNodeLocation', async (payload, deps, ctx) => {
+    const { namespace, nodeId, showAll } = payload;
+
+    const nsRows = await deps.dbModule.runQuery(
+      `MATCH (ns:RIA_UNIV_Namespace {name: $namespace}) RETURN ns.metamodel AS metamodel`,
+      { namespace },
+    );
+    if (nsRows.length === 0) throw new Error(`Namespace '${namespace}' not found`);
+
+    const metamodel = String(nsRows[0]?.metamodel ?? '');
+    const containmentRels = await ctx.getContainmentRels(deps.dbModule, metamodel);
+    const hiddenConcepts = await ctx.getHiddenConcepts(deps.dbModule, metamodel);
+
+    // Root → immediate parent, then the node itself: every level the client has
+    // to materialize to render the node.
+    const ancestors = await resolveAncestorPath(deps.dbModule, nodeId, metamodel);
+    const levels: TreeNodeLocationLevel[] = [];
+    let parentNodeId: number | undefined;
+
+    for (const wantedId of [...ancestors, nodeId]) {
+      const { rows, totalCount } = await loadOrderedTreeSiblings(
+        deps.dbModule,
+        namespace,
+        parentNodeId,
+        { containmentRels, hiddenConcepts, showAll },
+      );
+      const childIndex = rows.findIndex(row => row.node_id === wantedId);
+      if (childIndex === -1) {
+        // Not a visible containment child of this level. Report the levels that
+        // did resolve and let the caller fall back rather than inventing a
+        // position the tree cannot honour.
+        return { namespace, nodeId, levels, resolved: false } satisfies TreeNodeLocation;
+      }
+      levels.push({ parentNodeId, nodeId: wantedId, childIndex, totalCount });
+      parentNodeId = wantedId;
+    }
+
+    return { namespace, nodeId, levels, resolved: true } satisfies TreeNodeLocation;
   }, {
     requiresWorkspace: true,
     category: 'namespaces',

@@ -44,6 +44,7 @@ import { useFullWorkspaceSaveMutation } from './hooks/useFullWorkspaceSaveMutati
 import { useExportSphinxNeeds } from './hooks/useExportSphinxNeeds';
 import { useExportSettings } from './hooks/useExportSettings';
 import { useExportSafetyXlsx } from './hooks/useExportSafetyXlsx';
+import { useExportSafetyOkf } from './hooks/useExportSafetyOkf';
 import { SettingsDialog } from './modules/settings/SettingsDialog';
 import { useAppSettingsDialogStore } from './store/appSettingsDialogStore';
 import { LlmReviewModal } from './modules/llm-review/LlmReviewModal';
@@ -86,6 +87,7 @@ function RootApp() {
 
   // ── Excel (.xlsx) export mutation ─────────────────────────────────────────
   const exportSafetyXlsxMutation = useExportSafetyXlsx();
+  const exportSafetyOkfMutation = useExportSafetyOkf();
 
   // ── Export result modal state ─────────────────────────────────────────────
   type ExportModalState =
@@ -124,6 +126,7 @@ function RootApp() {
   const handleGitCommitRef = useRef<() => void>(() => {});
   const handleExportSphinxNeedsRef = useRef<() => void>(() => {});
   const handleExportXlsxRef = useRef<() => void>(() => {});
+  const handleExportOkfRef = useRef<() => void>(() => {});
   const handleShowStatusCardsRef = useRef<() => void>(() => {});
   const handleOpenRecentRef = useRef<(workingDir: string) => void>(() => {});
 
@@ -168,6 +171,7 @@ function RootApp() {
     const unsubscribe = api.menu.onReportAction((action) => {
       if (action === 'export-sphinx-needs') handleExportSphinxNeedsRef.current();
       else if (action === 'export-xlsx') handleExportXlsxRef.current();
+      else if (action === 'export-okf') handleExportOkfRef.current();
       else if (action === 'show-status-cards') handleShowStatusCardsRef.current();
     });
     return unsubscribe;
@@ -325,6 +329,26 @@ function RootApp() {
   };
 
   handleExportXlsxRef.current = () => void handleExportXlsx();
+
+  const handleExportOkf = async () => {
+    if (activeNamespace?.owningApplication !== 'Safety-Analysis') return;
+    // Capture before the asynchronous picker: navigation must not change scope.
+    const namespace = activeNamespace.name;
+    const includeRiskRatings = exportSettingsQuery.data?.includeRiskRatings ?? true;
+    const outputDir = await api.dialog.openDirectory();
+    if (!outputDir) return;
+    const loadingKey = 'safety-okf-export-loading';
+    void message.loading({ content: 'Exporting OKF safety analysis…', key: loadingKey, duration: 0 });
+    try {
+      const result = await exportSafetyOkfMutation.mutateAsync({ namespace, outputDir, includeRiskRatings });
+      setExportModal({ open: true, kind: 'success', fileCount: result.exportedFiles.length, outputDir: result.outputDir });
+    } catch (err) {
+      setExportModal({ open: true, kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      message.destroy(loadingKey);
+    }
+  };
+  handleExportOkfRef.current = () => void handleExportOkf();
 
   handleShowStatusCardsRef.current = () => {
     if (activeNamespace?.owningApplication !== 'Safety-Analysis') return;
@@ -516,7 +540,7 @@ function RootApp() {
       >
         {exportModal.open && exportModal.kind === 'success' && (
           <Typography.Text>
-            {exportModal.fileCount} file{exportModal.fileCount !== 1 ? 's' : ''} written to:
+            Export contains {exportModal.fileCount} file{exportModal.fileCount !== 1 ? 's' : ''} in:
             <br />
             <Typography.Text code copyable style={{ wordBreak: 'break-all' }}>
               {exportModal.outputDir}

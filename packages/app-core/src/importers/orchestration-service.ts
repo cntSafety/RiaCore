@@ -53,7 +53,7 @@ import {
   loadImportConfig as loadSysmlTextualImportConfig,
   resolveFiles as resolveSysmlTextualFiles,
 } from '@riacore/importer-sysml-v2-textual';
-import { resolveWorkspacePath } from '@riacore/importer-sdk';
+import { resolveWorkspacePath, toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { ImpactReport, CrossNsSnapshot, OrphanedEntry, OrphanedEntryWithContext, ListOrphanedEntriesParams } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
 import { computeFileDigest } from './file-digest.js';
@@ -378,9 +378,13 @@ export function createImporterOrchestrationService(
           metamodel: metamodelName,
           sourceName: config.source_name ?? config.namespace,
           sourceType: descriptor.sourceType,
-          configPath: params.configPath,
+          // Stored form, not the absolute path. This value is persisted on the
+          // Source node and exported to ria-data/sourcemaster/, which is
+          // committed — an absolute path there does not survive a clone, a
+          // different checkout location, or another OS. The importer still
+          // receives the absolute path via ImporterContext.configPath.
+          configPath: toWorkspaceRelative(workspaceRoot, params.configPath),
           configDigest,
-          metamodelPath: descriptor.metamodelPath,
           metamodelDigest,
           triggeredBy: params.triggeredBy,
           importerVersion: descriptor.version,

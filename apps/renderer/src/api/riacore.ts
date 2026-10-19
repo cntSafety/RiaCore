@@ -68,6 +68,7 @@ import type {
   NamespaceDeleteImpactPreview,
   GraphQueryResult,
   ConceptInstanceData,
+  RelationshipData,
   MalfunctionData,
   PropagationMalfunctionData,
   ScopedPropagationResult,
@@ -77,6 +78,7 @@ import type {
   ReviewItemData,
   SearchResult,
   GetChildrenResponse,
+  TreeNodeLocation,
   PortConnectorResult,
   NamespacePortConnectorsResult,
   ComponentPortConnectorsResult,
@@ -346,6 +348,13 @@ export const api = {
       window.riacore.namespaces.getChildren({ namespace, parentNodeId, offset, limit, showAll, scopeNamespace }),
     getAncestorPath: (namespace: string, nodeId: number): Promise<number[]> =>
       window.riacore.namespaces.getAncestorPath({ namespace, nodeId }),
+    /**
+     * Locate a node in the tree's page order so a reveal can load only the pages
+     * that contain it. `showAll` must match the tree's display setting, because
+     * hidden concepts shift both the index and the totals.
+     */
+    getNodeLocation: (namespace: string, nodeId: number, showAll?: boolean): Promise<TreeNodeLocation> =>
+      window.riacore.namespaces.getNodeLocation({ namespace, nodeId, showAll }),
     search: (query: string, offset?: number, limit?: number): Promise<SearchResult> =>
       window.riacore.namespaces.search({ query, offset, limit }),
     previewDeleteImpact: (namespace: string): Promise<NamespaceDeleteImpactPreview> =>
@@ -509,6 +518,8 @@ export const api = {
       window.riacore.safety.previewDeleteImpact({ nodeId }),
     getInstance: (nodeId: number): Promise<ConceptInstanceData> =>
       window.riacore.safety.getInstance({ nodeId }),
+    getRelationships: (nodeId: number): Promise<RelationshipData[]> =>
+      window.riacore.safety.getRelationships({ nodeId }),
     createTag: (params: CreateTagParams): Promise<{ node_id: number }> =>
       window.riacore.safety.createTag(params),
     getTag: (nodeId: number): Promise<ConceptInstanceData> =>
@@ -547,6 +558,8 @@ export const api = {
       includeRiskRatings?: boolean,
     ): Promise<{ exportedFiles: string[]; outputDir: string }> =>
       window.riacore.safety.exportSphinxNeeds({ namespace, outputDir, includeRiskRatings }),
+    exportOkf: (namespace: string, outputDir: string, includeRiskRatings?: boolean): Promise<{ exportedFiles: string[]; outputDir: string }> =>
+      window.riacore.safety.exportOkf({ namespace, outputDir, includeRiskRatings }),
     exportXlsx: (namespace: string, outputPath: string): Promise<{ outputPath: string }> =>
       window.riacore.safety.exportXlsx({ namespace, outputPath }),
     getSafetyData: (namespace: string): Promise<SafetyExportData> =>

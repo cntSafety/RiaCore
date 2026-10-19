@@ -278,10 +278,10 @@ export function useRunImportSourceAtRefMutation(workingDirSource: string | null 
 export function usePersistorLoadMutation(workingDirSource: string | null | undefined | (() => string | null | undefined)) {
   const queryClient = useQueryClient();
 
-  return useMutation<LoadResult, Error, void>({
-    mutationFn: async () => {
+  return useMutation<LoadResult, Error, { acceptFileChanges?: boolean } | void>({
+    mutationFn: async (options) => {
       const workingDir = resolveWorkingDir(workingDirSource);
-      return api.persistor.load({ workingDir });
+      return api.persistor.load({ workingDir, ...options });
     },
     onSuccess: () => {
       // A ria-data load rebuilds the ENTIRE DB from the JSON files and
@@ -318,7 +318,7 @@ export function useCreateAuthoredNamespaceMutation(workingDirSource: string | nu
       // namespace-scoped store, mirroring the import auto-save
       // (autoPersistImportedNamespace) and the safety editor's useAutoSave.
       // createAuthored only writes to the in-memory DB; without this store the
-      // namespace's namespace.json + manifest entry never reach disk, so a
+      // namespace's manifest entry never reaches disk, so a
       // created-but-never-opened analysis (no malfunctions yet) would vanish on
       // the next workspace reopen even though its canvas tile position was
       // auto-saved. Best-effort: a failure is reported but does not fail

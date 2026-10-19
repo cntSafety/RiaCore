@@ -30,8 +30,8 @@ import { createHash } from 'node:crypto';
 import type { IDbModule } from '../db/db-module.js';
 import type { ImportLogger } from '../infra/logger.js';
 import { parseTable } from './serializer.js';
-import { computeNamespaceHash } from './hash-computer.js';
-import { loadAttributeMetadataFromFiles } from './persistor-helpers.js';
+import { computeNamespaceHashFromFileContents } from './hash-computer.js';
+import type { NamespaceSectionFile } from './hash-computer.js';
 import type {
   PersistorStoreParams,
   PersistorLoadParams,
@@ -43,8 +43,8 @@ import type {
 } from './persistor-types.js';
 import { store } from './persistor-store.js';
 import { load } from './persistor-load.js';
-import { repairManifest } from './persistor-repair.js';
-import { stampBaseline } from '../workspace/snapshot-baseline.js';
+import { repairManifest, prepareManifestForExplicitLoad } from './persistor-repair.js';
+import { setPendingSyncDecision, stampBaseline } from '../workspace/snapshot-baseline.js';
 
 // ── Re-exports: types ──────────────────────────────────────────────────────────
 
@@ -72,8 +72,39 @@ export { sortConceptInstances, sortRelationshipInstances, sortCrossNsRelationshi
 // ── computeNamespaceHashFromFiles ──────────────────────────────────────────────
 
 /**
- * Recompute the content hash for a namespace from exported JSON files on disk.
- * Pass an optional `debugLog` function to emit per-section hash diagnostics.
+ * Read the `*.json` files of one namespace section directory, paired with their
+ * exact on-disk content.
+ *
+ * Read as a UTF-8 string rather than a `Buffer` on purpose: the store side has
+ * only the string it is about to write, and
+ * `computeNamespaceHashFromFileContents` must give both sides the same digest.
+ */
+function readSectionFiles(dir: string): NamespaceSectionFile[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(fileName => ({
+      fileName,
+      content: fs.readFileSync(path.join(dir, fileName), 'utf-8'),
+    }));
+}
+
+/**
+ * Recompute the content hash for a namespace from the exported JSON files on
+ * disk. Pass an optional `debugLog` function to emit per-section hash
+ * diagnostics.
+ *
+ * This is the file-side half of the namespace-hash contract: it reads the bytes
+ * and delegates every decision about how they are digested to
+ * `computeNamespaceHashFromFileContents`, whose doc comment defines the
+ * contract that the store side must match. Note that it no longer parses the
+ * records — the digest covers the file bytes — which is what lets it reproduce
+ * a recorded hash even for content the write loop declined to write a record
+ * for.
+ *
+ * The cross-namespace section is the one exception and stays record-based,
+ * filtered by `source_namespace`, because its file is shared across every
+ * namespace.
  */
 export function computeNamespaceHashFromFiles(
   namespace: string,
@@ -81,25 +112,10 @@ export function computeNamespaceHashFromFiles(
   exportDir: string,
   debugLog?: (msg: string) => void,
 ): string {
-  const conceptsDir = path.join(nsDir, 'concepts');
-  const relsDir     = path.join(nsDir, 'relationships');
   const crossNsPath = path.join(exportDir, 'cross_namespace', 'RIA_UNIV_CrossNSRelationshipInstance.json');
 
-  const { nodeKeyAttrs, edgeKeyAttrs } = loadAttributeMetadataFromFiles(exportDir);
-
-  const conceptInstances: Record<string, unknown>[] = [];
-  if (fs.existsSync(conceptsDir)) {
-    for (const file of fs.readdirSync(conceptsDir).filter(f => f.endsWith('.json'))) {
-      conceptInstances.push(...parseTable(fs.readFileSync(path.join(conceptsDir, file), 'utf-8')));
-    }
-  }
-
-  const relationshipInstances: Record<string, unknown>[] = [];
-  if (fs.existsSync(relsDir)) {
-    for (const file of fs.readdirSync(relsDir).filter(f => f.endsWith('.json'))) {
-      relationshipInstances.push(...parseTable(fs.readFileSync(path.join(relsDir, file), 'utf-8')));
-    }
-  }
+  const conceptFiles = readSectionFiles(path.join(nsDir, 'concepts'));
+  const relationshipFiles = readSectionFiles(path.join(nsDir, 'relationships'));
 
   const crossNsEdgesAsSource: Record<string, unknown>[] = [];
   if (fs.existsSync(crossNsPath)) {
@@ -107,7 +123,13 @@ export function computeNamespaceHashFromFiles(
     crossNsEdgesAsSource.push(...allEdges.filter(r => String(r.source_namespace ?? '') === namespace));
   }
 
-  return computeNamespaceHash({ namespace, conceptInstances, relationshipInstances, crossNsEdgesAsSource, nodeKeyAttrs, edgeKeyAttrs, debugLog });
+  return computeNamespaceHashFromFileContents({
+    namespace,
+    conceptFiles,
+    relationshipFiles,
+    crossNsEdgesAsSource,
+    debugLog,
+  });
 }
 
 // ── computeMetaHash ────────────────────────────────────────────────────────────
@@ -128,7 +150,10 @@ export function computeMetaHash(metaDir: string): string {
   for (const file of files) {
     // Include the file name so renaming a file changes the hash
     hash.update(file);
-    hash.update(fs.readFileSync(path.join(metaDir, file)));
+    // Digest the UTF-8 string, matching the idiom used for the other carriers.
+    // Equivalent to digesting the raw bytes for any valid UTF-8 input, so
+    // recorded values stayed comparable and needed no epoch bump.
+    hash.update(fs.readFileSync(path.join(metaDir, file), 'utf-8'), 'utf-8');
   }
   return `sha256:${hash.digest('hex')}`;
 }
@@ -147,6 +172,12 @@ export function createPersistorService(dbModule: IDbModule, logger: ImportLogger
     },
     async load(params: PersistorLoadParams): Promise<LoadResult> {
       try {
+        if (params.acceptFileChanges) {
+          if (params.plan !== undefined) throw new Error('Accepting file changes requires a full load');
+          // File-only preparation: do not advance DB origins or the session
+          // baseline until load succeeds. Failed loads keep the decision pending.
+          prepareManifestForExplicitLoad(params, logger);
+        }
         const result = await load(params, dbModule, logger);
         // The DB now holds exactly what is on disk, so the files become the new
         // baseline.
@@ -158,6 +189,7 @@ export function createPersistorService(dbModule: IDbModule, logger: ImportLogger
         // — an unbreakable loop. A load is deliberately NOT fenced, because it is
         // the resolution for drift, not a writer of it.
         stampBaseline(params.workingDir, undefined, { reason: 'load' });
+        if (params.plan === undefined) setPendingSyncDecision(params.workingDir, null);
         return result;
       } catch (err) {
         logger.error(`load failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -166,9 +198,16 @@ export function createPersistorService(dbModule: IDbModule, logger: ImportLogger
     },
     async repairManifest(params: PersistorRepairParams): Promise<RepairManifestResult> {
       const result = await Promise.resolve(repairManifest(params, logger));
+      // Repair changes M to match F, but does not load any data. Preserve every
+      // database origin row, including the manifest digest: advancing D here
+      // would classify unloaded incoming content as S1 and let the next save
+      // overwrite it. Only a successful load or store records a new origin.
+      // For S4, D already equals F, so repair still converges to S1 without a
+      // database write. S3/S5 instead becomes S2 and is loaded on reopen.
       // Repair rewrites manifest.json to match the on-disk files, which changes
       // the very hashes the baseline is compared against. Re-stamp for the same
       // reason as load: otherwise accepting a repair immediately looks like drift.
+      // This in-memory session baseline is distinct from the persistent DB origin.
       stampBaseline(params.workingDir, undefined, { reason: 'repair' });
       return result;
     },

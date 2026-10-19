@@ -5,6 +5,7 @@ const { MINIMUM_MACOS_VERSION, validateMacNativeLibraries } = require('./mac-nat
 const { validateWindowsVcRuntime } = require('./windows-vc-runtime.cjs');
 const { validateRuntimeNotices } = require('./runtime-notices.cjs');
 const { validateReleaseLicenses } = require('./license-bundle.cjs');
+const { validateRendererPackage } = require('./renderer-package.cjs');
 
 const desktopHostDir = path.resolve(__dirname, '..');
 const outputDir = path.join(desktopHostDir, 'dist-electron');
@@ -142,6 +143,7 @@ function main() {
     platform === 'win' ? 'node.exe' : 'node',
   );
   const appDir = path.join(resourcesDir, 'app');
+  validateRendererPackage(appDir);
 
   if (!fs.existsSync(gitBinary)) fail(`portable Git is missing: ${gitBinary}`);
   if (!fs.existsSync(nodeBinary)) fail(`Node sidecar is missing: ${nodeBinary}`);

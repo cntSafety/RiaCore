@@ -42,11 +42,37 @@ export interface CanonicalRelTableDef {
   columns?: CanonicalColumnDef[];
 }
 
-// 1.4.0: added RIA_UNIV_View and its three relationship tables (VIEW_DEFINEDBY,
-// VIEW_CATEGORIZEDBY, VIEW_SOURCE) for the View concept (docs/coreSpecs/RiaViews.md).
-// The version bump ensures existing workspaces are rebuilt from ria-data so the new
-// tables exist before any view definition can be created.
-export const SCHEMA_VERSION = '1.4.0';
+// 1.6.0: the shared-layer sync contract.
+//   1. manifest.cross_namespace_hashes is a new required hash carrier, so the
+//      serialized cross-namespace layer is protected like every other layer.
+//   2. RIA_UNIV_SnapshotOrigin records, per domain, the file version this
+//      database was synced from (the "D" of the three-hash rule).
+//
+// 1.5.0: three changes to the on-disk ria-data contract.
+//   1. manifest.sourcemaster_hashes is now a required hash carrier, so the
+//      serialized import-source records are protected like every other layer.
+//   2. <namespace>/namespace.json is gone; manifest.namespaces[] is the sole
+//      authority for namespace_role and namespace_owning_application.
+//   3. Nested `attributes` keys are deep-sorted by the serializer, which moves
+//      every content hash.
+//
+// This constant is the hash epoch. manifest.schema_version identifies the
+// generation a manifest's hashes were computed in, and hash comparison is only
+// valid within one generation: when the two differ, every hash comparison is
+// *suspended* rather than failed, and the workspace is reported as needing a
+// rebuild from ria-data. Without that suspension the rebuild of every existing
+// workspace would abort on "file integrity check failed" for every namespace,
+// because the recorded hashes were produced by a different algorithm over a
+// different input set.
+//
+// This constant is the version this code WRITES. Which versions it is willing to
+// READ is a separate question, answered in one place by
+// `./schema-compat.ts` — see `MIN_READABLE_SCHEMA_VERSION` and
+// `classifySchemaCompatibility`. Suspension applies only within the supported
+// range; outside it the snapshot is refused before anything is read or deleted.
+// When bumping this value, check whether the floor moves with it: it does
+// whenever the new version makes an older on-disk layout unparseable.
+export const SCHEMA_VERSION = '1.6.0';
 export const DB_SCHEMA_VERSION_TABLE = 'RIA_META_SchemaVersion';
 export const DB_SCHEMA_VERSION_NODE_ID = 'ria-core';
 
@@ -210,7 +236,7 @@ export const CANONICAL_NODE_TABLES: CanonicalNodeTableDef[] = [
   {
     // Global canvas layout table: one row per Layout_Key (element_kind, element_key).
     // element_kind is an opaque STRING with NO enum constraint, so any current or future
-    // Element_Kind value is storable without a schema change (Requirements 1.4, 8.1).
+    // Element_Kind value is storable without a schema change.
     // Keyed by the content-derived layout_id (never node_id), so records are stable
     // across node-ID reassignment.
     name: 'RIA_UNIV_CanvasLayout',
@@ -243,6 +269,31 @@ export const CANONICAL_NODE_TABLES: CanonicalNodeTableDef[] = [
       { name: 'metamodel', type: 'STRING' },
       { name: 'mapping', type: 'STRING' },
       { name: 'parameters', type: 'STRING' },
+    ],
+  },
+  {
+    // The file version this DATABASE was synced from, per domain. The D of the
+    // three-hash rule for every domain that has no other place to record it.
+    //
+    // Keys mirror the manifest exactly: 'manifest', 'sourcemaster/<Table>.json',
+    // 'universe/<Table>.json', 'cross_namespace/<Table>.json'. Namespaces are
+    // absent on purpose -- their D is RIA_UNIV_Namespace.content_hash, which is
+    // blanked on edit and therefore means something different (see Invariant 1
+    // in .kiro/specs/persistor-shared-layer-sync/design.md). Meta is absent on
+    // purpose -- it is regenerated from shipped profiles, so there is no
+    // authored content to protect (see persistorStates.md).
+    //
+    // NEVER serialized into ria-data/. This table records what this database
+    // consumed; writing it to disk would make it a property of the snapshot,
+    // which is the opposite of what it means. It is deliberately absent from
+    // TABLE_REGISTRY for the same reason.
+    name: 'RIA_UNIV_SnapshotOrigin',
+    layer: 'universe',
+    primaryKey: 'key',
+    jsonColumns: [],
+    columns: [
+      { name: 'key', type: 'STRING' },
+      { name: 'hash', type: 'STRING' },
     ],
   },
   {

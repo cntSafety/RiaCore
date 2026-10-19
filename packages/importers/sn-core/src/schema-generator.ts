@@ -18,8 +18,34 @@
  *
  */
 import { createHash } from 'node:crypto';
+import * as path from 'node:path';
+import { toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { LinkMLSchema, LinkMLAttribute, LinkMLSlot } from './metamodel-loader.js';
 import type { ParsedNeedsModel, JsonSchemaProperty } from './sn-parser.js';
+
+/**
+ * How the generating needs file is named in the schema description.
+ *
+ * The description is persisted on `RIA_META_Metamodel` and therefore lands in
+ * `ria-data/meta/`, where it is covered by `meta_hash`. An absolute path there
+ * costs twice: the exported workspace stops being portable, and `meta_hash`
+ * becomes machine-dependent, so the same analysis re-imported from a colleague's
+ * clone — or from the same repo at a different checkout path — produces a
+ * different hash for identical content.
+ *
+ * So the file is always described relative to the workspace root, the anchor
+ * every import-config path already uses. A needs file on another volume has no
+ * relative form; rather than fall back to the absolute path and reintroduce the
+ * problem, it is named by basename. The description is prose provenance — the
+ * authoritative pointer is `needs_file` in the import config.
+ */
+function describeSourceFile(needsFilePath: string, workspaceRoot?: string): string {
+  if (workspaceRoot) {
+    const relative = toWorkspaceRelative(workspaceRoot, needsFilePath);
+    if (!path.isAbsolute(relative)) return relative;
+  }
+  return path.basename(needsFilePath);
+}
 
 function normalizeName(value: string): string {
   return value
@@ -52,7 +78,16 @@ export function computeDynamicMetamodelName(namespace: string): string {
   return `SN_${ns}`;
 }
 
-export function buildSchemaFromModel(model: ParsedNeedsModel, namespace: string): { schema: LinkMLSchema; schemaDigest: string } {
+/**
+ * `workspaceRoot` is optional only so unit tests can build a schema without a
+ * workspace. Production callers must pass it — without it the generated
+ * description degrades to a bare filename (see `describeSourceFile`).
+ */
+export function buildSchemaFromModel(
+  model: ParsedNeedsModel,
+  namespace: string,
+  workspaceRoot?: string,
+): { schema: LinkMLSchema; schemaDigest: string } {
   const classes: LinkMLSchema['classes'] = {};
   const slots: LinkMLSchema['slots'] = {};
 
@@ -129,7 +164,7 @@ export function buildSchemaFromModel(model: ParsedNeedsModel, namespace: string)
   const schema: LinkMLSchema = {
     name: computeDynamicMetamodelName(namespace),
     version: model.selectedVersion || 'dynamic',
-    description: `Dynamic Sphinx-Needs schema generated from ${model.needsFilePath}`,
+    description: `Dynamic Sphinx-Needs schema generated from ${describeSourceFile(model.needsFilePath, workspaceRoot)}`,
     classes,
     slots,
     display_identifier_attrs: ['title', 'id'],

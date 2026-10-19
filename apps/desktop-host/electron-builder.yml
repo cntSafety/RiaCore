@@ -3,6 +3,7 @@ productName: RiaCore
 asar: false
 npmRebuild: false
 afterPack: ./scripts/after-pack.cjs
+msiProjectCreated: ./scripts/msi-project.cjs
 directories:
   app: .release/app
   output: dist-electron
@@ -29,12 +30,18 @@ extraResources:
     filter:
       - '**/*'
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
-nsis:
-  include: build/installer.nsh
+msi:
+  oneClick: false
+  perMachine: true
+  runAfterFinish: false
+  upgradeCode: 'CF947274-4316-4A6B-B457-DC6CF3E30147'
+  additionalWixArgs:
+    - -ext
+    - WixUtilExtension
 win:
   icon: build/icons/win/icon.ico
   target:
-    - target: nsis
+    - target: msi
       arch:
         - x64
 mac:

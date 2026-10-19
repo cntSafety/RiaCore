@@ -24,7 +24,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ImportSourceInfo, ImportConfigView, ImportConfigData, DiffSummary, NamespaceDiffResult, ArxmlTreeData } from '@riacore/app-contracts';
 import { describeDiffSummaryCounts } from '@riacore/app-contracts';
 import type { IGitService } from '@riacore/git-service';
-import { normalizeStoredPath, resolveWorkspacePath } from '@riacore/importer-sdk';
+import { normalizeStoredPath, resolveWorkspacePath, toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { createRegistry } from '../channel-registry.js';
 import { e } from '../utils/cypher.js';
 import { deleteNamespace } from '../../persistor/persistor-helpers.js';
@@ -34,9 +34,22 @@ import { createImportLogger } from '../../infra/logger.js';
 // ── Source config helpers ──────────────────────────────────────────────────────
 
 interface SourceConfigMeta {
+  /**
+   * The config YAML's path in **stored form**: workspace-relative whenever the
+   * file lives inside the workspace, which it does for every provisioned source.
+   *
+   * Stored relative because this blob is exported to
+   * `ria-data/sourcemaster/RIA_SRC_Source.json`, which is committed. Always read
+   * it back through `getSourceConfigPath`, never directly — that resolves it
+   * against the workspace root and passes a legacy absolute value through
+   * unchanged, so workspaces written before this change keep working.
+   */
   configPath?: string;
   configDigest?: string;
-  metamodelPath?: string;
+  /**
+   * Content digest of the metamodel. There is deliberately no `metamodelPath`
+   * companion — see `RETIRED_CONFIG_META_KEYS`.
+   */
   metamodelDigest?: string;
   configDirty?: boolean;
   lastAppliedAt?: string;
@@ -45,6 +58,18 @@ interface SourceConfigMeta {
   /** Full commit hash at the time of the last successful git-based import. */
   lastImportCommitId?: string;
 }
+
+/**
+ * Keys earlier versions wrote and that must now be removed on sight.
+ *
+ * Kept in sync with `RETIRED_CONFIG_META_KEYS` in
+ * `importers/import-write-service.ts` — both functions write the same blob, so a
+ * key retired in one and not the other comes back on the next write from the
+ * other path. `metamodelPath` held an absolute path into the installed
+ * application; nothing ever read it, and it made committed `ria-data/`
+ * machine-specific.
+ */
+const RETIRED_CONFIG_META_KEYS = ['metamodelPath'] as const;
 
 // ── Import git metadata file helpers ─────────────────────────────────────────
 
@@ -202,10 +227,44 @@ function serializeSourceConfigMeta(
     if (value === null) delete merged[key];
     else merged[key] = value;
   }
+  for (const key of RETIRED_CONFIG_META_KEYS) delete merged[key];
   return JSON.stringify(merged);
 }
 
-function getSourceConfigPath(row: Record<string, unknown>): string | undefined {
+/** The absolute workspace root, or `''` when no workspace is open. */
+async function currentWorkspaceRoot(
+  deps: { workspaceService: { getStatus(): Promise<{ state: string; info?: { workingDir: string } }> } },
+): Promise<string> {
+  try {
+    const status = await deps.workspaceService.getStatus();
+    return status.state === 'open' ? status.info?.workingDir ?? '' : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The config YAML's absolute path, resolved from whatever form is stored.
+ *
+ * Stored values are workspace-relative; `resolveWorkspacePath` returns an
+ * absolute value verbatim, so a workspace written before paths were relativised
+ * resolves unchanged and needs no migration.
+ *
+ * Returns the stored value as-is when no workspace root is available. That only
+ * happens outside an open workspace, where there is nothing to anchor against
+ * and every caller is about to fail on the path anyway.
+ */
+function getSourceConfigPath(
+  row: Record<string, unknown>,
+  workspaceRoot?: string,
+): string | undefined {
+  const stored = getStoredSourceConfigPath(row);
+  if (stored === undefined) return undefined;
+  return workspaceRoot ? resolveWorkspacePath(workspaceRoot, stored) : stored;
+}
+
+/** The raw stored form, without resolution. For writing the value back. */
+function getStoredSourceConfigPath(row: Record<string, unknown>): string | undefined {
   const directPath = row['s.config_path'];
   if (typeof directPath === 'string' && directPath.length > 0) return directPath;
   if (directPath !== undefined && directPath !== null) {
@@ -216,6 +275,14 @@ function getSourceConfigPath(row: Record<string, unknown>): string | undefined {
   return typeof meta.configPath === 'string' && meta.configPath.length > 0
     ? meta.configPath
     : undefined;
+}
+
+/**
+ * The form a config path is persisted in: workspace-relative when the file is
+ * inside the workspace, unchanged when there is no workspace root to anchor to.
+ */
+function toStoredConfigPath(workspaceRoot: string, configPath: string): string {
+  return workspaceRoot ? toWorkspaceRelative(workspaceRoot, configPath) : configPath;
 }
 
 function buildImportConfigDataFromYaml(
@@ -250,25 +317,69 @@ function buildImportConfigDataFromYaml(
   };
 }
 
+/**
+ * `workspaceRoot` resolves the stored (workspace-relative) config path to an
+ * absolute one. It is optional so external callers compile unchanged, but every
+ * caller that touches the filesystem with the returned `configPath` must pass
+ * it — without it a relative value is resolved against the process working
+ * directory by whatever does the eventual `fs` call.
+ *
+ * Two distinct conditions lead to the YAML re-hydration path below, and they are
+ * deliberately not treated alike:
+ *
+ *   - **`config_data` absent** — normal. A freshly provisioned source has a
+ *     config YAML but no serialized blob yet; re-hydrating from YAML is how the
+ *     blob first comes into existence. Silent.
+ *   - **`config_data` present but unparseable** — a defect, and logged at WARN.
+ *     `config_data` is serialized DB state exported to
+ *     `ria-data/sourcemaster/RIA_SRC_Source.json`, which is covered by
+ *     `manifest.sourcemaster_hashes`. Re-hydrating from YAML and writing the
+ *     result back would overwrite the corrupt record with a YAML-derived
+ *     reconstruction, re-hash it, and leave no trace that anything was wrong —
+ *     and `ria-config/` is not guaranteed to be committed, so the YAML is not a
+ *     trustworthy recovery source. The fallback still runs (it is the only way
+ *     forward from here), but the corruption becomes visible.
+ */
 export async function ensureSourceConfigData(
   dbModule: { runQuery(q: string, p?: Record<string, unknown>): Promise<Record<string, unknown>[]> },
   sourceId: string,
   row: Record<string, unknown>,
   missingConfigMessage: string,
+  workspaceRoot?: string,
 ): Promise<{ configData: ImportConfigData; configPath?: string }> {
   const configDataRaw = row['s.config_data'] ? String(row['s.config_data']) : '';
   if (configDataRaw) {
     try {
       return {
         configData: JSON.parse(configDataRaw) as ImportConfigData,
-        configPath: getSourceConfigPath(row),
+        configPath: getSourceConfigPath(row, workspaceRoot),
       };
-    } catch {
-      // Fall back to YAML re-hydration below.
+    } catch (error) {
+      // `console.warn`, not a workspace logger, and that is a considered choice:
+      // this function takes a structural `dbModule`, not `ServiceDependencies`,
+      // so neither `deps.loggers` nor `openWorkspaceLogger(deps)` is reachable
+      // from inside it. Threading one in means an extra parameter passed at all
+      // five call sites — one of which is `imports.getConfig`, a read the
+      // renderer issues every time the config drawer opens — and
+      // `deps.loggers.workspace()` is eager: it mkdirs, opens a write stream,
+      // emits a "logger started" line and prunes the log directory on
+      // construction. Paying that on every config read to carry a line that
+      // fires only on corruption is the wrong trade. `console.warn` goes to
+      // stderr, so the CLI's stdout JSON contract is unaffected — see
+      // CoreArchPrinciples.md §Logger creation rules, which sanctions
+      // console.warn for genuine fail-safe paths.
+      console.warn(
+        `[ImportConfig] Source '${sourceId}' has a config_data value that is not valid JSON ` +
+        `(${error instanceof Error ? error.message : String(error)}). This is serialized DB state ` +
+        `covered by manifest.sourcemaster_hashes, so the record in ria-data/sourcemaster/ is ` +
+        `corrupt. Re-hydrating from the config YAML and overwriting it; verify the result and ` +
+        `re-run 'persistor store'.`,
+      );
+      // Fall through to YAML re-hydration below.
     }
   }
 
-  const configPath = getSourceConfigPath(row);
+  const configPath = getSourceConfigPath(row, workspaceRoot);
   if (!configPath || !fs.existsSync(configPath)) {
     throw new Error(missingConfigMessage);
   }
@@ -291,12 +402,15 @@ export async function ensureSourceConfigData(
   });
 
   const configDataJson = JSON.stringify(configData);
-  const sourceMetaJson = serializeSourceConfigMeta(row['s.config'], { configPath });
+  // Persist the relative form; keep the absolute one for the return value, which
+  // callers hand to the orchestration service and to `fs`.
+  const storedConfigPath = toStoredConfigPath(workspaceRoot ?? '', configPath);
+  const sourceMetaJson = serializeSourceConfigMeta(row['s.config'], { configPath: storedConfigPath });
   const now = new Date().toISOString();
   await dbModule.runQuery(
     `MATCH (s:RIA_SRC_Source) WHERE s.source_id = '${e(sourceId)}'
      SET s.config_data = '${e(configDataJson)}',
-         s.config_path = '${e(configPath)}',
+         s.config_path = '${e(storedConfigPath)}',
          s.config = '${e(sourceMetaJson)}',
          s.updated_at = '${e(now)}'`,
   );
@@ -533,9 +647,13 @@ export function registerImportChannels(
     );
     if (!rows.length) throw new Error(`No source found: ${sourceId}`);
     const row = rows[0];
+    // Resolved before the ensure call, which needs it to turn the stored
+    // relative config path back into an absolute one.
+    const workspaceRoot = await currentWorkspaceRoot(deps);
     const { configData, configPath } = await ensureSourceConfigData(
       deps.dbModule, sourceId, row,
       `Source '${sourceId}' has no config_data. Re-provision or use 'config import' to load configuration.`,
+      workspaceRoot,
     );
 
     const sourceType = String(row['s.source_type'] ?? configData.sourceType ?? '');
@@ -554,8 +672,6 @@ export function registerImportChannels(
     // the renderer can hand a real filesystem path to git/fs channels. The stored
     // value is returned unchanged alongside it for editing.
     const storedProjectDir = configData.project_dir ?? '';
-    const wsStatus = await deps.workspaceService.getStatus();
-    const workspaceRoot = wsStatus.state === 'open' ? wsStatus.info.workingDir : '';
 
     const view: ImportConfigView = {
       sourceId,
@@ -605,13 +721,21 @@ export function registerImportChannels(
       elements: params.elements,
     });
 
+    // `params.configPath` arrives absolute — `imports.getConfig` resolves it for
+    // the renderer. Persist the relative form so the round trip through the UI
+    // does not reintroduce an absolute path into committed ria-data/.
+    const workspaceRoot = await currentWorkspaceRoot(deps);
+    const storedConfigPath = params.configPath
+      ? toStoredConfigPath(workspaceRoot, params.configPath)
+      : undefined;
+
     const sourceMetaJson = serializeSourceConfigMeta(rows[0].config, {
-      configPath: params.configPath,
+      configPath: storedConfigPath,
       configDirty: true,
     });
 
-    const configPathSet = params.configPath
-      ? `,\n             s.config_path = '${e(params.configPath)}'`
+    const configPathSet = storedConfigPath
+      ? `,\n             s.config_path = '${e(storedConfigPath)}'`
       : '';
 
     const now = new Date().toISOString();
@@ -627,7 +751,11 @@ export function registerImportChannels(
     // The file is the secondary artifact (DB is primary), but it must reflect
     // the saved values so that re-running via CLI or re-opening the config
     // drawer shows the correct project_dir / source_name / etc.
-    const yamlPath = params.configPath ?? parseSourceConfigMeta(rows[0].config).configPath;
+    // Resolved, not stored form — this one is handed to `fs`.
+    const storedYamlPath = params.configPath ?? parseSourceConfigMeta(rows[0].config).configPath;
+    const yamlPath = storedYamlPath
+      ? resolveWorkspacePath(workspaceRoot || process.cwd(), storedYamlPath)
+      : undefined;
     if (yamlPath) {
       const yamlDoc: Record<string, unknown> = {
         namespace: params.namespace,
@@ -768,6 +896,7 @@ export function registerImportChannels(
     const { configData } = await ensureSourceConfigData(
       deps.dbModule, sourceId, rows[0],
       `No config_data on source '${sourceId}'. Save config first.`,
+      await currentWorkspaceRoot(deps),
     );
     const yamlDoc: Record<string, unknown> = {
       namespace: configData.namespace,
@@ -858,8 +987,9 @@ export function registerImportChannels(
       elements: (parsed.elements && typeof parsed.elements === 'object') ? parsed.elements : {},
     });
 
+    const storedConfigPath = toStoredConfigPath(await currentWorkspaceRoot(deps), filePath);
     const sourceMetaJson = serializeSourceConfigMeta(rows[0].config, {
-      configPath: filePath,
+      configPath: storedConfigPath,
       configDirty: true,
     });
 
@@ -868,7 +998,7 @@ export function registerImportChannels(
       `MATCH (s:RIA_SRC_Source) WHERE s.source_id = '${e(sourceId)}'
        SET s.config_data = '${e(configData)}',
            s.config = '${e(sourceMetaJson)}',
-           s.config_path = '${e(filePath)}',
+           s.config_path = '${e(storedConfigPath)}',
            s.updated_at = '${e(now)}'`,
     );
   }, { mutates: 'full', requiresWorkspace: true, category: 'imports' });
@@ -924,6 +1054,7 @@ export function registerImportChannels(
         sourceId,
         rows[0],
         `No config_data on source '${sourceId}'. Re-provision or use 'config import'.`,
+        workingDir,
       );
       if (!deps.orchestration) throw new Error('Import orchestration not configured');
 
@@ -980,7 +1111,11 @@ export function registerImportChannels(
 
     const targetNamespace = String(sourceRows[0].targetNamespace ?? '');
     const configMeta = parseSourceConfigMeta(sourceRows[0].config);
-    const configPath = configMeta.configPath;
+    // Stored relative; resolve before handing it to fs.unlinkSync below.
+    const workspaceRoot = await currentWorkspaceRoot(deps);
+    const configPath = configMeta.configPath && workspaceRoot
+      ? resolveWorkspacePath(workspaceRoot, configMeta.configPath)
+      : configMeta.configPath;
 
     // 2. Delete the namespace (nodes, edges, namespace node)
     if (targetNamespace) {
@@ -1043,6 +1178,7 @@ export function registerImportChannels(
       const { configData, configPath } = await ensureSourceConfigData(
         deps.dbModule, sourceId, rows[0],
         `No config_data on source '${sourceId}'. Re-provision or use 'config import'.`,
+        workingDir,
       );
       if (!deps.orchestration) throw new Error('Import orchestration not configured');
       if (!deps.gitService) throw new Error('Git service not available');
@@ -1131,6 +1267,7 @@ export function registerImportChannels(
     const { configData, configPath } = await ensureSourceConfigData(
       deps.dbModule, sourceId, rows[0],
       `No config_data on source '${sourceId}'. Re-provision or use 'config import'.`,
+      workingDir,
     );
 
     // Discover the repo root via the source's project_dir, resolved to an

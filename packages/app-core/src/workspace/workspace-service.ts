@@ -25,12 +25,20 @@ import type { LoadProgressPushEvent } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
 import type { AppCoreLogger } from '../db/db-module.js';
 import type { IPersistorService } from '../persistor/persistor-types.js';
-import type { Manifest } from '../persistor/persistor-types.js';
-import { computeNamespaceHashFromFiles } from '../persistor/persistor.js';
-import { clearBaseline, stampBaseline } from './snapshot-baseline.js';
+import type { PendingSyncDecision } from '@riacore/app-contracts';
+import { clearBaseline, setPendingSyncDecision, stampBaseline } from './snapshot-baseline.js';
+import {
+  classifyRiaData,
+  describeUnusableManifest,
+  evaluateSyncStates,
+  repairStaleManifestBeforeLoad,
+  type RiaDataClassification,
+  type SyncEvaluation,
+} from './sync-evaluation.js';
 import { migrateLegacyConnections } from './connection-migration.js';
 import { createLayoutService } from '../namespaces/layout-service.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
+import { describeIncompatibleSchema, MIN_READABLE_SCHEMA_VERSION } from '../db/schema-compat.js';
 import { detectUnreplayableWal, walPathFor } from '../db/wal-recovery.js';
 import { runAllCleanups } from '../infra/cleanup-service.js';
 import { DEFAULT_CHECKS } from './default-checks.js';
@@ -58,7 +66,7 @@ export interface IWorkspaceService {
   notifyStoreCompleted(): void;
   /**
    * Returns a promise that resolves when the current tracked load settles,
-   * or immediately when no load is in flight (Requirement 6.2).
+   * or immediately when no load is in flight.
    * Implementation lands in task 5.1.
    */
   whenLoadSettled(): Promise<void>;
@@ -71,7 +79,7 @@ export interface IWorkspaceService {
    * then operates on the shared mutable state just as the staleness branch
    * will when task 3.1 is wired.
    *
-   * @internal - for testing only (Requirements 2.2, 2.3, 2.4, 6.3)
+   * @internal - for testing only
    */
   _testOnly_performFreshLoad?: (config: WorkspaceConfig, dbPath: string) => Promise<void>;
 }
@@ -86,17 +94,14 @@ interface WorkspaceState {
 }
 
 /**
- * Returns true if `dir` exists AND contains a parseable `manifest.json`.
+ * `hasValidManifest` used to answer "is there a snapshot here?" with a boolean,
+ * and that boolean is what made Case C fire for a manifest that was present but
+ * corrupt: open stored from the database over content a colleague had committed,
+ * before any drift could be reported. The three real outcomes now live in
+ * `classifyRiaData`; this is the shorthand the lifecycle cases still want.
  */
-async function hasValidManifest(dir: string): Promise<boolean> {
-  try {
-    const manifestPath = path.join(dir, 'manifest.json');
-    const content = await fs.promises.readFile(manifestPath, 'utf-8');
-    JSON.parse(content);
-    return true;
-  } catch {
-    return false;
-  }
+function riaDataIsReadable(classification: RiaDataClassification): boolean {
+  return classification.kind === 'readable';
 }
 
 /**
@@ -183,93 +188,49 @@ async function writeDefaultChecks(workingDir: string, logger?: AppCoreLogger): P
 }
 
 /**
- * Result of the consistency check between manifest, on-disk files, and DB.
+ * The user-facing refusal for a pending decision.
  *
- * - `consistent`: all three agree — DB is up to date.
- * - `db_stale`: manifest and files agree but DB differs — safe to reload from ria-data.
- * - `files_corrupted`: manifest hashes don't match what's computed from on-disk files.
- *   The DB is authoritative; do NOT reload from corrupted files.
+ * Deliberately the same shape as the old `files_corrupted` text, because it is
+ * that situation generalised: the old message covered the namespace domain only,
+ * this one covers every domain. The workspace stays writable and the two
+ * remedies are unchanged — repair the manifest and load, or save the database
+ * over the files.
  */
-type ConsistencyResult =
-  | { status: 'consistent' }
-  | { status: 'db_stale' }
-  | { status: 'files_corrupted'; corruptedNamespaces: string[] };
+function describePendingDecision(decision: PendingSyncDecision): string {
+  const listed = decision.domains
+    .slice(0, 6)
+    .map((d) => `${d.kind}:${d.id} (${d.state})`)
+    .join(', ');
+  const more = decision.domains.length > 6 ? ` (+${decision.domains.length - 6} more)` : '';
+  const why =
+    decision.reason === 'three_way'
+      ? `manifest.json, the files on disk and the database all disagree, so the database is the ` +
+        `only coherent authority.`
+      : `the files in ria-data/ have been changed — manually edited, or restored from elsewhere — ` +
+        `without updating manifest.json.`;
+  return (
+    `ria-data file integrity check failed — a decision is needed before anything is written: ${why} ` +
+    `Affected: ${listed}${more}. ` +
+    `The database is authoritative and your data is safe: nothing was loaded and nothing was saved. ` +
+    `Use "Repair Manifest" to accept the file changes and update the manifest hashes, ` +
+    `or use "Save" (persistor store) to overwrite the files from the database.`
+  );
+}
 
 /**
- * Three-way consistency check: manifest ↔ files ↔ DB.
- *
- * 1. First verifies that on-disk JSON files match the manifest hashes (file integrity).
- *    If any namespace's files have been modified/corrupted, returns 'files_corrupted'.
- * 2. Then compares manifest hashes to DB content_hash values.
- *    If they differ, returns 'db_stale' (safe to reload from ria-data).
- * 3. If everything matches, returns 'consistent'.
+ * Turn a `SyncEvaluation` outcome into the `PendingSyncDecision` the drift
+ * report carries, or null when nothing is awaiting a person.
  */
-async function checkConsistency(workingDir: string, dbModule: IDbModule, logger?: AppCoreLogger): Promise<ConsistencyResult> {
-  const exportDir = path.join(workingDir, 'ria-data');
-  const manifestPath = path.join(exportDir, 'manifest.json');
-  const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8')) as Manifest;
-  const manifestHashes: Record<string, string> = manifest.namespace_hashes ?? {};
-
-  // ── Step 1: Verify file integrity (disk files vs manifest hashes) ─────────
-  const corruptedNamespaces: string[] = [];
-  for (const nsEntry of manifest.namespaces) {
-    const namespace = nsEntry.name;
-    const manifestHash = manifestHashes[namespace];
-    if (!manifestHash) continue; // No hash recorded — skip integrity check
-
-    const dirName = nsEntry.directory ?? namespace;
-    const nsDir = path.join(exportDir, dirName);
-
-    try {
-      // Collect per-section debug lines so we can emit them only on mismatch,
-      // keeping the happy-path log clean.
-      const sectionLines: string[] = [];
-      const diskHash = computeNamespaceHashFromFiles(
-        namespace, nsDir, exportDir,
-        (msg) => sectionLines.push(msg),
-      );
-      if (diskHash !== manifestHash) {
-        logger?.warn?.(
-          `File integrity mismatch — namespace='${namespace}' ` +
-          `manifest=${manifestHash.slice(0, 20)}... disk=${diskHash.slice(0, 20)}...`,
-          { namespace, manifest_hash: manifestHash, disk_hash: diskHash },
-        );
-        // Emit each per-section hash line so the log immediately shows which
-        // section (concepts / relationships / cross-ns) caused the difference.
-        for (const line of sectionLines) {
-          logger?.warn?.(`  [integrity/section] ${line}`, { namespace });
-        }
-        corruptedNamespaces.push(namespace);
-      }
-    } catch (err) {
-      // If we can't compute the hash (missing files, etc.), treat as corrupted
-      logger?.warn?.('File integrity check failed for namespace', { namespace, error: err instanceof Error ? err.message : String(err) });
-      corruptedNamespaces.push(namespace);
-    }
-  }
-
-  if (corruptedNamespaces.length > 0) {
-    return { status: 'files_corrupted', corruptedNamespaces };
-  }
-
-  // ── Step 2: Compare manifest hashes to DB hashes ──────────────────────────
-  const rows = await dbModule.runQuery(
-    'MATCH (n:RIA_UNIV_Namespace) RETURN n.name AS name, n.content_hash AS hash',
-  );
-  const dbHashes: Record<string, string> = {};
-  for (const row of rows) {
-    if (row.name && row.hash) dbHashes[String(row.name)] = String(row.hash);
-  }
-
-  // Mismatch if manifest has namespaces not in DB, or hashes differ
-  for (const [ns, manifestHash] of Object.entries(manifestHashes)) {
-    if (dbHashes[ns] !== manifestHash) return { status: 'db_stale' };
-  }
-  // Also mismatch if DB has namespaces not in manifest
-  for (const ns of Object.keys(dbHashes)) {
-    if (!(ns in manifestHashes)) return { status: 'db_stale' };
-  }
-  return { status: 'consistent' };
+function pendingDecisionFrom(evaluation: SyncEvaluation): PendingSyncDecision | null {
+  if (evaluation.outcome.kind !== 'needs_decision') return null;
+  return {
+    reason: evaluation.outcome.reason,
+    domains: evaluation.outcome.domains.map((e) => ({
+      kind: e.domain.kind,
+      id: e.domain.id,
+      state: e.state,
+    })),
+  };
 }
 
 /**
@@ -289,9 +250,9 @@ export function isStaleDb(dbStatus: DbStatus): boolean {
 
 /**
  * Minimal async mutex built on a promise chain. Guarantees:
- *  - mutual exclusion: at most one critical section runs at a time (Req 1.1, 1.2)
- *  - FIFO: acquirers run in the order runExclusive() was called (Req 1.4)
- *  - release-on-throw: the lock is always released, even if fn() rejects (Req 1.3)
+ *  - mutual exclusion: at most one critical section runs at a time
+ *  - FIFO: acquirers run in the order runExclusive() was called
+ *  - release-on-throw: the lock is always released, even if fn() rejects
  *
  * `tail` is the promise every new acquirer chains onto. It only ever resolves;
  * rejections inside runExclusive are surfaced to the caller, not to the chain,
@@ -313,7 +274,7 @@ function createMutex() {
 }
 
 // Load_Timeout: upper bound on how long a bounded await for a tracked load
-// will wait before proceeding regardless (Requirements 3.2–3.4).
+// will wait before proceeding regardless.
 const LOAD_TIMEOUT_MS = 5000;
 
 /**
@@ -321,7 +282,6 @@ const LOAD_TIMEOUT_MS = 5000;
  * `ms` elapses — whichever comes first. It NEVER rejects: a rejection of `p`
  * is swallowed (the caller only cares that the load has settled, not how), and
  * the timeout path resolves cleanly. Used to bound awaits on the tracked load
- * (Requirements 3.2–3.4).
  */
 function withTimeout(p: Promise<void>, ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -349,14 +309,14 @@ export function createWorkspaceService(
     lifecycleAction: 'opened_consistent',
   };
 
-  // Serialized status snapshot (Requirements 2.1, 2.2, 2.6). getStatus() reads
+  // Serialized status snapshot. getStatus() reads
   // this snapshot WITHOUT taking the lifecycle mutex; commitStatus() recomputes
   // it from `state` in one synchronous assignment and is called at every
   // committed state transition. Initialized to a closed snapshot to match the
   // initial `state`.
   let statusSnapshot: WorkspaceStatus = { state: 'closed' };
 
-  // Tracked-load state (Requirements 3.1, 4.2). `epoch` is bumped on every
+  // Tracked-load state. `epoch` is bumped on every
   // committed transition so an in-flight load can detect it has been superseded
   // (wired in tasks 5.2/5.3). `currentLoad` holds the promise of the in-flight
   // Case B load, or null when none is running; it is read by whenLoadSettled().
@@ -366,12 +326,12 @@ export function createWorkspaceService(
   // Set by openLocked when it returns via the already-open fast path, so the
   // public open() wrapper can skip re-stamping the snapshot baseline. Safe as
   // closure state because openLocked and the wrapper run inside the same
-  // mutex-held critical section (RiaDataChangeDetection.md §4.1).
+  // mutex-held critical section.
   let lastOpenUsedFastPath = false;
 
   /**
    * Returns a promise that resolves when the current tracked load settles, or
-   * immediately when no load is in flight (Requirement 6.2).
+   * immediately when no load is in flight.
    */
   function whenLoadSettled(): Promise<void> {
     return currentLoad ?? Promise.resolve();
@@ -450,10 +410,10 @@ export function createWorkspaceService(
   async function performFreshLoad(config: WorkspaceConfig, dbPath: string): Promise<void> {
     const workingDir = config.workingDir;
 
-    // Requirement 2.2: close the open database before deleting the Db_Directory.
+    // close the open database before deleting the Db_Directory.
     await dbModule.close();
 
-    // Requirement 2.3: delete Db_Directory recursively, then Db_Wal when present.
+    // delete Db_Directory recursively, then Db_Wal when present.
     try {
       await fs.promises.rm(dbPath, { recursive: true, force: true });
       const walPath = `${dbPath}.wal`;
@@ -468,7 +428,7 @@ export function createWorkspaceService(
       });
     }
 
-    // Requirement 2.4: open a new empty database.
+    // open a new empty database.
     const openResult = await openDb(dbPath, workingDir);
     if (!openResult.ok) {
       // If the empty-DB open itself fails, record load_failed and surface the error.
@@ -482,20 +442,20 @@ export function createWorkspaceService(
     state.dbStatus = openResult.dbStatus;
     commitStatus();
 
-    // Requirement 2.4 (cont.): rebuild the graph via Persistor.load().
+    // Rebuild the graph via Persistor.load().
     const persistor = persistorFactory(workingDir);
     try {
       await persistor.load({
         workingDir,
         onNamespaceProgress: onLoadProgress ?? undefined,
       });
-      // Requirement 2.5: on success set lifecycleAction to 'opened_loaded_from_ria_data'.
+      // on success set lifecycleAction to 'opened_loaded_from_ria_data'.
       state.lifecycleAction = 'opened_loaded_from_ria_data';
       state.lifecycleWarning = undefined;
       commitStatus();
       logger?.info?.('performFreshLoad: load succeeded', { workingDir });
     } catch (err) {
-      // Requirements 6.1, 6.2, 6.3: on load() failure close the DB, remove
+      // on load() failure close the DB, remove
       // the partial Db_Directory + Db_Wal, set lifecycleAction = 'load_failed',
       // and record the originating error message in lifecycleWarning.
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -520,6 +480,71 @@ export function createWorkspaceService(
   }
 
   /**
+   * Run the per-domain evaluation, degrading a throw to a full load.
+   *
+   * The degradation is the point: the evaluation is a diagnostic, and a
+   * diagnostic must never block an open. A full load is the only fallback that
+   * cannot be too narrow — it is what the code did before this feature existed
+   * whenever `checkConsistency` threw.
+   */
+  async function runSyncEvaluation(
+    workingDir: string,
+    classification: Extract<RiaDataClassification, { kind: 'readable' }>,
+  ): Promise<SyncEvaluation> {
+    try {
+      return await evaluateSyncStates(
+        workingDir, classification.manifest, classification.bytes, dbModule, logger,
+      );
+    } catch (err) {
+      logger?.warn?.('sync evaluation threw — treating the database as stale and loading in full', {
+        workingDir, error: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        entries: [],
+        outcome: {
+          kind: 'load',
+          plan: {
+            meta: true, sourcemaster: true, universe: true, crossNamespace: true,
+            namespaces: (classification.manifest.namespaces ?? [])
+              .map((n) => n.name).filter((n) => !!n),
+          },
+        },
+        epochSuspended: false,
+        shortCircuited: false,
+      };
+    }
+  }
+
+  /**
+   * Repair the manifest entries of the S4 domains and report what was rewritten.
+   *
+   * A **non-blocking notice**, not a dialog: the app has just rewritten a file
+   * the user has under version control, and an unexplained working-tree change
+   * is worse than a notice — but nothing is at risk and there is no decision to
+   * take, so interrupting would be wrong. The notice reaches the user through
+   * the workspace log and `workspace.getSyncReport`; it is deliberately NOT put
+   * on `lifecycleWarning`, which the shell renders as a failure badge.
+   *
+   * Goes through the persistor service wrapper to refresh the session baseline.
+   * Database origin rows stay unchanged: S4 already has D=F. Non-fatal: a failed
+   * repair leaves the domain in S4, so the next open retries it.
+   */
+  async function repairStaleManifestEntries(workingDir: string, keys: string[]): Promise<void> {
+    try {
+      const result = await persistorFactory(workingDir).repairManifest({ workingDir });
+      logger?.info?.(
+        `ria-data/manifest.json was stale for ${keys.length} domain(s) and has been repaired — ` +
+        `no data moved, and the file is now a change in your working tree: ${keys.join(', ')}`,
+        { repaired_domains: keys, manifest_updated: result.manifest_updated },
+      );
+    } catch (err) {
+      logger?.warn?.('manifest repair at open failed (non-fatal)', {
+        workingDir, keys, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Ensure DEFINEDBY and CATEGORIZEDBY wiring is correct for all authored
    * namespaces. Called on every workspace open so that existing workspaces
    * with stale snapshots are repaired without needing a full reload.
@@ -538,7 +563,7 @@ export function createWorkspaceService(
         // This repairs stale snapshots without adding any connections beyond the
         // persisted set. Auto-wiring of CATEGORIZEDBY/NamespaceConnection edges is
         // intentionally NOT performed here — load must produce exactly the persisted
-        // connection set and nothing more. (Requirement 1.3)
+        // connection set and nothing more.
         await dbModule.runQuery(
           `MATCH (ns:RIA_UNIV_Namespace {name: $nsName}), (mm:RIA_META_Metamodel {name: ns.metamodel})
            WHERE NOT EXISTS { MATCH (ns)-[:RIA_META_DEFINEDBY]->(mm) }
@@ -551,7 +576,7 @@ export function createWorkspaceService(
       // RIA_UNIV_NamespaceConnection edges from legacy CATEGORIZEDBY edges when a
       // metamodel maps to exactly one analysis; surface "reconnect required" for
       // ambiguous shared-metamodel cases. Idempotent — skips imported namespaces
-      // that already have per-pair edges. (Requirements 1.3, 8.2)
+      // that already have per-pair edges.
       const migrationResult = await migrateLegacyConnections(
         dbModule,
         logger?.info ? (logger as import('../infra/logger.js').ImportLogger) : undefined,
@@ -565,7 +590,7 @@ export function createWorkspaceService(
       // on disk. On the next open they load from ria-data and the migration
       // skips (idempotent). Universe-scoped store writes ONLY the universe files
       // (layout + connections) and leaves every namespace hash byte-identical
-      // (Req 10), so it does not disturb the just-loaded namespace data.
+      // so it does not disturb the just-loaded namespace data.
       // Non-fatal: a persist failure must not abort workspace load.
       if (migrationResult.migrated.length > 0) {
         const workingDir = state.config?.workingDir;
@@ -591,7 +616,7 @@ export function createWorkspaceService(
       // Element_Kind whose Canvas_Element is absent, surfacing a non-fatal warning
       // naming each skipped Layout_Record. Records of an unknown/unresolved kind are
       // never pruned. Run once here, mirroring the run-once, non-fatal load-migration
-      // pattern above. (Requirement 5.6)
+      // pattern above.
       try {
         const layoutService = createLayoutService(
           dbModule,
@@ -681,9 +706,9 @@ export function createWorkspaceService(
         return { ok: false, error: `Working directory not writable: ${config.workingDir}` };
       }
 
-      // Req 3.3 / 7.2: if a prior workspace's Case B load is still running, bound-await
+      // if a prior workspace's Case B load is still running, bound-await
       // it before switching. Bumping the epoch first neutralises that load's completion
-      // closures (Req 4.2 / 7.3) so a switch-during-load ends on the new workspace. This
+      // closures so a switch-during-load ends on the new workspace. This
       // runs before the same-directory fast path inside `if (state.isOpen)`; a same-dir
       // re-open during a load simply lets the load settle, then the fast path returns.
       if (currentLoad) {
@@ -724,27 +749,60 @@ export function createWorkspaceService(
 
           // forceRecheck on same directory: run consistency check without closing DB.
           logger?.info?.('Workspace already open — forceRecheck requested, running consistency check', { workingDir: config.workingDir });
-          const riaDataDir = path.join(config.workingDir, 'ria-data');
-          const riaDataValid = await hasValidManifest(riaDataDir);
+          const classification = await classifyRiaData(config.workingDir);
 
-          if (riaDataValid) {
-            let consistencyResult: ConsistencyResult;
-            try {
-              consistencyResult = await checkConsistency(config.workingDir, dbModule, logger);
-            } catch (err) {
-              logger?.warn?.('forceRecheck: consistency check threw, treating as db_stale', { error: err instanceof Error ? err.message : String(err) });
-              consistencyResult = { status: 'db_stale' };
-            }
+          // A recheck that discovers an out-of-range snapshot leaves the already
+          // open workspace exactly as it is and reports the refusal. Nothing is
+          // closed: the session was legitimate when it started, and tearing it
+          // down would lose unsaved work over a file the user may have just
+          // pulled. Saves are already fenced, so the snapshot stays safe.
+          if (classification.kind === 'incompatible') {
+            logger?.error?.('forceRecheck: ria-data schema version is out of range — nothing written', {
+              workingDir: config.workingDir,
+              declaredSchemaVersion: classification.compatibility.version,
+              expectedSchemaVersion: SCHEMA_VERSION,
+              reason: classification.compatibility.reason,
+            });
+            return {
+              ok: false,
+              error: describeIncompatibleSchema(classification.compatibility),
+            };
+          }
 
-            if (consistencyResult.status === 'files_corrupted') {
-              const warning = `ria-data file integrity check failed for namespace(s): ${consistencyResult.corruptedNamespaces.join(', ')}. ` +
-                `The on-disk JSON files have been changed (e.g. manually edited) without updating the hash in manifest.json. ` +
-                `The database is authoritative and your data is safe. ` +
-                `Use "Repair Manifest" to accept the file changes and update the manifest hashes, ` +
-                `or use "Save" (persistor store) to overwrite the files from the database.`;
-              logger?.warn?.('forceRecheck: files corrupted, DB is authoritative', {
+          if (classification.kind === 'unusable') {
+            const warning = describeUnusableManifest(classification.reason);
+            logger?.warn?.('forceRecheck: ria-data/manifest.json is unusable — nothing written', {
+              workingDir: config.workingDir, reason: classification.reason,
+            });
+            setPendingSyncDecision(config.workingDir, {
+              reason: 'manifest_unusable',
+              domains: [{ kind: 'manifest', id: 'manifest.json', state: 'S5' }],
+            });
+            state.lifecycleAction = 'opened_manifest_unusable';
+            state.lifecycleWarning = warning;
+            commitStatus();
+            return {
+              ok: true,
+              data: {
+                workingDir: state.config.workingDir,
+                dbPath: state.dbPath!,
+                dbStatus: state.dbStatus,
+                lifecycleAction: 'opened_manifest_unusable',
+                lifecycleWarning: warning,
+              },
+            };
+          }
+
+          if (classification.kind === 'readable') {
+            const evaluation = await runSyncEvaluation(config.workingDir, classification);
+            const decision = pendingDecisionFrom(evaluation);
+            setPendingSyncDecision(config.workingDir, decision);
+
+            if (decision) {
+              const warning = describePendingDecision(decision);
+              logger?.warn?.('forceRecheck: ria-data needs a decision, DB is authoritative', {
                 workingDir: config.workingDir,
-                corruptedNamespaces: consistencyResult.corruptedNamespaces,
+                domains: decision.domains.map((d) => `${d.kind}:${d.id}:${d.state}`),
               });
               state.lifecycleAction = 'opened_db_only';
               state.lifecycleWarning = warning;
@@ -761,7 +819,11 @@ export function createWorkspaceService(
               };
             }
 
-            if (consistencyResult.status === 'consistent') {
+            if (evaluation.outcome.kind === 'repair_manifest') {
+              await repairStaleManifestEntries(config.workingDir, evaluation.outcome.keys);
+            }
+
+            if (evaluation.outcome.kind !== 'load') {
               logger?.info?.('forceRecheck: workspace consistent', { workingDir: config.workingDir });
               state.lifecycleAction = 'opened_consistent';
               state.lifecycleWarning = undefined;
@@ -777,12 +839,15 @@ export function createWorkspaceService(
               };
             }
 
-            // db_stale: DB differs from ria-data — reload
+            // Some domain is S2: load, scoped to the domains the plan names so
+            // that refreshing one stale layer does not wipe another.
             logger?.info?.('forceRecheck: DB stale, reloading from ria-data', { workingDir: config.workingDir });
             const persistor = persistorFactory(config.workingDir);
             try {
+              repairStaleManifestBeforeLoad(config.workingDir, evaluation, logger);
               await persistor.load({
                 workingDir: config.workingDir,
+                plan: evaluation.outcome.plan,
                 onNamespaceProgress: onLoadProgress ?? undefined,
               });
               state.lifecycleAction = 'opened_loaded_from_ria_data';
@@ -838,13 +903,21 @@ export function createWorkspaceService(
       }
 
       const dbPath = path.join(config.workingDir, 'db');
-      const riaDataDir = path.join(config.workingDir, 'ria-data');
 
       // Step 3: Probe filesystem state
       const dbExists = fs.existsSync(dbPath);
-      const riaDataValid = await hasValidManifest(riaDataDir);
+      const classification = await classifyRiaData(config.workingDir);
+      const riaDataValid = riaDataIsReadable(classification);
 
-      logger?.info?.('Workspace lifecycle detection', { workingDir: config.workingDir, dbExists, riaDataValid });
+      logger?.info?.('Workspace lifecycle detection', {
+        workingDir: config.workingDir, dbExists, riaDataValid, riaData: classification.kind,
+      });
+
+      // Start this open with no outstanding decision. Every branch below either
+      // leaves it clear or sets its own; without this a decision recorded for a
+      // previous open of the same directory would keep refusing saves after the
+      // condition was resolved.
+      setPendingSyncDecision(config.workingDir, null);
 
       // A write-ahead log with no database beside it is orphaned — whatever it
       // described is gone. Cases A and B create a fresh database at this exact
@@ -866,6 +939,92 @@ export function createWorkspaceService(
             });
           }
         }
+      }
+
+      // ── The manifest is unusable → OPEN, WRITE NOTHING ──────────────────────
+      // Its own lifecycle case, placed ahead of A–D, because the old boolean
+      // `hasValidManifest` folded it into "no snapshot yet" and Case C then
+      // stored from the database over content a colleague had committed. There
+      // is no M to compare and no F to compute, so the database is the sole
+      // authority — and both ordinary remedies read the same unreadable file (a
+      // load because the manifest IS the index of what to load, `repairManifest`
+      // because it begins by parsing it).
+      //
+      // The workspace opens and stays writable so the user can take either
+      // recovery that works; saves are refused by the existing drift fence,
+      // which already reports `manifestUnreadable` and already names
+      // `allowSnapshotMismatch` as the one override that works. Nothing new is
+      // needed on the write side.
+      //
+      // `writeDefaultChecks` and `ensureNamespaceWiring` are both skipped: the
+      // first writes into `ria-data/`, and the second can trigger a
+      // universe-scoped store. Neither may touch the snapshot in this state.
+      if (classification.kind === 'unusable') {
+        const warning = describeUnusableManifest(classification.reason);
+        logger?.warn?.('Lifecycle: ria-data/manifest.json is unusable — opening without writing anything', {
+          workingDir: config.workingDir, dbExists, reason: classification.reason,
+        });
+
+        const openResult = await openDb(dbPath, config.workingDir);
+        if (!openResult.ok) return { ok: false, error: openResult.error };
+
+        setPendingSyncDecision(config.workingDir, {
+          reason: 'manifest_unusable',
+          domains: [{ kind: 'manifest', id: 'manifest.json', state: 'S5' }],
+        });
+        state = {
+          config, dbPath, dbStatus: openResult.dbStatus, isOpen: true,
+          lifecycleAction: 'opened_manifest_unusable', lifecycleWarning: warning,
+        };
+        commitStatus();
+        await ensureBuiltInMetamodelsRegistered();
+
+        return {
+          ok: true,
+          data: {
+            workingDir: config.workingDir,
+            dbPath,
+            dbStatus: openResult.dbStatus,
+            lifecycleAction: 'opened_manifest_unusable',
+            lifecycleWarning: warning,
+          },
+        };
+      }
+
+      // ── The schema version is out of range → OPEN NOTHING, WRITE NOTHING ────
+      // Ahead of A–D and ahead of any `openDb`, which is the whole point: the
+      // stale-DB branch of Case D deletes the database before rebuilding it from
+      // the snapshot, so a refusal taken any later would destroy the database AND
+      // refuse the load, leaving the user worse off than before they opened.
+      //
+      // Unlike the unusable-manifest case above, the database is NOT opened here.
+      // There is no useful degraded session to offer: the snapshot cannot be
+      // read, and a database belonging to a different generation cannot be
+      // interpreted either. Opening one would only invite writes against it.
+      //
+      // `writeDefaultChecks`, `ensureNamespaceWiring` and
+      // `ensureBuiltInMetamodelsRegistered` are all skipped — the first two write
+      // into `ria-data/`, and none of them may run against a snapshot this build
+      // does not understand.
+      if (classification.kind === 'incompatible') {
+        const warning = describeIncompatibleSchema(classification.compatibility);
+        logger?.error?.('Lifecycle: ria-data schema version is out of range — refusing to open', {
+          workingDir: config.workingDir,
+          dbExists,
+          declaredSchemaVersion: classification.compatibility.version,
+          expectedSchemaVersion: SCHEMA_VERSION,
+          minReadableSchemaVersion: MIN_READABLE_SCHEMA_VERSION,
+          reason: classification.compatibility.reason,
+        });
+
+        // Returned as a failure, not as an open-with-warning. Every
+        // `lifecycleAction` above describes a workspace that IS open; this one is
+        // not, and reporting it as open would let the renderer offer actions
+        // against a workspace with no database behind them.
+        return {
+          ok: false,
+          error: warning,
+        };
       }
 
       // ── Case A: no DB, no ria-data → CREATE ──────────────────────────────────
@@ -908,14 +1067,14 @@ export function createWorkspaceService(
         //     allowing the UI to show a progress indicator without waiting for
         //     the full load to complete.
         state = { config, dbPath, dbStatus: openResult.dbStatus, isOpen: true, lifecycleAction: 'loading_from_ria_data' };
-        // This transition owns a new epoch (Requirement 4.2). Bumping before the
+        // This transition owns a new epoch. Bumping before the
         // long load begins means any later lifecycle operation that bumps the
         // epoch again will supersede this load's completion closures.
         epoch += 1;
         // Commit the loading snapshot BEFORE the long background load begins so
-        // getStatus() returns 'loading_from_ria_data' promptly (Requirement 2.6).
+        // getStatus() returns 'loading_from_ria_data' promptly.
         commitStatus();
-        // Captured by the completion/failure closures (Requirement 4.1) so they
+        // Captured by the completion/failure closures so they
         // can detect at settle time whether they have been superseded.
         const loadEpoch = epoch;
 
@@ -926,10 +1085,21 @@ export function createWorkspaceService(
         const persistor = persistorFactory(config.workingDir);
         const load = persistor.load({
           workingDir: config.workingDir,
+          // A full plan, stated rather than inferred: the database was created
+          // empty moments ago, so there is nothing in it to preserve and every
+          // domain has to come from the files. Letting the load plan for itself
+          // would reach the same answer by a longer route (no origin rows, so
+          // every domain is S2) and would pay for an evaluation to get there.
+          plan: {
+            meta: true, sourcemaster: true, universe: true, crossNamespace: true,
+            namespaces: classification.kind === 'readable'
+              ? classification.manifest.namespaces.map((n) => n.name).filter((n) => !!n)
+              : [],
+          },
           onNamespaceProgress: onLoadProgress ?? undefined,
         }).then(async () => {
           if (epoch !== loadEpoch) {
-            // Superseded by a later lifecycle operation — no-op (Req 4.3, 7.3, 9.4).
+            // Superseded by a later lifecycle operation — no-op.
             logger?.info?.('Case B load completed but superseded (epoch mismatch) — skipping', { workingDir: config.workingDir });
             return;
           }
@@ -952,7 +1122,7 @@ export function createWorkspaceService(
             });
           }
           // Re-check after the await points above: a transition can commit while
-          // cleanup runs (Requirement 4.3 — "before or during").
+          // cleanup runs, before or during.
           if (epoch !== loadEpoch) return;
           await ensureBuiltInMetamodelsRegistered();
           if (epoch !== loadEpoch) return;
@@ -962,11 +1132,11 @@ export function createWorkspaceService(
         }).catch(async (err) => {
           if (epoch !== loadEpoch) {
             // Superseded failure — do NOT close the DB or delete files, since a
-            // later lifecycle operation now owns the handle (Req 4.3).
+            // later lifecycle operation now owns the handle.
             logger?.info?.('Case B load failed but superseded (epoch mismatch) — skipping cleanup', { workingDir: config.workingDir });
             return;
           }
-          // Requirement 3.3: clean up partially initialized DB on load failure.
+          // clean up partially initialized DB on load failure.
           // Keep the workspace "open" in load_failed state so the UI can surface
           // the error message and offer recovery actions (e.g. repair manifest).
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -988,11 +1158,11 @@ export function createWorkspaceService(
           commitStatus();
         }).finally(() => {
           // Clear the tracked load on settle, but only if it is still this load
-          // (a later lifecycle op may have already replaced it) — Requirement 3.5.
+          // (a later lifecycle op may have already replaced it).
           if (currentLoad === load) currentLoad = null;
         });
 
-        // Track the in-flight load so close()/open() can bound-await it (Req 3.1).
+        // Track the in-flight load so close()/open() can bound-await it.
         currentLoad = load;
 
         return {
@@ -1034,7 +1204,7 @@ export function createWorkspaceService(
 
         const openResult = await openDb(dbPath, config.workingDir);
 
-        // ── Staleness branch (Requirement 1.1, 1.4, 3.1, 3.2) ──────────────
+        // ── Staleness branch ──────────────
         // Handle stale DB regardless of whether openDb succeeded or failed.
         // For Case C there is no ria-data snapshot, so we can never rebuild —
         // apply the no-snapshot safety guard directly.
@@ -1046,8 +1216,8 @@ export function createWorkspaceService(
             detectedSchemaVersion: detectedVersion,
             expectedSchemaVersion: SCHEMA_VERSION,
           });
-          // Requirement 3.1: do NOT delete the Db_Directory.
-          // Requirement 3.2: set lifecycleAction = 'load_failed', record warning.
+          // do NOT delete the Db_Directory.
+          // set lifecycleAction = 'load_failed', record warning.
           const warning = `Stale database detected (schema version: ${detectedVersion}, expected: ${SCHEMA_VERSION}). No ria-data snapshot is available to rebuild from. The database has not been modified.`;
           state = { config, dbPath, dbStatus: openResult.dbStatus, isOpen: true, lifecycleAction: 'load_failed', lifecycleWarning: warning };
           commitStatus();
@@ -1084,7 +1254,7 @@ export function createWorkspaceService(
             },
           };
         } catch (err) {
-          // Requirement 5.3: non-fatal — return opened_db_only with warning
+          // non-fatal — return opened_db_only with warning
           const warning = err instanceof Error ? err.message : String(err);
           logger?.warn?.('Case C: store failed, returning opened_db_only', { workingDir: config.workingDir, error: warning });
 
@@ -1155,7 +1325,7 @@ export function createWorkspaceService(
 
       const openResult = await openDb(dbPath, config.workingDir);
 
-      // ── Staleness branch (Requirement 1.1, 1.4, 2.1, 4.1) ──────────────────
+      // ── Staleness branch ──────────────────
       // If the DB is stale (schema mismatch or error), and ria-data is valid,
       // perform a Fresh_Load to rebuild from the snapshot.
       if (!openResult.ok || isStaleDb(openResult.dbStatus)) {
@@ -1169,9 +1339,9 @@ export function createWorkspaceService(
         // Set state so getStatus() returns meaningful info during the rebuild.
         state = { config, dbPath, dbStatus: openResult.dbStatus, isOpen: true, lifecycleAction: 'loading_from_ria_data' };
         // Commit the loading snapshot BEFORE the long Fresh_Load begins so
-        // getStatus() returns 'loading_from_ria_data' promptly (Requirement 2.6).
+        // getStatus() returns 'loading_from_ria_data' promptly.
         commitStatus();
-        // Requirement 2.1, 4.1: perform Fresh_Load (close → delete → open empty → load).
+        // perform Fresh_Load (close → delete → open empty → load).
         await performFreshLoad(config, dbPath);
         // performFreshLoad updates state.lifecycleAction and state.lifecycleWarning.
         // Refresh dbStatus from the module after the fresh open.
@@ -1207,48 +1377,38 @@ export function createWorkspaceService(
       // Ensure checks.json exists for workspaces that predate the checks feature
       await writeDefaultChecks(config.workingDir, logger);
 
-      let consistencyResult: ConsistencyResult;
-      try {
-        consistencyResult = await checkConsistency(config.workingDir, dbModule, logger);
-      } catch (err) {
-        logger?.warn?.('Case D: consistency check threw, treating as db_stale', { error: err instanceof Error ? err.message : String(err) });
-        consistencyResult = { status: 'db_stale' };
+      // One rule, applied per domain. `runSyncEvaluation` degrades a throw to a
+      // full load, because a diagnostic must never block an open.
+      //
+      // Case D is reached only when `riaDataValid` is true, so the classification
+      // is `readable`; the assertion is for the type system, which cannot carry
+      // that fact across the Case A / B / C returns above.
+      if (classification.kind !== 'readable') {
+        throw new Error('internal: Case D reached without a readable ria-data classification');
       }
+      const evaluation = await runSyncEvaluation(config.workingDir, classification);
+      const decision = pendingDecisionFrom(evaluation);
+      setPendingSyncDecision(config.workingDir, decision);
 
-      // DIAGNOSTIC (temporary): identify which Case D branch fires on reopen —
-      // correlates against persistor.store timestamps to investigate the
-      // intermittent missing-tile/missing-connection bug. Remove once root-caused.
-      logger?.info?.('[DIAG] Case D consistency check result', {
+      logger?.info?.('Case D sync evaluation', {
         workingDir: config.workingDir,
-        status: consistencyResult.status,
+        outcome: evaluation.outcome.kind,
+        domains: evaluation.entries.length,
+        epochSuspended: evaluation.epochSuspended,
+        shortCircuited: evaluation.shortCircuited,
       });
 
-      if (consistencyResult.status === 'consistent') {
-        logger?.info?.('Workspace consistent (Case D)', { workingDir: config.workingDir });
-        await ensureNamespaceWiring();
-        await ensureBuiltInMetamodelsRegistered();
-        return {
-          ok: true,
-          data: {
-            workingDir: config.workingDir,
-            dbPath,
-            dbStatus: openResult.dbStatus,
-            lifecycleAction: 'opened_consistent',
-          },
-        };
-      }
-
-      if (consistencyResult.status === 'files_corrupted') {
-        // On-disk JSON files have been modified/corrupted — the DB is authoritative.
-        // Do NOT reload from corrupted files. Open with the DB data and warn the user.
-        const warning = `ria-data file integrity check failed for namespace(s): ${consistencyResult.corruptedNamespaces.join(', ')}. ` +
-          `The on-disk JSON files have been changed (e.g. manually edited) without updating the hash in manifest.json. ` +
-          `The database is authoritative and your data is safe. ` +
-          `Use "Repair Manifest" to accept the file changes and update the manifest hashes, ` +
-          `or use "Save" (persistor store) to overwrite the files from the database.`;
-        logger?.warn?.('Case D: files corrupted, DB is authoritative', {
+      if (decision) {
+        // S3 or S5 somewhere — or an unusable manifest, handled earlier. Neither
+        // an automatic load nor an automatic store may run: either direction
+        // would write over something nobody has agreed to lose. The workspace
+        // stays writable and `assertNoSnapshotDrift` refuses the save until the
+        // user chooses, which is what stops the auto-save coordinator resolving
+        // it in the files' disfavour ~150 ms after the next keystroke.
+        const warning = describePendingDecision(decision);
+        logger?.warn?.('Case D: ria-data needs a decision, DB is authoritative', {
           workingDir: config.workingDir,
-          corruptedNamespaces: consistencyResult.corruptedNamespaces,
+          domains: decision.domains.map((d) => `${d.kind}:${d.id}:${d.state}`),
         });
 
         state.lifecycleAction = 'opened_db_only';
@@ -1269,31 +1429,54 @@ export function createWorkspaceService(
         };
       }
 
-      // Hashes differ — reload from ria-data
-      logger?.info?.('Case D: hashes differ, reloading from ria-data', { workingDir: config.workingDir });
+      if (evaluation.outcome.kind === 'repair_manifest') {
+        // S4: the files and the database agree with each other and the manifest
+        // is the stale one. Rewrite its entries, move no data, and report it —
+        // the domains converge to S1 with nothing having crossed.
+        await repairStaleManifestEntries(config.workingDir, evaluation.outcome.keys);
+      }
+
+      if (evaluation.outcome.kind !== 'load') {
+        logger?.info?.('Workspace consistent (Case D)', { workingDir: config.workingDir });
+        await ensureNamespaceWiring();
+        await ensureBuiltInMetamodelsRegistered();
+        return {
+          ok: true,
+          data: {
+            workingDir: config.workingDir,
+            dbPath,
+            dbStatus: openResult.dbStatus,
+            lifecycleAction: 'opened_consistent',
+          },
+        };
+      }
+
+      // Some domain is S2 — reload, scoped to the domains the plan names.
+      logger?.info?.('Case D: domains are stale, reloading from ria-data', {
+        workingDir: config.workingDir,
+        plan: {
+          sourcemaster: evaluation.outcome.plan.sourcemaster,
+          universe: evaluation.outcome.plan.universe,
+          crossNamespace: evaluation.outcome.plan.crossNamespace,
+          namespaces: evaluation.outcome.plan.namespaces,
+        },
+      });
       const persistor = persistorFactory(config.workingDir);
       try {
+        repairStaleManifestBeforeLoad(config.workingDir, evaluation, logger);
         await persistor.load({
           workingDir: config.workingDir,
+          plan: evaluation.outcome.plan,
           onNamespaceProgress: onLoadProgress ?? undefined,
         });
       } catch (err) {
-        // Mirror Case B: keep the workspace "open" in load_failed state so the
-        // UI can surface the error and offer recovery actions (Repair Manifest).
-        // Clean up the partially-initialized DB so a subsequent open after a
-        // successful repair re-runs the load path from scratch.
+        // This is an existing database, not Case B's newly-created rebuild.
+        // A preflight error may have changed nothing at all; even a later load
+        // failure must not delete the unsaved content of unrelated layers.
+        // Close the handle, preserve the DB and WAL, and surface load_failed.
         const errMsg = err instanceof Error ? err.message : String(err);
-        logger?.error?.('Case D: reload failed, cleaning up DB', { workingDir: config.workingDir, error: errMsg });
+        logger?.error?.('Case D: reload failed, preserving existing DB', { workingDir: config.workingDir, error: errMsg });
         await dbModule.close();
-        try {
-          await fs.promises.rm(dbPath, { recursive: true, force: true });
-          const walPath = `${dbPath}.wal`;
-          if (fs.existsSync(walPath)) {
-            await fs.promises.rm(walPath, { force: true });
-          }
-        } catch (cleanupErr) {
-          logger?.warn?.('Case D: failed to clean up DB after reload failure', { error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
-        }
         // Transition to load_failed — workspace stays "open" so getStatus() can
         // return the error to the renderer and the Repair Manifest UI shows up.
         state.lifecycleAction = 'load_failed';
@@ -1352,7 +1535,12 @@ export function createWorkspaceService(
 
       // Step 3: Check for existing workspace data
       const dbExists = fs.existsSync(dbPath);
-      const riaDataValid = await hasValidManifest(riaDataDir);
+      // Anything other than `absent_empty` counts as existing data here —
+      // including an unusable manifest. `create` must not be the way a user
+      // discovers that their snapshot is unreadable, and it certainly must not
+      // overwrite one.
+      const classification = await classifyRiaData(config.workingDir);
+      const riaDataValid = classification.kind !== 'absent_empty';
 
       if (dbExists || riaDataValid) {
         logger?.warn?.('Workspace create rejected: directory already contains workspace data', { workingDir: config.workingDir, dbExists, riaDataValid });
@@ -1397,10 +1585,10 @@ export function createWorkspaceService(
       // baseline from a previous session must never be compared against a
       // freshly opened workspace.
       if (state.config?.workingDir) clearBaseline(state.config.workingDir);
-      // Supersede any in-flight Case B load (Req 4.2): bumping the epoch first
-      // neutralises that load's completion closures (Req 7.3), then bound-await
-      // it so the DB is not closed out from under an active load (Req 3.2). The
-      // await never rejects and force-closes on timeout (Req 3.4); correctness
+      // Supersede any in-flight Case B load: bumping the epoch first
+      // neutralises that load's completion closures, then bound-await
+      // it so the DB is not closed out from under an active load. The
+      // await never rejects and force-closes on timeout; correctness
       // on timeout rests on the epoch + Db_Module generation guards.
       epoch += 1;
       const inflight = currentLoad;
@@ -1409,7 +1597,7 @@ export function createWorkspaceService(
       }
       await dbModule.close();
       // resetState() commits a closed snapshot, so the workspace ends closed
-      // even if the superseded load later settles (Req 7.1).
+      // even if the superseded load later settles.
       resetState();
       logger?.info?.('Workspace close completed');
   }
@@ -1464,7 +1652,7 @@ export function createWorkspaceService(
      */
     _testOnly_performFreshLoad: performFreshLoad,
 
-    // Async, lock-free status read (Requirements 2.1, 2.2, 2.6). Reads the
+    // Async, lock-free status read. Reads the
     // serialized `statusSnapshot` WITHOUT taking the lifecycle mutex, then
     // applies the live `dbModule.getStatus()` + `fs.existsSync` overlay only
     // when the snapshot is open.

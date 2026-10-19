@@ -43,6 +43,8 @@ export interface PersistorStoreParams {
 
 export interface PersistorLoadParams {
   workingDir: string;
+  /** Explicitly adopt edited files: validate them and repair stale manifest hashes before a full load. */
+  acceptFileChanges?: boolean;
 }
 
 export interface PersistorRepairParams {

@@ -79,7 +79,7 @@ import { DeleteWithPreview } from './DeleteWithPreview';
 import { TagChip } from './TagChip';
 import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
-import type { SelectedTreeElement } from '../types';
+import type { SelectedTreeElement, ScopedTreeNavigator } from '../types';
 import { useTagsForImportedElement, useTags } from '../../../../../hooks/useTags';
 import { ReviewInstructionsModal } from './ReviewInstructionsModal';
 import { useTagMutations } from '../../../../../hooks/useTagMutations';
@@ -108,6 +108,8 @@ import {
   type TabDefinition,
 } from '../config/elementTabs';
 import { PropertyRow } from './PropertyRow';
+import { ElementRelationships } from './ElementRelationships';
+import { SectionHeader } from './SectionHeader';
 import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 
@@ -151,7 +153,11 @@ function CopyableValue({ value, mono }: { value: string; mono?: boolean }) {
 interface CenterPanelProps {
   namespace: string;
   selectedTreeElement: SelectedTreeElement | null;
+  /** Relationship-row navigation restricted to the current tree's scope. */
+  onShowRelationshipInTree?: ScopedTreeNavigator;
   onRenameSelectedTreeElement?: (name: string) => void;
+  /** Clear a deleted selection before its Details queries are refreshed. */
+  onElementDeleted?: (nodeId: number) => void;
   addNoteRequested?: boolean;
   onAddNoteHandled?: () => void;
   onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
@@ -186,6 +192,8 @@ interface CenterPanelProps {
    * remain visible. Defaults to true.
    */
   allowAddTag?: boolean;
+  /** Imported browsing has no authored analysis to own or edit safety notes. */
+  allowEditNotes?: boolean;
 }
 
 // SOTIF profile tab list: adds Functional Insufficiencies + Triggering
@@ -310,46 +318,12 @@ function SavedBadge({ visible }: { visible: boolean }) {
   );
 }
 
-/** Section header row — title left, count badge + optional action right. */
-function SectionHeader({
-  title,
-  count,
-  action,
-}: {
-  title: string;
-  count: number;
-  action?: React.ReactNode;
-}) {
-  const { token } = theme.useToken();
-  return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 12,
-        paddingBottom: 10,
-        borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        marginBottom: 12,
-      }}
-    >
-      <Space size={8} align="center">
-        <Typography.Text strong style={{ fontSize: 13 }}>{title}</Typography.Text>
-        <Tag style={{ fontSize: 11, lineHeight: '18px' }}>
-          {count === 0 ? 'None' : `${count}`}
-        </Tag>
-      </Space>
-      {action}
-    </div>
-  );
-}
-
 /**
  * Inline notes section — styled like the Concept G design.
  * Shows a section label row (SAFETY NOTES · count · + Add note) followed by
  * note cards with a left blue border, content text, and an author/time footer.
  */
-function InlineNotesSection({
+export function InlineNotesSection({
   notes,
   loading,
   onAddNote,
@@ -357,6 +331,7 @@ function InlineNotesSection({
   onDeleteNote,
   openAddForm,
   onAddFormOpened,
+  editable = true,
 }: {
   notes: ConceptInstanceData[];
   loading: boolean;
@@ -365,6 +340,7 @@ function InlineNotesSection({
   onDeleteNote: (nodeId: number) => Promise<void>;
   openAddForm?: boolean;
   onAddFormOpened?: () => void;
+  editable?: boolean;
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
@@ -373,14 +349,14 @@ function InlineNotesSection({
 
   useEffect(() => {
     if (openAddForm) {
-      setAddingNote(true);
+      setAddingNote(editable);
       onAddFormOpened?.();
     }
-  }, [openAddForm, onAddFormOpened]);
+  }, [openAddForm, onAddFormOpened, editable]);
   const [submitting, setSubmitting] = useState(false);
 
   const handleCreate = async () => {
-    if (!newNoteText.trim()) return;
+    if (!editable || !newNoteText.trim()) return;
     setSubmitting(true);
     try {
       await onAddNote(newNoteText.trim());
@@ -432,7 +408,7 @@ function InlineNotesSection({
           </span>
         )}
         <div style={{ flex: 1, height: 1, background: token.colorBorderSecondary }} />
-        {!addingNote && (
+        {editable && !addingNote && (
           <Button
             type="text"
             size="small"
@@ -446,7 +422,12 @@ function InlineNotesSection({
       </div>
 
       {/* Add note input */}
-      {addingNote && (
+      {!editable && (
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          Open a connected analysis namespace to add or edit notes for this element.
+        </Typography.Paragraph>
+      )}
+      {editable && addingNote && (
         <div
           style={{
             marginBottom: 10,
@@ -493,6 +474,7 @@ function InlineNotesSection({
               note={note}
               onUpdate={onUpdateNote}
               onDelete={onDeleteNote}
+              editable={editable}
             />
           ))}
         </div>
@@ -505,10 +487,12 @@ function InlineNoteCard({
   note,
   onUpdate,
   onDelete,
+  editable = true,
 }: {
   note: ConceptInstanceData;
   onUpdate: (nodeId: number, text: string) => Promise<void>;
   onDelete: (nodeId: number) => Promise<void>;
+  editable?: boolean;
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
@@ -527,7 +511,7 @@ function InlineNoteCard({
   const createdAt = String(note.attributes?.created_at ?? note.attributes?.modified_at ?? '');
 
   const handleSave = async () => {
-    if (!text.trim()) return;
+    if (!editable || !text.trim()) return;
     setSaving(true);
     try {
       await onUpdate(note.node_id, text.trim());
@@ -540,6 +524,7 @@ function InlineNoteCard({
   };
 
   const handleDelete = async () => {
+    if (!editable) return;
     setDeleting(true);
     try {
       await onDelete(note.node_id);
@@ -559,7 +544,7 @@ function InlineNoteCard({
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
-      {editing ? (
+      {editable && editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Input.TextArea
             autoFocus
@@ -579,8 +564,8 @@ function InlineNoteCard({
         </div>
       ) : (
         <div
-          style={{ cursor: 'text' }}
-          onClick={() => setEditing(true)}
+          style={{ cursor: editable ? 'text' : 'default' }}
+          onClick={editable ? () => setEditing(true) : undefined}
         >
           <Typography.Text
             style={{
@@ -591,13 +576,13 @@ function InlineNoteCard({
               wordBreak: 'break-word',
             }}
           >
-            {noteText || <span style={{ color: token.colorTextQuaternary }}>Empty note — click to edit</span>}
+            {noteText || <span style={{ color: token.colorTextQuaternary }}>{editable ? 'Empty note — click to edit' : 'Empty note'}</span>}
           </Typography.Text>
         </div>
       )}
 
       {/* Footer: author · time · delete */}
-      {!editing && (
+      {(!editing || !editable) && (
         <div
           style={{
             display: 'flex',
@@ -635,7 +620,7 @@ function InlineNoteCard({
             </Typography.Text>
           )}
           <div style={{ flex: 1 }} />
-          <Button
+          {editable && <Button
             type="text"
             size="small"
             danger
@@ -643,14 +628,14 @@ function InlineNoteCard({
             loading={deleting}
             onClick={handleDelete}
             style={{ padding: '0 4px', height: 18, minWidth: 18, opacity: 0.6 }}
-          />
+          />}
         </div>
       )}
     </div>
   );
 }
 
-export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTreeElement, addNoteRequested, onAddNoteHandled, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, onTreeMutation, workspaceKey, triggerAutoSave, onStartPropagation, onEndPropagation, allowCreateTag = true, allowAddTag = true }: CenterPanelProps) {
+export function CenterPanel({ namespace, selectedTreeElement, onShowRelationshipInTree, onRenameSelectedTreeElement, onElementDeleted, addNoteRequested, onAddNoteHandled, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, onTreeMutation, workspaceKey, triggerAutoSave, onStartPropagation, onEndPropagation, allowCreateTag = true, allowAddTag = true, allowEditNotes = true }: CenterPanelProps) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -801,7 +786,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
 
   // State for note delete (triggered from ElementHeader kebab menu)
   const [pendingDeleteNoteNodeId, setPendingDeleteNoteNodeId] = useState<number | null>(null);
-  const deleteNoteFromHeader = useDeleteSafetyNote(namespace, workspaceKey ?? null, triggerAutoSave);
+  const deleteNoteFromHeader = useDeleteSafetyNote(namespace, workspaceKey ?? null, triggerAutoSave, onElementDeleted);
   const reviewParentMalfunctionQuery = useMalfunctionForReviewItem(isReviewItem ? selectedTreeElement?.nodeId : undefined);
   const referenceMalfunctionNodeId = isMalfunction
     ? selectedTreeElement?.nodeId
@@ -943,7 +928,8 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
       elementNamespace: selectedTreeElement.namespace,
       noteText: text,
     });
-  }, [selectedTreeElement, createNoteForElement]);
+    onTreeMutation?.(selectedTreeElement);
+  }, [selectedTreeElement, createNoteForElement, onTreeMutation]);
 
   const handleElementUpdateNote = useCallback(async (nodeId: number, text: string) => {
     await updateNoteForElement.mutateAsync({ nodeId, updates: { note_text: text } });
@@ -1141,6 +1127,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             onNavigateToNode={onNavigateToNode}
             onNavigateToReference={onNavigateToReference}
             onShowDetails={handleShowDetails}
+            onShowInTree={onShowRelationshipInTree}
           />
         ) : isDiagramConcept && lensValue === 'propagation' ? (
           <ScopedPropagationDiagram
@@ -1198,6 +1185,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             onNavigateToReference={onNavigateToReference}
             workspaceKey={workspaceKey}
             onAddNote={handleFmAddNote}
+            allowEditNotes={allowEditNotes}
             onUpdateNote={handleFmUpdateNote}
             onDeleteNote={handleFmDeleteNote}
             triggerAutoSave={triggerAutoSave}
@@ -1206,6 +1194,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
         ) : (
           <ElementTabContent
             activeTab={elementActiveTab}
+            onShowRelationshipInTree={onShowRelationshipInTree}
             namespace={namespace}
             selectedTreeElement={selectedTreeElement}
             instanceQuery={instanceQuery}
@@ -1214,6 +1203,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onRenameSelectedTr
             onAddNoteHandled={onAddNoteHandled}
             workspaceKey={workspaceKey}
             onAddNote={handleElementAddNote}
+            allowEditNotes={allowEditNotes}
             onUpdateNote={handleElementUpdateNote}
             onDeleteNote={handleElementDeleteNote}
             triggerAutoSave={triggerAutoSave}
@@ -1297,6 +1287,7 @@ function MalfunctionTabContent({
   onNavigateToReference,
   workspaceKey,
   onAddNote,
+  allowEditNotes,
   onUpdateNote,
   onDeleteNote,
   triggerAutoSave,
@@ -1325,6 +1316,7 @@ function MalfunctionTabContent({
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
   workspaceKey?: string | null;
   onAddNote: (text: string) => Promise<void>;
+  allowEditNotes: boolean;
   onUpdateNote: (nodeId: number, text: string) => Promise<void>;
   onDeleteNote: (nodeId: number) => Promise<void>;
   triggerAutoSave?: () => void;
@@ -1398,6 +1390,7 @@ function MalfunctionTabContent({
             notes={notesQuery.data ?? []}
             loading={notesQuery.isLoading}
             onAddNote={onAddNote}
+            editable={allowEditNotes}
             onUpdateNote={onUpdateNote}
             onDeleteNote={onDeleteNote}
           />
@@ -1484,6 +1477,7 @@ function MalfunctionTabContent({
 /** Renders the active tab content for a non-malfunction element (or diagram concept in Details lens). */
 function ElementTabContent({
   activeTab,
+  onShowRelationshipInTree,
   namespace,
   selectedTreeElement,
   instanceQuery,
@@ -1492,11 +1486,13 @@ function ElementTabContent({
   onAddNoteHandled,
   workspaceKey,
   onAddNote,
+  allowEditNotes,
   onUpdateNote,
   onDeleteNote,
   triggerAutoSave,
 }: {
   activeTab: string;
+  onShowRelationshipInTree?: ScopedTreeNavigator;
   namespace: string;
   selectedTreeElement: SelectedTreeElement;
   instanceQuery: ReturnType<typeof useInstance>;
@@ -1505,6 +1501,7 @@ function ElementTabContent({
   onAddNoteHandled?: () => void;
   workspaceKey?: string | null;
   onAddNote: (text: string) => Promise<void>;
+  allowEditNotes: boolean;
   onUpdateNote: (nodeId: number, text: string) => Promise<void>;
   onDeleteNote: (nodeId: number) => Promise<void>;
   triggerAutoSave?: () => void;
@@ -1527,6 +1524,12 @@ function ElementTabContent({
     case 'details':
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <ElementRelationships
+            key={`${selectedTreeElement.namespace}:${selectedTreeElement.nodeId}`}
+            nodeId={selectedTreeElement.nodeId}
+            workspaceKey={workspaceKey ?? null}
+            onShowInTree={onShowRelationshipInTree}
+          />
           {(contentText || detailItems.length > 0) ? (
             <div style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16 }}>
               <SectionHeader title="Element Details" count={(contentText ? 1 : 0) + detailItems.length} />
@@ -1602,6 +1605,7 @@ function ElementTabContent({
               notes={notesQuery.data ?? []}
               loading={notesQuery.isLoading}
               onAddNote={onAddNote}
+              editable={allowEditNotes}
               onUpdateNote={onUpdateNote}
               onDeleteNote={onDeleteNote}
               openAddForm={addNoteRequested}

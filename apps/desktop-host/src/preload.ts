@@ -132,6 +132,7 @@ contextBridge.exposeInMainWorld('riacore', {
     createAuthored: (params: CreateAuthoredNamespaceParams) => ipcRenderer.invoke('namespaces.createAuthored', params),
     getChildren: (params: { namespace: string; parentNodeId?: number; offset?: number; limit?: number; showAll?: boolean; scopeNamespace?: string }) => ipcRenderer.invoke('namespaces.getChildren', params),
     getAncestorPath: (params: { namespace: string; nodeId: number }) => ipcRenderer.invoke('namespaces.getAncestorPath', params),
+    getNodeLocation: (params: { namespace: string; nodeId: number; showAll?: boolean }) => ipcRenderer.invoke('namespaces.getNodeLocation', params),
     search: (params: { query: string; offset?: number; limit?: number }) => ipcRenderer.invoke('namespaces.search', params),
     previewDeleteImpact: (namespace: string) => ipcRenderer.invoke('namespaces.previewDeleteImpact', { namespace }),
     delete: (namespace: string) => ipcRenderer.invoke('namespaces.delete', { namespace }),
@@ -213,6 +214,7 @@ contextBridge.exposeInMainWorld('riacore', {
     createNoteForElement: (params: { elementNodeId: number; namespace: string; noteText: string }) => ipcRenderer.invoke('safety.createNoteForElement', params),
     previewDeleteImpact: (params: { nodeId: number }) => ipcRenderer.invoke('safety.previewDeleteImpact', params),
     getInstance: (params: { nodeId: number }) => ipcRenderer.invoke('safety.getInstance', params),
+    getRelationships: (params: { nodeId: number }) => ipcRenderer.invoke('safety.getRelationships', params),
     createTag: (params: CreateTagParams) => ipcRenderer.invoke('safety.createTag', params),
     getTag: (params: { nodeId: number }) => ipcRenderer.invoke('safety.getTag', params),
     getAllTags: (params: { namespace: string }) => ipcRenderer.invoke('safety.getAllTags', params),
@@ -230,6 +232,7 @@ contextBridge.exposeInMainWorld('riacore', {
     getDirectRequirementsForFm: (params: { failureModeNodeId: number }) => ipcRenderer.invoke('safety.getDirectRequirementsForFm', params),
     searchRequirementsAcrossNamespaces: (params: { query: string }) => ipcRenderer.invoke('safety.searchRequirementsAcrossNamespaces', params),
     exportSphinxNeeds: (params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }) => ipcRenderer.invoke('safety.exportSphinxNeeds', params),
+    exportOkf: (params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }) => ipcRenderer.invoke('safety.exportOkf', params),
     exportXlsx: (params: { namespace: string; outputPath: string }) => ipcRenderer.invoke('safety.exportXlsx', params),
     getSafetyData: (params: { namespace: string }) =>
       ipcRenderer.invoke('safety.getSafetyData', params),

@@ -31,6 +31,24 @@ export interface ConceptInstanceData {
   attributes: Record<string, unknown>;
 }
 
+/** A stored relationship connected to an element, relative to that element. */
+export interface RelationshipData {
+  edge_id: number;
+  relationship: string;
+  metamodel: string;
+  direction: 'outgoing' | 'incoming';
+  type: 'intra' | 'cross';
+  connectedNode: {
+    node_id: number;
+    namespace: string;
+    concept: string;
+    name: string;
+    identifier?: string;
+    /** Used to match the tree's malfunction icon color. */
+    asil?: string;
+  };
+}
+
 export interface MalfunctionData extends ConceptInstanceData {
   riskRating?: ConceptInstanceData | null;
   occursAtTarget?: { node_id: number; namespace: string; concept: string; name?: string } | null;
@@ -96,6 +114,42 @@ export interface GetChildrenResponse {
   totalCount: number;
   offset: number;
   hasMore: boolean;
+}
+
+/**
+ * One level of a node's location in the tree: where a node sits inside its
+ * parent's ordered, visible children.
+ */
+export interface TreeNodeLocationLevel {
+  /** The parent whose children contain `nodeId`; `undefined` for namespace roots. */
+  parentNodeId?: number;
+  /** The ancestor at this level, or — on the last level — the located node itself. */
+  nodeId: number;
+  /**
+   * Zero-based index of `nodeId` within its parent's ordered, visible children.
+   * This is the same ordering and visibility filter `namespaces.getChildren`
+   * pages over, so a client can load pages `0..floor(childIndex / pageSize)` to
+   * materialize the element instead of walking pages until it appears.
+   */
+  childIndex: number;
+  /** Visible children under `parentNodeId`, matching `GetChildrenResponse.totalCount`. */
+  totalCount: number;
+}
+
+/** Root-to-node location in the paginated tree, used to reveal an element. */
+export interface TreeNodeLocation {
+  namespace: string;
+  nodeId: number;
+  /** Ordered root → node. Truncated at the first level that could not be resolved. */
+  levels: TreeNodeLocationLevel[];
+  /**
+   * True when every level resolved, the located node included. False means the
+   * node is not reachable through containment under the requested visibility —
+   * an orphan, a concept hidden by the display settings, or a cross-namespace
+   * authored element that appears as a reference child rather than a
+   * containment child. Callers must then fall back to their own resolution.
+   */
+  resolved: boolean;
 }
 
 export interface DeleteImpactPreview {

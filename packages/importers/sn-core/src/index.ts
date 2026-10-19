@@ -63,7 +63,11 @@ export function buildDynamicSchemaForConfig(
 ): ReturnType<typeof buildSchemaFromModel> {
   const needsFilePath = resolveNeedsFile(config, projectDir, workspaceRoot);
   const model = parseNeedsFile(needsFilePath, config.version);
-  return buildSchemaFromModel(model, config.namespace);
+  // workspaceRoot is forwarded so the generated schema description names the
+  // needs file relative to the workspace. The description is persisted into
+  // ria-data/meta/ and hashed there, so an absolute path would make the export
+  // non-portable and meta_hash machine-dependent.
+  return buildSchemaFromModel(model, config.namespace, workspaceRoot);
 }
 
 export { computeDynamicMetamodelName };

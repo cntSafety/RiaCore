@@ -29,3 +29,9 @@ export interface SelectedTreeElement {
   hostNamespace?: string;
 }
 
+export type ScopedTreeNavigationResult =
+  | { status: 'selected' }
+  | { status: 'out-of-scope' | 'not-visible' | 'unavailable'; message: string };
+
+export type ScopedTreeNavigator = (target: SelectedTreeElement) => Promise<ScopedTreeNavigationResult>;
+

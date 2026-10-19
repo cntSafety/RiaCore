@@ -17,14 +17,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { WorkspaceConfig, WorkspaceInfo, WorkspaceStatus, SnapshotDriftInfo } from './workspace.js';
+import { WorkspaceConfig, WorkspaceInfo, WorkspaceStatus, SnapshotDriftInfo, SyncReport } from './workspace.js';
 import { DbStatus } from './db.js';
 import { RunImportParams, ImportRunSummary, ImportRunStatus, ImportSourceInfo, ImportConfigView, SaveImportConfigParams, RunFromSourceParams, ExportConfigParams, ImportConfigParams, ArxmlTreeData, ImpactReport, OrphanedEntry, OrphanedEntryWithContext, ListOrphanedEntriesParams, UpdateFromImportedBranchResult } from './import-types.js';
 import { PersistorStoreParams, PersistorLoadParams, PersistorRepairParams, StoreResult, LoadResult, RepairManifestResult, DbStats, NamespaceStats } from './persistor-types.js';
 import { ProvisionConfigParams, ImporterInfo } from './provisioning-types.js';
 import { ProfileInfo, CreateAuthoredNamespaceParams, CreatedNamespaceInfo, NamespaceInfo, NamespaceDeleteImpactPreview } from './profile-types.js';
 import { GraphQueryResult } from './graph-types.js';
-import { ConceptInstanceData, MalfunctionData, PropagationMalfunctionData, CreateMalfunctionParams, CreateRiskRatingParams, ReviewItemData, TreeChildNode, GetChildrenResponse, DeleteImpactPreview, SearchResultNode, SearchResult, CreateTagParams, ScopedPropagationResult } from './safety-types.js';
+import { ConceptInstanceData, RelationshipData, MalfunctionData, PropagationMalfunctionData, CreateMalfunctionParams, CreateRiskRatingParams, ReviewItemData, TreeChildNode, GetChildrenResponse, TreeNodeLocation, DeleteImpactPreview, SearchResultNode, SearchResult, CreateTagParams, ScopedPropagationResult } from './safety-types.js';
 import { ApplicableCheck, CheckRunSummary, CheckPageResult, NamespaceCheckSummary } from './check-types.js';
 import { GetPortConnectorsInput, GetNamespacePortConnectorsInput, GetComponentPortConnectorsInput, PortConnectorResult, NamespacePortConnectorsResult, ComponentPortConnectorsResult } from './arxml-types.js';
 import type { ShowInTreePayload } from './show-in-tree.js';
@@ -127,6 +127,20 @@ export interface IpcChannelMap {
    * See docs/coreSpecs/RiaDataChangeDetection.md §4.3.
    */
   'workspace.getSnapshotDrift': { input: void; output: SnapshotDriftInfo };
+  /**
+   * The per-domain sync evaluation: M, F and D for every domain, the state each
+   * classifies to, and the action they resolve to.
+   *
+   * **Recomputes** rather than returning the evaluation the last open cached, so
+   * the command is a diagnostic that reflects the filesystem now. That is also
+   * why it is separate from `workspace.getSnapshotDrift`, which answers a
+   * different question (did the files move during this session?) and is polled
+   * every five seconds — this one hashes every file in `ria-data/` and must not
+   * be on a poll.
+   *
+   * Declares no mutation: it reads files and the origin table and writes nothing.
+   */
+  'workspace.getSyncReport': { input: void; output: SyncReport };
   'db.getStatus': { input: void; output: DbStatus };
   'db.getStats': { input: void; output: DbStats };
   'db.getNamespaceStats': { input: void; output: NamespaceStats[] };
@@ -281,6 +295,7 @@ export interface IpcChannelMap {
   'safety.createNoteForElement': { input: { elementNodeId: number; namespace: string; noteText: string }; output: { node_id: number } };
   'safety.previewDeleteImpact': { input: { nodeId: number }; output: DeleteImpactPreview };
   'safety.getInstance': { input: { nodeId: number }; output: ConceptInstanceData };
+  'safety.getRelationships': { input: { nodeId: number }; output: RelationshipData[] };
   'safety.getInstanceByUuid': { input: { uuid: string }; output: ConceptInstanceData };
 
   // --- User-defined checks ---
@@ -346,12 +361,20 @@ export interface IpcChannelMap {
    * existing callers keep the historical output.
    */
   'safety.exportSphinxNeeds': { input: { namespace: string; outputDir: string; includeRiskRatings?: boolean }; output: { exportedFiles: string[]; outputDir: string } };
+  'safety.exportOkf': { input: { namespace: string; outputDir: string; includeRiskRatings?: boolean }; output: { exportedFiles: string[]; outputDir: string } };
   'safety.exportXlsx': { input: { namespace: string; outputPath: string }; output: { outputPath: string } };
   'safety.getSafetyData': { input: { namespace: string }; output: SafetyExportData };
 
   // --- Tree channel ---
   'namespaces.getChildren': { input: { namespace: string; parentNodeId?: number; offset?: number; limit?: number; showAll?: boolean; scopeNamespace?: string }; output: GetChildrenResponse };
   'namespaces.getAncestorPath': { input: { namespace: string; nodeId: number }; output: number[] };
+  /**
+   * Locate a node in the tree's own page order: the containment chain plus each
+   * level's child index, so a paginated tree can reveal an element by loading
+   * only the pages that contain it. `showAll` must match the caller's tree
+   * display setting, because hidden concepts change both index and totals.
+   */
+  'namespaces.getNodeLocation': { input: { namespace: string; nodeId: number; showAll?: boolean }; output: TreeNodeLocation };
   'namespaces.search': { input: { query: string; offset?: number; limit?: number; exact?: boolean }; output: SearchResult };
 
   // --- Metamodel channels ---
@@ -680,6 +703,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'workspace.close',
   'workspace.probe',
   'workspace.getSnapshotDrift',
+  'workspace.getSyncReport',
   'db.getStatus',
   'db.getStats',
   'db.getNamespaceStats',
@@ -779,6 +803,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'safety.createNoteForElement',
   'safety.previewDeleteImpact',
   'safety.getInstance',
+  'safety.getRelationships',
   'safety.getInstanceByUuid',
   'safety.createTag',
   'safety.getTag',
@@ -797,6 +822,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'safety.getDirectRequirementsForFm',
   'safety.searchRequirementsAcrossNamespaces',
   'safety.exportSphinxNeeds',
+  'safety.exportOkf',
   'safety.exportXlsx',
   'safety.getSafetyData',
   // user-defined checks
@@ -809,6 +835,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'checks.loadSummary',
   'namespaces.getChildren',
   'namespaces.getAncestorPath',
+  'namespaces.getNodeLocation',
   'namespaces.search',
   // metamodel channels
   'metamodel.getRenderingConfig',

@@ -178,12 +178,15 @@ export function shapeSysmlV2Attributes(row: RawRepresentativeRow): ShapedReprese
  * concept names (`need_req`, `need_test`, ...) are per-project dynamic
  * (`sn-core/schema-generator.ts`), which is why the catalog Cypher resolves
  * them structurally via `RIA_META_CONCEPT_SUBTYPEOF` rather than a literal
- * list, and this shaper needs no concept refinement — every matched row is
- * already `Requirement`.
+ * list. Documents are projected separately as StructuralElements, preserving
+ * contains_need as Ownership rather than treating a document as a requirement.
  */
 export function shapeSphinxNeedsAttributes(row: RawRepresentativeRow): ShapedRepresentative {
   const id = asString(row.rawAttributes.id);
   const title = asString(row.rawAttributes.title) || id;
+  if (row.concept === 'StructuralElement') {
+    return { concept: row.concept, attributes: { name: title, qualified_name: id, description: '', kind: row.sourceConcept } };
+  }
   const text = asString(row.rawAttributes.content);
   return { concept: row.concept, attributes: { name: title, qualified_name: id, description: '', requirement_id: id, text } };
 }
@@ -218,7 +221,7 @@ export function registerBuiltInMappings(registry: IMappingRegistry): void {
   });
   registry.register({
     id: SPHINX_NEEDS_MAPPING_ID,
-    description: 'Projects a Sphinx-Needs namespace onto CommonModel (every need as a Requirement, every need-to-need link as a Refinement). ' +
+    description: 'Projects Sphinx-Needs documents as StructuralElements, needs as Requirements, document containment as Ownership, and need-to-need links as Refinement. ' +
       'Source metamodel name is per-project dynamic (SN_<namespace>), so it is matched by pattern rather than by an exact name.',
     sourceMetamodelPattern: '^SN_',
     targetMetamodel: COMMON_MODEL_METAMODEL,

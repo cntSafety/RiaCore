@@ -40,9 +40,9 @@ import { LOAD_BATCH_SIZE } from './persistor-types.js';
  * Write `content` to `filePath` atomically: write to `${filePath}.tmp-<rand>`,
  * fsync, then rename over the target. rename() is atomic on a single volume, so
  * a concurrent/subsequent reader sees either the complete old or complete new
- * content — never partial/empty/intermingled (Req 5.1, 5.2). On any failure the
+ * content — never partial/empty/intermingled. On any failure the
  * temp file is removed and the original target is left untouched, then the error
- * is rethrown (Req 5.3, 5.4).
+ * is rethrown.
  */
 export function writeFileAtomic(filePath: string, content: string): void {
   const tmpPath = `${filePath}.tmp-${randomBytes(8).toString('hex')}`;
@@ -82,7 +82,7 @@ const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
  *
  * The retry stays synchronous (busy-wait) to keep `writeFileAtomic` sync, and
  * rethrows the original error once the attempts are exhausted so the caller's
- * cleanup and error contract (Req 5.3, 5.4) are unchanged.
+ * cleanup and error contract are unchanged.
  */
 function renameWithRetry(tmpPath: string, filePath: string, attempts = 10): void {
   for (let attempt = 1; ; attempt++) {
@@ -454,11 +454,25 @@ const SHARED_LAYERS: Array<'meta' | 'sourcemaster' | 'cross_namespace'> = [
  * Excludes RIA_META_SchemaVersion — that node is managed separately and must
  * survive a load cycle.
  */
-export function buildSharedLayerClearStatements(): string[] {
+export function buildSharedLayerClearStatements(
+  /**
+   * Which shared layers to clear. Defaults to all three, which is what an
+   * unplanned load does.
+   *
+   * A load now clears only the layers its plan names
+   * (persistor-shared-layer-sync), so this is a parameter rather than a
+   * constant. The order of the selected layers is preserved from
+   * `SHARED_LAYERS`, not from the caller's array, because the order is a
+   * correctness property (edges before nodes, cross-namespace before
+   * sourcemaster before meta) and not a caller's choice.
+   */
+  layers: ReadonlyArray<'meta' | 'sourcemaster' | 'cross_namespace'> = SHARED_LAYERS,
+): string[] {
+  const selected = SHARED_LAYERS.filter(l => layers.includes(l));
   const stmts: string[] = [];
   const clearedNodeTables = new Set(
     CANONICAL_NODE_TABLES
-      .filter(t => (SHARED_LAYERS as string[]).includes(t.layer) && t.name !== 'RIA_META_SchemaVersion')
+      .filter(t => (selected as string[]).includes(t.layer) && t.name !== 'RIA_META_SchemaVersion')
       .map(t => t.name),
   );
   const emittedRels = new Set<string>();
@@ -469,7 +483,7 @@ export function buildSharedLayerClearStatements(): string[] {
   };
 
   // 1. Rel tables — edges must be deleted before the nodes they connect.
-  for (const layer of SHARED_LAYERS) {
+  for (const layer of selected) {
     for (const rel of CANONICAL_REL_TABLES.filter(t => t.layer === layer)) {
       clearRel(rel.name);
     }
@@ -478,6 +492,11 @@ export function buildSharedLayerClearStatements(): string[] {
   // 1b. Rel tables from any other layer that reference a node table cleared in
   // step 2. Without these the node DELETE fails with "has connected edges in
   // table <rel> in the bwd direction, which cannot be deleted".
+  //
+  // This is also why a selective clear needs a rewire step afterwards: clearing
+  // `meta` alone still destroys RIA_UNIV_VIEW_DEFINEDBY and
+  // RIA_UNIV_VIEW_CATEGORIZEDBY, which belong to the universe layer. The load
+  // re-creates them (see the universe rewire in persistor-load.ts).
   for (const rel of CANONICAL_REL_TABLES) {
     if (clearedNodeTables.has(rel.fromTable) || clearedNodeTables.has(rel.toTable)) {
       clearRel(rel.name);
@@ -485,7 +504,7 @@ export function buildSharedLayerClearStatements(): string[] {
   }
 
   // 2. Node tables — safe to delete after all edges are gone.
-  for (const layer of SHARED_LAYERS) {
+  for (const layer of selected) {
     const nodeTables = CANONICAL_NODE_TABLES.filter(
       t => t.layer === layer && t.name !== 'RIA_META_SchemaVersion',
     );
@@ -545,7 +564,32 @@ export function buildSharedEdgeImportSpecs(
 }
 
 /**
+ * One file written by {@link exportLayer}, carrying the exact bytes that were
+ * written to it.
+ *
+ * `content` is returned rather than left to be read back by the caller on
+ * purpose. A caller that needs a hash of a written file (the sourcemaster
+ * carrier in the manifest) must hash what the writer *intended* to write: a
+ * read-back would record a digest of whatever ended up on disk after the write,
+ * so a short, re-encoded or line-ending-mangled write would be recorded as the
+ * truth and load's later verification would pass on corrupt data. Returning the
+ * written content also spares an extra read of every file on every store, and
+ * gives store, load and repair a single byte-for-byte reference.
+ */
+export interface ExportedLayerFile {
+  /** ria-data-relative path, forward slashes. */
+  relPath: string;
+  /** The exact serialized UTF-8 content written to this path. */
+  content: string;
+  rowCount: number;
+}
+
+/**
  * Export a shared layer (meta, sourcemaster, cross_namespace) to a subdirectory.
+ *
+ * Returns the total record count across the layer plus, for each file written,
+ * its ria-data-relative path and the exact content written — see
+ * {@link ExportedLayerFile}.
  */
 export async function exportLayer(
   layer: 'meta' | 'sourcemaster' | 'cross_namespace',
@@ -553,10 +597,11 @@ export async function exportLayer(
   dbModule: IDbModule,
   fileInventory: Record<string, number>,
   exportDir: string,
-): Promise<number> {
+): Promise<{ totalRecords: number; files: ExportedLayerFile[] }> {
   fs.mkdirSync(layerDir, { recursive: true });
   const tables = getTablesByLayer(layer);
   let totalRecords = 0;
+  const files: ExportedLayerFile[] = [];
 
   for (const table of tables) {
     let rows: Record<string, unknown>[];
@@ -607,9 +652,10 @@ export async function exportLayer(
     const relPath = path.relative(exportDir, filePath).replace(/\\/g, '/');
     fileInventory[relPath] = rows.length;
     totalRecords += rows.length;
+    files.push({ relPath, content, rowCount: rows.length });
   }
 
-  return totalRecords;
+  return { totalRecords, files };
 }
 
 /**

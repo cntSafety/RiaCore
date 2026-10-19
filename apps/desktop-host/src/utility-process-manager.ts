@@ -94,6 +94,7 @@ export class UtilityProcessManager {
    */
   private readonly startupTimeout: number;
   private isShuttingDown = false;
+  private shutdownPromise: Promise<void> | null = null;
   private isRestarting = false;
   private permanentlyFailed = false;
   private readonly logger = getAppLogger();
@@ -123,6 +124,7 @@ export class UtilityProcessManager {
   // ---------------------------------------------------------------------------
 
   async start(): Promise<void> {
+    if (this.isShuttingDown) throw new Error('Worker is shutting down');
     const workerPath = path.join(__dirname, 'worker.js');
     const execPath = this.resolveNodeExecPath();
     this.logger.info('Spawning worker process', { workerPath, execPath });
@@ -158,6 +160,7 @@ export class UtilityProcessManager {
       const cleanup = () => {
         child.off('message', onMessage);
         child.off('exit', onExit);
+        child.off('error', onError);
         clearTimeout(timer);
       };
 
@@ -195,12 +198,21 @@ export class UtilityProcessManager {
         ));
       };
 
+      const onError = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         cleanup();
-        child.kill();
-        this.child = null;
+        // Keep the child tracked: the caller's failure cleanup must still be
+        // able to stop it if initialization hung or a termination failed.
+        try { child.kill('SIGKILL'); }
+        catch (error) { this.logger.warn('Could not terminate the timed-out worker', { error: String(error) }); }
         this.logger.error('Worker process startup timed out', { startupTimeout: this.startupTimeout });
         reject(new Error(
           `Worker process did not become ready within ${this.startupTimeout / 1000} seconds`
@@ -209,6 +221,7 @@ export class UtilityProcessManager {
 
       child.on('message', onMessage);
       child.on('exit', onExit);
+      child.on('error', onError);
     });
   }
 
@@ -371,6 +384,7 @@ export class UtilityProcessManager {
           })
           .catch(() => {
             this.isRestarting = false;
+            if (this.isShuttingDown) return;
             this.permanentlyFailed = true;
             this.logger.fatal('Worker process failed to restart');
             dialog.showErrorBox(
@@ -427,6 +441,10 @@ export class UtilityProcessManager {
     reject: (reason: Error) => void,
     retries = 0,
   ): void {
+    if (this.isShuttingDown) {
+      reject(new Error('Worker is shutting down'));
+      return;
+    }
     if (this.permanentlyFailed) {
       reject(new Error('Worker process is unavailable'));
       return;
@@ -532,29 +550,71 @@ export class UtilityProcessManager {
   // shutdown() — graceful shutdown with kill timeout
   // ---------------------------------------------------------------------------
 
-  async shutdown(): Promise<void> {
-    if (!this.child) return;
-
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
     this.isShuttingDown = true;
     this.clearStableReset();
-    this.logger.info('Sending shutdown signal to worker process');
+    for (const pending of this.pending.values()) pending.reject(new Error('Worker is shutting down'));
+    this.pending.clear();
+    this.rejectQueue();
+    if (!this.child) return Promise.resolve();
 
     const child = this.child;
+    this.logger.info('Sending shutdown signal to worker process');
 
-    child.send({ type: 'shutdown' });
-
-    return new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        this.logger.warn('Worker process did not exit within shutdown timeout; forcing kill');
-        child.kill();
-      }, this.shutdownTimeout);
-
-      child.on('exit', () => {
+    this.shutdownPromise = new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      let killing = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
-        this.child = null;
-        this.logger.info('Worker process exited during shutdown');
-        resolve();
-      });
+        clearTimeout(killTimer);
+        child.off('exit', onExit);
+        if (error) reject(error);
+        else {
+          if (this.child === child) this.child = null;
+          this.logger.info('Worker process exited during shutdown');
+          resolve();
+        }
+      };
+      const onExit = () => finish();
+      const forceKill = () => {
+        if (settled || killing) return;
+        killing = true;
+        clearTimeout(timer);
+        this.logger.warn('Worker did not shut down gracefully; forcing termination');
+        // Bound the wait even when kill fails or the OS never emits exit.
+        killTimer = setTimeout(() => finish(new Error('Unable to stop the background worker')), 1000);
+        try {
+          child.kill('SIGKILL');
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+
+      // Subscribe before sending: a fast exit (or a synchronous IPC error)
+      // must not leave the promise waiting for an event that already happened.
+      child.on('exit', onExit);
+      if (child.exitCode != null || child.signalCode != null) {
+        finish();
+        return;
+      }
+      timer = setTimeout(forceKill, this.shutdownTimeout);
+      if (child.connected === false) {
+        forceKill();
+        return;
+      }
+      try {
+        child.send({ type: 'shutdown' }, (error: Error | null) => {
+          if (error) forceKill();
+        });
+      } catch {
+        forceKill();
+      }
     });
+    return this.shutdownPromise;
   }
 }

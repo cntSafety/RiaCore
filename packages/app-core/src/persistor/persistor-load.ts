@@ -28,6 +28,7 @@ import type { IDbModule } from '../db/db-module.js';
 import type { ImportLogger } from '../infra/logger.js';
 import { parseTable } from './serializer.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
+import { classifySchemaCompatibility, describeIncompatibleSchema } from '../db/schema-compat.js';
 import { getTablesByLayer } from './table-registry.js';
 import { resolveStableIdFromMeta, buildStableIdLookupFromMeta } from './stable-id.js';
 import type { PersistorLoadParams, LoadResult, Manifest } from './persistor-types.js';
@@ -47,22 +48,260 @@ import {
 } from './persistor-helpers.js';
 import { computeNamespaceHashFromFiles, computeMetaHash } from './persistor.js';
 import { computeUniverseFileHash } from './persistor-store.js';
+import { originFromManifest, writeSnapshotOrigin } from './snapshot-origin.js';
+import type { LoadPlan } from '../workspace/sync-state.js';
 
 /**
- * Compare two dotted schema versions numerically: negative when `a` is older
- * than `b`, positive when newer, zero when equal. A segment that is not a number
- * counts as 0, so a malformed version reads as the oldest possible one and is
- * therefore never mistaken for a newer format.
+ * Universe and sourcemaster edges whose endpoints this load is about to
+ * destroy, captured so a load that SKIPS those layers can put them back.
+ *
+ * Why a snapshot rather than a re-read of the edge files: the skipped layer is
+ * S1, so its files and this snapshot agree on everything that was ever saved —
+ * but the snapshot additionally carries edges authored in this session and not
+ * yet written out. Restoring from the files would discard exactly the unsaved
+ * work that skipping the layer exists to preserve.
+ *
+ * What is destroyed, and by what:
+ *
+ * - the meta clear deletes the `RIA_META_Metamodel` nodes that
+ *   `RIA_UNIV_VIEW_DEFINEDBY` and `RIA_UNIV_VIEW_CATEGORIZEDBY` point at, so
+ *   those edges go with them on EVERY load, even one that touches nothing else;
+ * - the per-namespace path `DETACH DELETE`s the `RIA_UNIV_Namespace` node that
+ *   `RIA_UNIV_VIEW_SOURCE`, `RIA_UNIV_NamespaceConnection` and
+ *   `RIA_SRC_TARGETS_NS` point at, and additionally cascade-deletes every view
+ *   sourced on that namespace (a domain rule that is deliberate for a real
+ *   namespace deletion and incidental here, since the namespace is recreated
+ *   moments later).
+ *
+ * Nothing here is needed when the owning layer IS in the plan: the ordinary
+ * restore step rebuilds it from the files.
  */
-function compareSchemaVersions(a: string, b: string): number {
-  const parse = (v: string): number[] => String(v ?? '').split('.').map((part) => Number(part) || 0);
-  const left = parse(a);
-  const right = parse(b);
-  for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const diff = (left[i] ?? 0) - (right[i] ?? 0);
-    if (diff !== 0) return diff;
+interface SkippedLayerSnapshot {
+  /** Full `RIA_UNIV_View` rows, so a cascade-deleted view node can be restored. */
+  views: Record<string, unknown>[];
+  viewDefinedBy: { view: string; metamodel: string }[];
+  viewCategorizedBy: { view: string; metamodel: string }[];
+  viewSource: { view: string; namespace: string }[];
+  namespaceConnections: { source: string; target: string }[];
+  /** `RIA_SRC_Source` → `RIA_UNIV_Namespace`. Captured only when sourcemaster is skipped. */
+  sourceTargetsNs: { sourceId: string; namespace: string }[];
+}
+
+async function snapshotSkippedLayerEdges(
+  dbModule: IDbModule,
+  plan: LoadPlan,
+  logger: ImportLogger,
+): Promise<SkippedLayerSnapshot | null> {
+  if (plan.universe && plan.sourcemaster) return null;
+  const empty: SkippedLayerSnapshot = {
+    views: [], viewDefinedBy: [], viewCategorizedBy: [], viewSource: [],
+    namespaceConnections: [], sourceTargetsNs: [],
+  };
+  try {
+    if (!plan.universe) {
+      empty.views = await dbModule.runQuery(
+        `MATCH (v:RIA_UNIV_View)
+         RETURN v.name AS name, v.description AS description, v.metamodel AS metamodel,
+                v.mapping AS mapping, v.parameters AS parameters`,
+      );
+      const pairs = async (rel: string): Promise<{ src: string; dst: string }[]> =>
+        (await dbModule.runQuery(
+          `MATCH (a)-[:${rel}]->(b) RETURN a.name AS src, b.name AS dst`,
+        )).map((r) => ({ src: String(r.src ?? ''), dst: String(r.dst ?? '') }))
+          .filter((p) => p.src !== '' && p.dst !== '');
+      empty.viewDefinedBy = (await pairs('RIA_UNIV_VIEW_DEFINEDBY'))
+        .map((p) => ({ view: p.src, metamodel: p.dst }));
+      empty.viewCategorizedBy = (await pairs('RIA_UNIV_VIEW_CATEGORIZEDBY'))
+        .map((p) => ({ view: p.src, metamodel: p.dst }));
+      empty.viewSource = (await pairs('RIA_UNIV_VIEW_SOURCE'))
+        .map((p) => ({ view: p.src, namespace: p.dst }));
+      empty.namespaceConnections = (await pairs('RIA_UNIV_NamespaceConnection'))
+        .map((p) => ({ source: p.src, target: p.dst }));
+    }
+    if (!plan.sourcemaster) {
+      empty.sourceTargetsNs = (await dbModule.runQuery(
+        `MATCH (s:RIA_SRC_Source)-[:RIA_SRC_TARGETS_NS]->(ns:RIA_UNIV_Namespace)
+         RETURN s.source_id AS source_id, ns.name AS name`,
+      )).map((r) => ({ sourceId: String(r.source_id ?? ''), namespace: String(r.name ?? '') }))
+        .filter((p) => p.sourceId !== '' && p.namespace !== '');
+    }
+    return empty;
+  } catch (err) {
+    // A failed snapshot must not abort a load. The cost is the edges the rewire
+    // would have restored, which the next store-and-load cycle re-establishes
+    // from the files.
+    logger.error(
+      `load: could not snapshot the edges of the skipped layers — ` +
+      `view and connection edges may be missing after this load: ` +
+      (err instanceof Error ? err.message : String(err)),
+    );
+    return null;
   }
-  return 0;
+}
+
+/**
+ * Put back what {@link snapshotSkippedLayerEdges} captured.
+ *
+ * Runs after the namespace loop, so every endpoint node exists again. An edge
+ * whose endpoint is genuinely gone — a view sourced on a namespace the manifest
+ * no longer lists — is dropped rather than re-created, matching what the
+ * ordinary universe restore does with a dangling reference.
+ */
+async function rewireSkippedLayerEdges(
+  dbModule: IDbModule,
+  snapshot: SkippedLayerSnapshot,
+  logger: ImportLogger,
+): Promise<void> {
+  const present = async (label: string, key: string): Promise<Set<string>> =>
+    new Set((await dbModule.runQuery(`MATCH (n:${label}) RETURN n.${key} AS k`))
+      .map((r) => String(r.k ?? '')));
+
+  const metamodels = await present('RIA_META_Metamodel', 'name');
+  const namespaces = await present('RIA_UNIV_Namespace', 'name');
+  let views = await present('RIA_UNIV_View', 'name');
+
+  // Re-create view nodes the namespace cascade removed. Verbatim from the
+  // snapshot: this is the same database's own row, not a re-read of a file.
+  let viewsRestored = 0;
+  for (const row of snapshot.views) {
+    const name = String(row.name ?? '');
+    if (!name || views.has(name)) continue;
+    // A view with no surviving source namespace is invalid and must not be
+    // resurrected as one (docs/coreSpecs/RiaViews.md).
+    const sources = snapshot.viewSource.filter((s) => s.view === name && namespaces.has(s.namespace));
+    if (sources.length === 0) {
+      logger.warn(
+        `load: view '${name}' was removed with its source namespace and is not restored — ` +
+        `no source namespace survives this load`,
+        { view: name },
+      );
+      continue;
+    }
+    await dbModule.runQuery(
+      `CREATE (:RIA_UNIV_View {name: $name, description: $description, metamodel: $metamodel,
+         mapping: $mapping, parameters: $parameters})`,
+      {
+        name,
+        description: String(row.description ?? ''),
+        metamodel: String(row.metamodel ?? ''),
+        mapping: String(row.mapping ?? ''),
+        parameters: String(row.parameters ?? '{}'),
+      },
+    );
+    viewsRestored++;
+  }
+  if (viewsRestored > 0) views = await present('RIA_UNIV_View', 'name');
+
+  const link = async (
+    rel: string, fromLabel: string, toLabel: string,
+    pairs: { from: string; to: string }[],
+    fromSet: Set<string>, toSet: Set<string>,
+  ): Promise<number> => {
+    let created = 0;
+    for (const pair of pairs) {
+      if (!fromSet.has(pair.from) || !toSet.has(pair.to)) continue;
+      await dbModule.runQuery(
+        `MATCH (a:${fromLabel}), (b:${toLabel}) WHERE a.name = $from AND b.name = $to
+         AND NOT EXISTS { MATCH (a)-[:${rel}]->(b) }
+         CREATE (a)-[:${rel}]->(b)`,
+        { from: pair.from, to: pair.to },
+      );
+      created++;
+    }
+    return created;
+  };
+
+  const definedBy = await link('RIA_UNIV_VIEW_DEFINEDBY', 'RIA_UNIV_View', 'RIA_META_Metamodel',
+    snapshot.viewDefinedBy.map((p) => ({ from: p.view, to: p.metamodel })), views, metamodels);
+  const categorizedBy = await link('RIA_UNIV_VIEW_CATEGORIZEDBY', 'RIA_UNIV_View', 'RIA_META_Metamodel',
+    snapshot.viewCategorizedBy.map((p) => ({ from: p.view, to: p.metamodel })), views, metamodels);
+  const viewSource = await link('RIA_UNIV_VIEW_SOURCE', 'RIA_UNIV_View', 'RIA_UNIV_Namespace',
+    snapshot.viewSource.map((p) => ({ from: p.view, to: p.namespace })), views, namespaces);
+  const connections = await link('RIA_UNIV_NamespaceConnection', 'RIA_UNIV_Namespace', 'RIA_UNIV_Namespace',
+    snapshot.namespaceConnections.map((p) => ({ from: p.source, to: p.target })), namespaces, namespaces);
+
+  let targetsNs = 0;
+  for (const pair of snapshot.sourceTargetsNs) {
+    if (!namespaces.has(pair.namespace)) continue;
+    await dbModule.runQuery(
+      `MATCH (s:RIA_SRC_Source), (ns:RIA_UNIV_Namespace)
+       WHERE s.source_id = $sourceId AND ns.name = $namespace
+       AND NOT EXISTS { MATCH (s)-[:RIA_SRC_TARGETS_NS]->(ns) }
+       CREATE (s)-[:RIA_SRC_TARGETS_NS]->(ns)`,
+      { sourceId: pair.sourceId, namespace: pair.namespace },
+    );
+    targetsNs++;
+  }
+
+  logger.debug(
+    `load: rewired skipped-layer edges — views_restored=${viewsRestored}, ` +
+    `view_definedby=${definedBy}, view_categorizedby=${categorizedBy}, view_source=${viewSource}, ` +
+    `namespace_connections=${connections}, source_targets_ns=${targetsNs}`,
+  );
+}
+
+/**
+ * Fail the load before it writes anything when any `manifest.namespaces[]` entry
+ * lacks `namespace_role` or `namespace_owning_application`.
+ *
+ * The manifest is the sole authority for both, so there is nowhere to fall back
+ * to, and defaulting is worse than failing: the role is a gate, not a label, and
+ * an empty one silently disables concept creation, view sourcing, dirty-tracking
+ * exclusion and imported/authored wiring. One pass ahead of the namespace loop
+ * keeps a defective entry from leaving the database half-imported and reports
+ * every offender at once.
+ *
+ * The recovery wording omits `repairManifest` on purpose: it recomputes content
+ * digests from disk and has no source for identity.
+ */
+function assertManifestNamespaceIdentity(manifest: Manifest, manifestPath: string): void {
+  const offenders: string[] = [];
+
+  manifest.namespaces.forEach((entry, index) => {
+    const raw = entry as {
+      name?: unknown;
+      namespace_role?: unknown;
+      namespace_owning_application?: unknown;
+    };
+    const label =
+      typeof raw.name === 'string' && raw.name !== ''
+        ? `namespaces[${index}] ('${raw.name}')`
+        : `namespaces[${index}] (unnamed)`;
+
+    const missing: string[] = [];
+    // `namespace_role` must be a NON-EMPTY string: `''` is not a role the rest
+    // of the application recognises, it is the absence of one, and it fails the
+    // four gates above identically to the field being missing.
+    if (typeof raw.namespace_role !== 'string' || raw.namespace_role === '') {
+      missing.push('namespace_role');
+    }
+    // `namespace_owning_application` must be a string but MAY be empty — unlike
+    // the role it is descriptive, not a gate, and `''` is its ordinary value for
+    // a namespace no application owns (see `provisioning-service.ts`, which sets
+    // it to `''` on every provisioned import namespace). Rejecting `''` here
+    // would refuse to load most existing workspaces for no benefit.
+    if (typeof raw.namespace_owning_application !== 'string') {
+      missing.push('namespace_owning_application');
+    }
+
+    if (missing.length > 0) {
+      offenders.push(`${label}: missing ${missing.join(' and ')}`);
+    }
+  });
+
+  if (offenders.length === 0) return;
+
+  throw new Error(
+    `Cannot load: '${manifestPath}' does not carry namespace identity for ` +
+    `${offenders.length} of its ${manifest.namespaces.length} namespaces[] ` +
+    `entr${manifest.namespaces.length === 1 ? 'y' : 'ies'}, and the manifest entry is ` +
+    `the only source for it:\n` +
+    offenders.map((o) => `  - ${o}`).join('\n') + '\n' +
+    `Run a full 'persistor store' from a workspace whose database still holds this ` +
+    `content, or restore ria-data/manifest.json from version control. ` +
+    `Recomputing the manifest's content hashes cannot recover namespace identity — ` +
+    `it is not derived from the files on disk.`,
+  );
 }
 
 export async function load(
@@ -77,41 +316,54 @@ export async function load(
   if (!fs.existsSync(manifestPath)) {
     throw new Error('No export found: manifest.json is missing');
   }
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Manifest;
-  if (manifest.schema_version !== SCHEMA_VERSION) {
-    // A manifest from a NEWER version stays a hard error: this code cannot know
-    // what the newer format added, and loading it would silently drop it.
-    //
-    // An OLDER one loads. That is what makes the documented upgrade path work at
-    // all — a workspace whose DB is stale opens read-only with
-    // migrationNeeded=true and is "rebuilt from ria-data/", which is impossible
-    // if the rebuild refuses every ria-data written before the bump. Every
-    // version step so far has been additive to the on-disk layout, and each
-    // layer's reader already treats a file it does not find as absent (the view
-    // tables added in 1.4.0 are read exactly that way), so an older export loads
-    // as itself with the newer parts empty. persistor.store already forces a
-    // full re-export on the same mismatch, so the next save rewrites the
-    // manifest at the current version.
-    if (compareSchemaVersions(manifest.schema_version, SCHEMA_VERSION) > 0) {
-      throw new Error(
-        `Schema version mismatch: manifest schema_version (${manifest.schema_version}) is newer than this version of RiaCore supports (${SCHEMA_VERSION})`,
-      );
-    }
+  // Kept, not re-read at the end: the origin record must carry the digest of the
+  // bytes this load actually consumed. A second read could pick up a manifest
+  // rewritten while the load was running and record a version the database was
+  // never built from — the one thing an origin row must never say.
+  const manifestBytes = fs.readFileSync(manifestPath, 'utf-8');
+  const manifest = JSON.parse(manifestBytes) as Manifest;
+
+  // ── Schema compatibility + hash epoch guard ───────────────────────────────
+  // Two decisions, in order, both driven by `manifest.schema_version`.
+  //
+  // FIRST, may this code read the snapshot at all? `classifySchemaCompatibility`
+  // owns that answer (see `db/schema-compat.ts`): a differing major generation,
+  // a version newer than this code writes, one older than
+  // `MIN_READABLE_SCHEMA_VERSION`, or an unparseable one is refused here, before
+  // any file is read. `workspaceService.open` normally refuses earlier still, at
+  // classification time, so this throw is the backstop for a direct `load()` —
+  // the CLI, a test, or any future caller that did not classify first.
+  //
+  // SECOND, within the supported range: is the hash epoch the current one? A hash
+  // means nothing to code that did not compute it, so comparison is valid only
+  // within one epoch, and across epochs every comparison below is SUSPENDED
+  // rather than failed. Evaluated once here, before any carrier is dereferenced,
+  // because `Manifest` is a parse assertion — a field declared required can still
+  // be absent at runtime in an older-epoch file.
+  const compatibility = classifySchemaCompatibility(manifest.schema_version);
+  if (compatibility.kind === 'incompatible') {
+    throw new Error(`Cannot load '${manifestPath}': ${describeIncompatibleSchema(compatibility)}`);
+  }
+
+  const hashEpochMatches = compatibility.exact;
+  if (!hashEpochMatches) {
     logger.warn(
       `manifest schema_version (${manifest.schema_version}) predates the current schema (${SCHEMA_VERSION}) — ` +
-      `loading it as-is; the next store rewrites ria-data at ${SCHEMA_VERSION}`,
+      `loading the data as-is and suspending all hash verification (namespace, universe, sourcemaster, meta); ` +
+      `the next store rewrites ria-data at ${SCHEMA_VERSION}`,
       { manifest_schema_version: manifest.schema_version, current_schema_version: SCHEMA_VERSION },
     );
   }
 
-  // Verify meta_hash if present. A mismatch means the meta layer files on disk
-  // differ from what was last stored — either the metamodel YAML changed (a
-  // legitimate code update) or the files were manually edited. Either way the
-  // load proceeds: the meta layer is always re-imported unconditionally, and the
-  // post-load wiring step repairs any missing DEFINEDBY/CATEGORIZEDBY edges.
-  // This is a warning, not an error, because meta changes from YAML updates are
-  // expected and should not block workspace open.
-  if (manifest.meta_hash) {
+  // Verify meta_hash if present, within the current hash epoch only. A mismatch
+  // means the meta layer files on disk differ from what was last stored — either
+  // the metamodel YAML changed (a legitimate code update) or the files were
+  // manually edited. Either way the load proceeds: the meta layer is always
+  // re-imported unconditionally, and the post-load wiring step repairs any
+  // missing DEFINEDBY/CATEGORIZEDBY edges. This is a warning, not an error,
+  // because meta changes from YAML updates are expected and should not block
+  // workspace open.
+  if (hashEpochMatches && manifest.meta_hash) {
     const metaDir = path.join(exportDir, 'meta');
     const diskMetaHash = computeMetaHash(metaDir);
     if (diskMetaHash !== manifest.meta_hash) {
@@ -133,9 +385,13 @@ export async function load(
   // is corrupt or was edited behind the app, so we abort the load — reusing the
   // exact `"file integrity check failed"` convention that the namespace-layer
   // check below uses. This lights up `useWorkspaceState.filesCorrupted` and the
-  // `BottomPanel` repair-hash flow unchanged (Req 6.3, 6.4, 6.5). On-disk
+  // `BottomPanel` repair-hash flow unchanged. On-disk
   // contents are left untouched: we only read and compare, never write.
-  if (manifest.universe_hashes) {
+  //
+  // Guarded by the hash epoch: an older-epoch manifest's universe hashes cannot
+  // be reproduced by this code, so comparing them would report corruption for a
+  // workspace that is merely out of date.
+  if (hashEpochMatches && manifest.universe_hashes) {
     for (const [relPath, recordedHash] of Object.entries(manifest.universe_hashes)) {
       if (!recordedHash) continue;
       const universeFilePath = path.join(exportDir, relPath);
@@ -179,7 +435,145 @@ export async function load(
     }
   }
 
-  logger.info(`load started — ${manifest.namespaces.length} namespace(s) in manifest`);
+  // Verify each recorded sourcemaster hash before importing any data, using the
+  // same rules and the same `"file integrity check failed"` convention as the
+  // universe block directly above: absent, unreadable, or a differing hash is a
+  // hard failure naming `repairManifest` as the recovery. Nothing is
+  // written here either — we only read and compare.
+  //
+  // This is a hard failure and not a warning, and the asymmetry with the
+  // `meta_hash` check three blocks up is deliberate rather than accidental.
+  // `sourcemaster/` holds serialized DB record data — import sources and import
+  // runs — which load clears and re-imports unconditionally from these files,
+  // exactly like the universe layer, and which nothing regenerates from code. If
+  // its bytes no longer match what store recorded, the only copy of that data is
+  // the one being distrusted, so continuing would import it as if it were
+  // intact. `meta_hash` warns only because the meta layer *is* legitimately
+  // regenerated from profiles and YAML on every workspace open, so a mismatch
+  // there is an expected consequence of a code update rather than evidence about
+  // the data. That does not apply here.
+  //
+  // Guarded by the hash epoch for the same reason the universe block is: an
+  // older-epoch manifest's hashes cannot be reproduced by this code, so
+  // comparing them would report corruption for a workspace that is merely out
+  // of date.
+  if (hashEpochMatches && manifest.sourcemaster_hashes) {
+    for (const [relPath, recordedHash] of Object.entries(manifest.sourcemaster_hashes)) {
+      if (!recordedHash) continue;
+      const sourcemasterFilePath = path.join(exportDir, relPath);
+
+      let diskContent: string;
+      try {
+        if (!fs.existsSync(sourcemasterFilePath)) {
+          throw new Error('file not found');
+        }
+        diskContent = fs.readFileSync(sourcemasterFilePath, 'utf-8');
+      } catch (err) {
+        logger.error(
+          `Sourcemaster file '${relPath}': file integrity check failed — ` +
+          `recorded in manifest but absent or unreadable on disk` +
+          ` (${err instanceof Error ? err.message : String(err)})`,
+          { sourcemaster_file: relPath, manifest_hash: recordedHash },
+        );
+        throw new Error(
+          `Sourcemaster file '${relPath}': file integrity check failed. ` +
+          `The file is recorded in the manifest (hash: ${recordedHash}) but is ` +
+          `absent or unreadable on disk. ` +
+          `If you trust the workspace, regenerate manifest.json via repairManifest.`
+        );
+      }
+
+      const diskHash = computeUniverseFileHash(diskContent);
+      if (diskHash !== recordedHash) {
+        logger.error(
+          `Sourcemaster file '${relPath}': file integrity check failed — ` +
+          `manifest=${recordedHash.slice(0, 20)}... disk=${diskHash.slice(0, 20)}...`,
+          { sourcemaster_file: relPath, manifest_hash: recordedHash, disk_hash: diskHash },
+        );
+        throw new Error(
+          `Sourcemaster file '${relPath}': file integrity check failed. ` +
+          `Manifest hash: ${recordedHash}, computed from file: ${diskHash}. ` +
+          `The sourcemaster-layer file may be corrupted or manually edited. ` +
+          `If you trust the file, regenerate manifest.json via repairManifest.`
+        );
+      }
+      logger.debug(`sourcemaster file integrity check passed`, { sourcemaster_file: relPath, hash: recordedHash });
+    }
+  }
+
+  // Namespace identity is validated in ONE pass here, before the first write,
+  // so a defective manifest reports every offending entry at once instead of
+  // half-importing and then failing on the first gap it reaches. See the
+  // function's own comment for why there is no fallback and why the recovery
+  // wording deliberately omits `repairManifest`.
+  assertManifestNamespaceIdentity(manifest, manifestPath);
+
+  // ── Load plan ──────────────────────────────────────────────────────────────
+  // Which domains this run clears and re-imports. Supplied by the open path,
+  // which has already evaluated the sync states; computed here otherwise so a
+  // direct caller and the CLI behave identically.
+  //
+  // Across an epoch difference the plan is full regardless: no recorded hash is
+  // comparable, so there is no basis on which to narrow the operation.
+  const fullPlan: LoadPlan = {
+    meta: true, sourcemaster: true, universe: true, crossNamespace: true,
+    namespaces: manifest.namespaces.map((n) => n.name).filter((n) => !!n),
+  };
+  // No plan means a full load, deliberately, and NOT "evaluate the sync state
+  // and plan from it".
+  //
+  // Every production caller that omits the plan is asking for a wholesale
+  // rebuild from the files: `performFreshLoad` (which has just deleted the
+  // database), the CLI's `persistor load`, and the renderer's "Load from
+  // ria-data" button. For the last two, narrowing the operation would make the
+  // button silently do nothing in exactly the case the user pressed it — a
+  // database that diverged from the files without the files changing is S1 by
+  // the three-hash rule (Invariant 1: origin rows are not invalidated by an
+  // edit), so a planned load would skip the very layer the user wants
+  // discarded. Requirement 14.5 says the Load action runs the load; it does not
+  // say it runs a subset.
+  //
+  // The scoping of Requirement 9 belongs to the open path, which is the only
+  // caller with a basis for narrowing: it has just evaluated every domain and
+  // passes the resulting plan explicitly. Across an epoch difference the plan is
+  // full regardless, since no recorded hash is comparable.
+  const plan: LoadPlan = hashEpochMatches ? params.plan ?? fullPlan : fullPlan;
+  const plannedNamespaces = new Set(plan.namespaces);
+
+  logger.info(
+    `load started — ${manifest.namespaces.length} namespace(s) in manifest; ` +
+    `plan: meta=yes sourcemaster=${plan.sourcemaster ? 'yes' : 'SKIP'} ` +
+    `universe=${plan.universe ? 'yes' : 'SKIP'} cross_namespace=${plan.crossNamespace ? 'yes' : 'SKIP'} ` +
+    `namespaces=${plan.namespaces.length}/${manifest.namespaces.length}`,
+    {
+      plan_sourcemaster: plan.sourcemaster,
+      plan_universe: plan.universe,
+      plan_cross_namespace: plan.crossNamespace,
+      plan_namespaces: plan.namespaces,
+    },
+  );
+  if (!plan.sourcemaster) {
+    logger.info(
+      'load: skipping sourcemaster/ — every sourcemaster domain is S1, so the files hold nothing ' +
+      'this database has not already consumed; unsaved import-source and import-run rows survive',
+    );
+  }
+  if (!plan.universe) {
+    logger.info(
+      'load: skipping universe/ — every universe domain is S1; view, layout and connection rows ' +
+      'are kept and only the edge rows this load destroys are re-created',
+    );
+  }
+  if (!plan.crossNamespace) {
+    logger.info(
+      'load: skipping cross_namespace/ — every cross-namespace domain is S1 and no namespace is ' +
+      'in this plan (Invariant 3: the layer is never operated on partially)',
+    );
+  }
+
+  // Captured before the first destructive statement, and only for the layers
+  // this run skips. See SkippedLayerSnapshot.
+  const skippedEdges = await snapshotSkippedLayerEdges(dbModule, plan, logger);
 
   // Query existing namespace content_hashes from DB
   const existingHashRows = await dbModule.runQuery(
@@ -211,7 +605,10 @@ export async function load(
   // The clear statements are derived from the canonical schema (schema.ts) via
   // the table registry so that adding a new meta/sourcemaster/cross_namespace
   // table automatically includes it here — no manual update needed.
-  logger.debug(`clearing meta/sourcemaster/cross_namespace layers...`);
+  const clearedLayers: Array<'meta' | 'sourcemaster' | 'cross_namespace'> = ['meta'];
+  if (plan.sourcemaster) clearedLayers.push('sourcemaster');
+  if (plan.crossNamespace) clearedLayers.push('cross_namespace');
+  logger.debug(`clearing ${clearedLayers.join('/')} layer(s)...`);
   emitProgress(params.onProgress, { phase: 'shared', message: 'Clearing shared layers...' }, logger);
 
   // Views are cleared here, ahead of the shared-layer clear, not in the restore
@@ -219,18 +616,29 @@ export async function load(
   // at RIA_META_Metamodel nodes that the shared-layer clear deletes, so those
   // edges go with them; leaving the view *nodes* behind would produce views with
   // no immediate metamodel, which is invalid (docs/coreSpecs/RiaViews.md — a view
-  // has exactly one VIEW_DEFINEDBY). The clear is unconditional for the same
-  // reason the namespace-connection clear is: the loaded set of views equals the
-  // persisted set exactly, so a workspace with no RIA_UNIV_View.json loads as a
-  // workspace with no views.
-  await dbModule.runQuery(`MATCH (v:RIA_UNIV_View) DETACH DELETE v`);
+  // has exactly one VIEW_DEFINEDBY). The clear matches the universe restore
+  // below: the loaded set of views equals the persisted set exactly, so a
+  // workspace with no RIA_UNIV_View.json loads as a workspace with no views.
+  //
+  // Skipped when the universe layer is not in the plan, because then there is no
+  // restore to pair it with — the view rows in the database are the only copy of
+  // this session's view work. Their DEFINEDBY/CATEGORIZEDBY edges are still
+  // destroyed by the meta clear and are put back by the rewire step.
+  if (plan.universe) {
+    await dbModule.runQuery(`MATCH (v:RIA_UNIV_View) DETACH DELETE v`);
+  }
 
-  for (const stmt of buildSharedLayerClearStatements()) {
+  for (const stmt of buildSharedLayerClearStatements(clearedLayers)) {
     await dbModule.runQuery(stmt);
   }
 
-  // Import meta layer — node tables (batched UNWIND inserts)
-  const sharedNodeTables = [...getTablesByLayer('meta'), ...getTablesByLayer('sourcemaster')]
+  // Import meta layer — node tables (batched UNWIND inserts). The sourcemaster
+  // tables join in only when the plan named that layer; skipping the clear
+  // without skipping the import would duplicate every row.
+  const sharedNodeTables = [
+    ...getTablesByLayer('meta'),
+    ...(plan.sourcemaster ? getTablesByLayer('sourcemaster') : []),
+  ]
     .filter((table) => table.type === 'node');
   const sharedTotal = sharedNodeTables.length;
   let sharedIdx = 0;
@@ -248,8 +656,14 @@ export async function load(
   // adding a new rel table to schema.ts + table-registry automatically includes
   // it here. Edges that reference RIA_UNIV_Namespace are deferred until after
   // the namespace loop (those nodes don't exist yet at this point).
+  //
+  // Built for the planned layers only, for the same reason the node import is:
+  // the sourcemaster edges were not cleared, so re-creating them from the files
+  // would duplicate them. `RIA_SRC_TARGETS_NS` is the exception that the rewire
+  // step handles — it terminates on a namespace node the load destroys, so it
+  // has to be put back from the snapshot rather than from the file.
   const { immediate: immediateEdgeSpecs, deferred: deferredEdgeSpecs } =
-    buildSharedEdgeImportSpecs(['meta', 'sourcemaster']);
+    buildSharedEdgeImportSpecs(plan.sourcemaster ? ['meta', 'sourcemaster'] : ['meta']);
 
   for (const edge of immediateEdgeSpecs) {
     const filePath = path.join(exportDir, edge.file);
@@ -276,7 +690,7 @@ export async function load(
 
   // Helper: fire-and-forget namespace-level progress push event.
   // Errors in the callback are silently swallowed so they can never cause
-  // the load operation to fail (Requirement 16.9).
+  // the load operation to fail.
   const emitNamespaceProgress = (kind: 'namespace_start' | 'namespace_done', namespaceName: string, namespaceIndex: number): void => {
     if (!params.onNamespaceProgress) return;
     try {
@@ -296,8 +710,28 @@ export async function load(
     const nsEntry = manifest.namespaces[nsIdx];
     const namespace = nsEntry.name;
     const metamodel = nsEntry.metamodel;
-    const manifestHash = manifest.namespace_hashes[namespace] ?? '';
+    // Optional-chained on purpose: `namespace_hashes` is declared required but
+    // the declaration is a parse assertion, so an older-epoch manifest may not
+    // carry it at all. The recorded value is still written to the namespace
+    // node's `content_hash` even across an epoch difference, so a subsequent
+    // open delta-skips the re-import instead of redoing it on every open.
+    const manifestHash = manifest.namespace_hashes?.[namespace] ?? '';
     const nsDir = path.join(exportDir, (nsEntry as { directory?: string }).directory ?? namespace);
+
+    // Plan skip, ahead of the delta skip. The delta skip asks "does the database
+    // already hold these bytes?"; this asks "was this namespace stale at all?".
+    // They almost always agree — a namespace the plan left out is S1, which
+    // means its content_hash equals the manifest hash — but the plan is the
+    // authority on scope and saying so explicitly keeps the two independent.
+    if (!plannedNamespaces.has(namespace)) {
+      logger.debug(
+        `skip ${namespace}: not in the load plan (the namespace is S1 — the database already ` +
+        `holds the file version on disk)`,
+        { namespace, reason: 'plan_skip' },
+      );
+      namespacesSkipped.push(namespace);
+      continue;
+    }
 
     // Emit namespace_start before processing (1-based index)
     emitNamespaceProgress('namespace_start', namespace, nsIdx + 1);
@@ -313,6 +747,15 @@ export async function load(
     const existingHash = existingHashes.get(namespace) ?? '';
     if (manifestHash && existingHash === manifestHash) {
       logger.debug(`skip ${namespace}: hash match (${manifestHash.slice(0, 20)}...)`);
+      // A skipped namespace is loaded without its files being read, so a file
+      // corrupted since the last store is not detected here. Sound for the data
+      // and bounded: open rehashes every namespace from disk, and store compares
+      // on-disk hashes. Logged so the window is traceable.
+      logger.debug(
+        `skip ${namespace}: on-disk file integrity not verified; ` +
+        `verification runs only on the re-import path`,
+        { namespace, reason: 'delta_skip' },
+      );
       namespacesSkipped.push(namespace);
       continue;
     }
@@ -329,7 +772,11 @@ export async function load(
     // don't need verification (the DB is already authoritative). For namespaces
     // that will be re-imported, we verify the on-disk JSON hasn't been corrupted
     // or hand-edited since the last store, before we delete existing DB data.
-    if (manifestHash) {
+    //
+    // Suspended across a hash-epoch difference: the recorded hash was computed
+    // by a different algorithm over a different input set, so every namespace
+    // would fail here and abort the very rebuild the epoch rule exists to allow.
+    if (hashEpochMatches && manifestHash) {
       // Collect per-section hash lines on the first (and only) pass.
       // We emit them only on mismatch, so the happy-path log stays clean.
       const sectionLines: string[] = [];
@@ -367,17 +814,13 @@ export async function load(
       try {
         await deleteNamespace(namespace, dbModule, tx);
 
-        const namespaceMetadataPath = path.join(nsDir, 'namespace.json');
-        let namespaceRole = (nsEntry as { namespace_role?: string }).namespace_role ?? '';
-        let namespaceOwningApplication = (nsEntry as { namespace_owning_application?: string }).namespace_owning_application ?? '';
-        if (fs.existsSync(namespaceMetadataPath)) {
-          const nsMeta = JSON.parse(fs.readFileSync(namespaceMetadataPath, 'utf-8')) as {
-            namespace_role?: unknown;
-            namespace_owning_application?: unknown;
-          };
-          if (typeof nsMeta.namespace_role === 'string') namespaceRole = nsMeta.namespace_role;
-          if (typeof nsMeta.namespace_owning_application === 'string') namespaceOwningApplication = nsMeta.namespace_owning_application;
-        }
+        // The manifest entry is the sole authority for namespace identity, and
+        // `assertManifestNamespaceIdentity` has already established that both
+        // fields are present on every entry — so there is nothing to default
+        // and nothing to override. A `<namespace>/namespace.json` left behind by
+        // a pre-1.5.0 store is inert: nothing reads it.
+        const namespaceRole = (nsEntry as { namespace_role?: string }).namespace_role ?? '';
+        const namespaceOwningApplication = (nsEntry as { namespace_owning_application?: string }).namespace_owning_application ?? '';
 
         // Create namespace node
         await tx.runQuery(
@@ -556,17 +999,11 @@ CREATE (:RIA_UNIV_RelationshipInstance {
         await deleteNamespace(namespace, dbModule);
       } catch { /* namespace may not exist yet */ }
 
-      const namespaceMetadataPath = path.join(nsDir, 'namespace.json');
-      let namespaceRole = (nsEntry as { namespace_role?: string }).namespace_role ?? '';
-      let namespaceOwningApplication = (nsEntry as { namespace_owning_application?: string }).namespace_owning_application ?? '';
-      if (fs.existsSync(namespaceMetadataPath)) {
-        const nsMeta = JSON.parse(fs.readFileSync(namespaceMetadataPath, 'utf-8')) as {
-          namespace_role?: unknown;
-          namespace_owning_application?: unknown;
-        };
-        if (typeof nsMeta.namespace_role === 'string') namespaceRole = nsMeta.namespace_role;
-        if (typeof nsMeta.namespace_owning_application === 'string') namespaceOwningApplication = nsMeta.namespace_owning_application;
-      }
+      // Same as the transactional twin above: the manifest entry is the sole
+      // authority, already validated ahead of the loop, and any leftover
+      // `namespace.json` is inert.
+      const namespaceRole = (nsEntry as { namespace_role?: string }).namespace_role ?? '';
+      const namespaceOwningApplication = (nsEntry as { namespace_owning_application?: string }).namespace_owning_application ?? '';
 
       // Create namespace node
       await dbModule.runQuery(
@@ -791,13 +1228,12 @@ CREATE (:RIA_UNIV_RelationshipInstance {
   // namespace loop has (re)created every namespace node. Only connections whose
   // BOTH endpoints are present in the loaded workspace are restored; a connection
   // that references an absent namespace (dangling reference) is the only one
-  // omitted, and an error is surfaced identifying it (Requirement 8.5).
+  // omitted, and an error is surfaced identifying it.
   const connectionsSkipped: { source: string; target: string }[] = [];
   const connFilePath = path.join(exportDir, 'universe', 'RIA_UNIV_NamespaceConnection.json');
-  if (fs.existsSync(connFilePath)) {
+  if (plan.universe && fs.existsSync(connFilePath)) {
     // Clear any existing per-pair edges so the loaded set equals the persisted
     // set exactly — zero connections added, zero removed for present endpoints
-    // (Requirement 8.2).
     await dbModule.runQuery(`MATCH ()-[r:RIA_UNIV_NamespaceConnection]->() DELETE r`);
 
     const connRows = parseTable(fs.readFileSync(connFilePath, 'utf-8'));
@@ -846,7 +1282,7 @@ CREATE (:RIA_UNIV_RelationshipInstance {
   // shared top-level universe/ folder (a sibling of RIA_UNIV_NamespaceConnection.json).
   // Each row is MERGEd by layout_id and every persisted record is restored VERBATIM —
   // including records whose element_kind is not one of the two current values — so the
-  // full stored set survives load unchanged (Requirements 5.2, 5.3, 5.4).
+  // full stored set survives load unchanged.
   //
   // This step does NOT prune dangling references; that is done later by
   // LayoutService.reconcile() (invoked from workspace-service after load). A missing
@@ -854,7 +1290,7 @@ CREATE (:RIA_UNIV_RelationshipInstance {
   // that never positioned an element simply loads no records; a corrupt/unreadable file
   // surfaces a non-fatal error and load continues.
   const layoutFilePath = path.join(exportDir, 'universe', 'RIA_UNIV_CanvasLayout.json');
-  if (fs.existsSync(layoutFilePath)) {
+  if (plan.universe && fs.existsSync(layoutFilePath)) {
     try {
       const layoutRows = parseTable(fs.readFileSync(layoutFilePath, 'utf-8'));
       let layoutRestored = 0;
@@ -863,7 +1299,7 @@ CREATE (:RIA_UNIV_RelationshipInstance {
         if (!layoutId) continue;
         // Parameterize every value so finite doubles outside fixed-notation range
         // (e.g. 1e+21) are stored exactly rather than interpolated as scientific
-        // notation the Cypher parser rejects (Requirements 5.2, 5.3, 5.4).
+        // notation the Cypher parser rejects.
         await dbModule.runQuery(
           `MERGE (l:RIA_UNIV_CanvasLayout {layout_id: $layout_id})
            SET l.element_kind = $element_kind,
@@ -905,7 +1341,7 @@ CREATE (:RIA_UNIV_RelationshipInstance {
   // (docs/coreSpecs/RiaViews.md) and must not be silently resurrected as one.
   const viewsSkipped: { view: string; reason: string }[] = [];
   const viewFilePath = path.join(exportDir, 'universe', 'RIA_UNIV_View.json');
-  if (fs.existsSync(viewFilePath)) {
+  if (plan.universe && fs.existsSync(viewFilePath)) {
     const readViewTable = (file: string): Record<string, unknown>[] => {
       const p = path.join(exportDir, 'universe', file);
       return fs.existsSync(p) ? parseTable(fs.readFileSync(p, 'utf-8')) : [];
@@ -1002,10 +1438,17 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     logger.debug(`universe: restored ${viewsRestored} view definition(s), skipped ${viewsSkipped.length}`);
   }
 
+  // ── Rewire the edges of the layers this run skipped ───────────────────────
+  // Must run after the namespace loop, so every endpoint node exists again, and
+  // before the cross-namespace import, which is unaffected by it.
+  if (skippedEdges) {
+    await rewireSkippedLayerEdges(dbModule, skippedEdges, logger);
+  }
+
   // Cross-namespace layer
   emitProgress(params.onProgress, { phase: 'cross_namespace', message: 'Importing cross-namespace instances...' }, logger);
   const nsRelPath = path.join(exportDir, 'cross_namespace', 'RIA_UNIV_NamespaceRelation.json');
-  if (fs.existsSync(nsRelPath)) {
+  if (plan.crossNamespace && fs.existsSync(nsRelPath)) {
     const rows = parseTable(fs.readFileSync(nsRelPath, 'utf-8'));
     if (rows.length > 0) {
       const batchRows = rows.map(row => ({
@@ -1023,10 +1466,10 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     }
   }
 
-  for (const { file, rel } of [
+  for (const { file, rel } of plan.crossNamespace ? [
     { file: 'RIA_UNIV_NSR_SOURCE.json', rel: 'RIA_UNIV_NSR_SOURCE' },
     { file: 'RIA_UNIV_NSR_TARGET.json', rel: 'RIA_UNIV_NSR_TARGET' },
-  ]) {
+  ] : []) {
     const p = path.join(exportDir, 'cross_namespace', file);
     if (!fs.existsSync(p)) continue;
     const rows = parseTable(fs.readFileSync(p, 'utf-8'));
@@ -1039,7 +1482,7 @@ CREATE (:RIA_UNIV_RelationshipInstance {
 
   const crossNsInstPath = path.join(exportDir, 'cross_namespace', 'RIA_UNIV_CrossNSRelationshipInstance.json');
 
-  if (fs.existsSync(crossNsInstPath)) {
+  if (plan.crossNamespace && fs.existsSync(crossNsInstPath)) {
     const rows = parseTable(fs.readFileSync(crossNsInstPath, 'utf-8'));
     let crossNsInstCount = 0;
     const crossNsInstRows: Record<string, unknown>[] = [];
@@ -1129,6 +1572,22 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     }
     logger.debug(`cross_namespace — ${crossNsInstCount} CrossNSRelationshipInstance records`);
   }
+
+  // ── Record D — the file version this database was synced from (task 5.1) ──
+  // From the manifest values this load just read, plus the digest of the exact
+  // manifest bytes it read. One of only two moments where the system may claim
+  // the database and the files agree; the other is the end of a store.
+  //
+  // Written for the whole origin key space even when the plan skipped a layer.
+  // That is correct rather than sloppy: a skipped layer was skipped BECAUSE its
+  // D already equalled its M, so re-recording the same value changes nothing,
+  // and recording only the loaded keys would delete the others (the write is a
+  // wholesale replacement, by design — see writeSnapshotOrigin).
+  await writeSnapshotOrigin(
+    dbModule,
+    originFromManifest(manifest, manifestBytes),
+    logger,
+  );
 
   const elapsed = Date.now() - loadStart;
   const failSuffix = totalRelationshipsFailed > 0 ? `, relationships_failed=${totalRelationshipsFailed}` : '';

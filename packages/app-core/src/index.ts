@@ -20,6 +20,13 @@
 export { createDbModule, DbGenerationChangedError } from './db/db-module.js';
 export type { IDbModule, AppCoreLogger } from './db/db-module.js';
 export { SCHEMA_VERSION, DB_SCHEMA_VERSION_TABLE, DB_SCHEMA_VERSION_NODE_ID } from './db/schema.js';
+export {
+  MIN_READABLE_SCHEMA_VERSION,
+  classifySchemaCompatibility,
+  compareSchemaVersions,
+  describeIncompatibleSchema,
+} from './db/schema-compat.js';
+export type { SchemaCompatibility, SchemaIncompatibilityReason } from './db/schema-compat.js';
 export { createWorkspaceService } from './workspace/workspace-service.js';
 export type { IWorkspaceService } from './workspace/workspace-service.js';
 export {
@@ -41,6 +48,7 @@ export {
 } from './workspace/snapshot-baseline.js';
 export type {
   ManifestHashes,
+  ManifestHashesRead,
   SnapshotBaseline,
   SnapshotDriftDetails,
 } from './workspace/snapshot-baseline.js';
@@ -106,6 +114,39 @@ export type { ISafetyCommands, CreateMalfunctionParams, CreateTagParams, Malfunc
   CreateRiskRatingParams, ReviewItemData, DeleteImpactPreview } from './safety/safety-commands.js';
 export { createPersistorService, computeNamespaceHashFromFiles } from './persistor/persistor.js';
 export type { IPersistorService, StoreResult, LoadResult, LoadProgressEvent, OnLoadProgress, PersistorLoadParams, RepairManifestResult, Manifest } from './persistor/persistor.js';
+export { buildSyncReport, formatSyncReport } from './workspace/sync-report.js';
+export {
+  classifyRiaData,
+  evaluateSyncStates,
+  describeUnusableManifest,
+} from './workspace/sync-evaluation.js';
+export type { RiaDataClassification, SyncEvaluation } from './workspace/sync-evaluation.js';
+export {
+  classifySyncState,
+  planLoad,
+  resolveOutcome,
+} from './workspace/sync-state.js';
+export type {
+  SyncState,
+  SyncDomain,
+  SyncDomainKind,
+  SyncHashes,
+  DomainStateEntry,
+  LoadPlan,
+  SyncOutcome,
+  DecisionReason,
+} from './workspace/sync-state.js';
+export {
+  getPendingSyncDecision,
+  setPendingSyncDecision,
+} from './workspace/snapshot-baseline.js';
+export {
+  readSnapshotOrigin,
+  writeSnapshotOrigin,
+  originFromManifest,
+  MANIFEST_ORIGIN_KEY,
+} from './persistor/snapshot-origin.js';
+export type { SnapshotOrigin } from './persistor/snapshot-origin.js';
 export { createAutoSaveCoordinator, DEFAULT_AUTO_SAVE_DEBOUNCE_MS } from './persistor/auto-save-coordinator.js';
 export type { IAutoSaveCoordinator, AutoSaveCoordinatorDeps, AutoSaveFlushResult } from './persistor/auto-save-coordinator.js';
 export { createCommandDispatcher } from './dispatch/index.js';
@@ -116,6 +157,10 @@ export { ensureSourceConfigData } from './dispatch/index.js';
 export { e } from './dispatch/index.js';
 export { extractNodeName } from './dispatch/index.js';
 export { resolveAncestorPath } from './dispatch/index.js';
+// The single anchor rule for paths stored in import configs and on Source nodes,
+// re-exported so hosts (the CLI) get it without depending on importer-sdk
+// directly. See importer-sdk/src/config-paths.ts for the rule itself.
+export { resolveWorkspacePath, toWorkspaceRelative, normalizeStoredPath } from '@riacore/importer-sdk';
 export { createLoadGate, READ_ONLY_EXEMPTION_SET } from './dispatch/load-gating.js';
 export type { LoadGate, GatedResult } from './dispatch/load-gating.js';
 export { createDiffService } from './diff/diff-service.js';

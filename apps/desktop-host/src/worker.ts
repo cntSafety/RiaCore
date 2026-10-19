@@ -62,7 +62,7 @@ let autoSave: IAutoSaveCoordinator;
 
 function sendLog(level: WorkerLog['level'], message: string, context?: Record<string, unknown>): void {
   const logMessage: WorkerLog = { type: 'log', level, message, context };
-  process.send?.(logMessage);
+  send(logMessage);
 }
 
 async function initialize(): Promise<void> {
@@ -84,7 +84,7 @@ async function initialize(): Promise<void> {
     (workingDir) => createPersistorService(dbModule, loggers.workspace(workingDir)),
     (event: LoadProgressPushEvent) => {
       const msg: WorkerLoadProgress = { type: 'loadProgress', event };
-      process.send?.(msg);
+      send(msg);
     },
     logger,
   );
@@ -133,7 +133,7 @@ async function initialize(): Promise<void> {
     llmStreamSink: {
       send(_channel: string, payload: unknown): void {
         const msg: WorkerLlmStream = { type: 'llmStream', event: payload as LlmStreamEvent };
-        process.send?.(msg);
+        send(msg);
       },
       isDestroyed(): boolean {
         // The worker process is never "destroyed" while running; the main
@@ -152,7 +152,33 @@ async function initialize(): Promise<void> {
 }
 
 function send(msg: WorkerMessage): void {
-  process.send!(msg);
+  // The parent can disappear during a crash or installer cleanup. A callback
+  // consumes an IPC close race instead of raising another uncaught exception.
+  if (process.connected) process.send?.(msg, () => {});
+}
+
+let shutdownPending = false;
+function shutdownWorker(): void {
+  if (shutdownPending) return;
+  shutdownPending = true;
+  const deadline = setTimeout(() => process.exit(1), 5000);
+  deadline.unref();
+  void (async () => {
+    try {
+      await autoSave?.flush();
+    } catch (err) {
+      sendLog('warn', 'Auto-save flush on shutdown failed', { error: String(err) });
+    }
+    try {
+      await workspaceService?.close();
+    } catch (err) {
+      sendLog('warn', 'Workspace close on shutdown failed', { error: String(err) });
+    } finally {
+      clearTimeout(deadline);
+      sendLog('info', 'Worker shutdown completed');
+      process.exit(0);
+    }
+  })();
 }
 
 // Requests are routed through the shared load gate (see initialize()). The gate
@@ -165,15 +191,7 @@ function handleMessage(data: MainMessage): void {
     // Flush any debounced Auto_Save before releasing the DB handle, otherwise a
     // mutation made within the debounce window of shutdown is lost. Never
     // rejects — a failed flush must not block shutdown.
-    autoSave.flush()
-      .catch((err) => sendLog('warn', 'Auto-save flush on shutdown failed', {
-        error: err instanceof Error ? err.message : String(err),
-      }))
-      .then(() => workspaceService.close())
-      .then(() => {
-        sendLog('info', 'Worker shutdown completed');
-        process.exit(0);
-      });
+    shutdownWorker();
     return;
   }
 
@@ -246,4 +264,7 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+// A crashed or force-closed Electron parent cannot send a shutdown message.
+// Release database/native handles rather than keeping an orphan node.exe alive.
+process.once('disconnect', shutdownWorker);
+void main();

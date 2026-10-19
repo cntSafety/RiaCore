@@ -982,8 +982,8 @@ export function createViewService(
               queryIds.push(baseQueryId);
             } else {
               // The mapping's source data simply never produces this
-              // relationship — e.g. Sphinx-Needs has no `Ownership` hierarchy,
-              // only `Refinement`. Zero reachable neighbours is a legitimate
+              // relationship — e.g. Sphinx-Needs has no `Expose` ports.
+              // Zero reachable neighbours is a legitimate
               // traversal answer, not a fatal error: erroring here is what used
               // to surface as "Catalog entry '<mapping>.traversal' ... was not
               // found" the moment a user opened the model view on a Sphinx-Needs

@@ -26,6 +26,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { ProvisionConfigParams, ProvisionConfigResult, ImportConfigData } from '@riacore/app-contracts';
 import type { Result } from '@riacore/app-contracts';
 import type { IImporterRegistry } from './importer-registry.js';
@@ -175,10 +176,16 @@ export function createProvisioningService(registry: IImporterRegistry, dbModule?
       }
 
       if (dbModule && configPath) {
-        const sourceMetaWithPath = JSON.stringify({ configPath, configDirty: true });
+        // Persist the workspace-relative form. This is the source's first
+        // config_path, and it ends up in ria-data/sourcemaster/, which is
+        // committed — an absolute path here does not survive a clone, a
+        // different checkout location, or another OS. The YAML always lands
+        // under <workingDir>/ria-config/, so a relative form always exists.
+        const storedConfigPath = toWorkspaceRelative(workingDir, configPath);
+        const sourceMetaWithPath = JSON.stringify({ configPath: storedConfigPath, configDirty: true });
         await dbModule.runQuery(
           `MATCH (s:RIA_SRC_Source) WHERE s.source_id = '${esc(sourceId)}'
-           SET s.config_path = '${esc(configPath)}',
+           SET s.config_path = '${esc(storedConfigPath)}',
                s.config = '${esc(sourceMetaWithPath)}'`,
         );
       }

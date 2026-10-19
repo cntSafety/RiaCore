@@ -58,6 +58,8 @@ app.setName('RiaCore');
 /** Exported so the shutdown handler (Task 6.2) can access it. */
 export let manager: UtilityProcessManager;
 
+let isQuitting = false;
+
 /**
  * File-backed store for LLM settings and the encrypted Bedrock credential
  * blob. Constructed in the Electron main process because it depends on
@@ -149,6 +151,10 @@ function attachNativeEditContextMenu(win: BrowserWindow): void {
 }
 
 async function bootstrap(): Promise<void> {
+  // The second-instance event can arrive while the worker is still starting.
+  // Keep its window reference initialized before registering the listener.
+  let activationWindow: BrowserWindow | null = null;
+  let activationRequested = false;
   // Disable WPAD proxy auto-discovery — on corporate Windows networks this
   // causes a ~20 second timeout on the first network request from the renderer.
   // The renderer only connects to localhost (Vite dev server) or loads local
@@ -173,16 +179,46 @@ async function bootstrap(): Promise<void> {
     return;
   }
   app.on('second-instance', (_event, _argv, _workingDirectory) => {
-    // A second RIA launch was attempted. Focus and restore the existing window.
-    // The second process has already been told to quit by Electron.
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    if (isQuitting) return;
+    activationRequested = true;
+    if (activationWindow && !activationWindow.isDestroyed()) {
+      if (activationWindow.isMinimized()) activationWindow.restore();
+      activationWindow.focus();
     }
-    getAppLogger().info('Second RIA instance launch rejected; focused existing window');
+    getAppLogger().info('Second RIA launch forwarded to the primary instance');
+  });
+
+  // Keep the worker available for the renderer's final save requests.
+  let shutdownComplete = false;
+  let shutdownPending = false;
+  app.on('before-quit', () => { isQuitting = true; });
+  app.on('will-quit', (event) => {
+    if (shutdownComplete) return;
+    event.preventDefault();
+    if (shutdownPending) return;
+    shutdownPending = true;
+    void (async () => {
+      try {
+        await manager?.shutdown();
+      }
+      catch (err) { getAppLogger().error('Worker shutdown failed', { error: String(err) }); }
+      finally {
+        shutdownComplete = true;
+        app.quit();
+      }
+    })();
+  });
+  app.on('window-all-closed', () => app.quit());
+  app.on('browser-window-created', (_event, window) => {
+    window.on('query-session-end', (event: Electron.WindowSessionEndEvent) => {
+      if (!event.reasons.includes('close-app') || shutdownComplete) return;
+      event.preventDefault();
+      app.quit();
+    });
   });
 
   await app.whenReady();
+  if (isQuitting) return;
 
   // --- About panel & application menu ---
   // In dev, icons are relative to dist/. In packaged builds, the icon is
@@ -294,6 +330,14 @@ async function bootstrap(): Promise<void> {
             (focusedWindow as BrowserWindow | undefined)?.webContents.send(
               'menu.reportAction', 'export-xlsx'
             );
+          },
+        },
+        {
+          id: 'report-export-okf',
+          label: 'Export Safety Report (OKF)',
+          enabled: false,
+          click: (_item, focusedWindow) => {
+            (focusedWindow as BrowserWindow | undefined)?.webContents.send('menu.reportAction', 'export-okf');
           },
         },
         {
@@ -519,9 +563,11 @@ async function bootstrap(): Promise<void> {
     const menu = Menu.getApplicationMenu();
     const sphinxItem = menu?.getMenuItemById('report-export-sphinx-needs');
     const xlsxItem   = menu?.getMenuItemById('report-export-xlsx');
+    const okfItem    = menu?.getMenuItemById('report-export-okf');
     const cardsItem  = menu?.getMenuItemById('report-show-status-cards');
     if (sphinxItem) sphinxItem.enabled = state.active;
     if (xlsxItem)   xlsxItem.enabled   = state.active;
+    if (okfItem)    okfItem.enabled    = state.active;
     if (cardsItem)  cardsItem.enabled  = state.active;
   });
 
@@ -592,6 +638,7 @@ async function bootstrap(): Promise<void> {
   // Requirements: 1.1, 1.2
   manager = new UtilityProcessManager({ appVersion });
   await manager.start();
+  if (isQuitting) return;
   logger.info('Utility process manager started');
 
   // Register IPC relay — delegates every channel to the utility process.
@@ -892,6 +939,7 @@ async function bootstrap(): Promise<void> {
       sandbox: true,
     },
   });
+  activationWindow = mainWindow;
   attachNativeEditContextMenu(mainWindow);
 
   // Inject the persisted-theme splash CSS as early as possible so Chromium's
@@ -936,16 +984,22 @@ async function bootstrap(): Promise<void> {
   // opacity to 1 here triggers no Win11 window-open animation, unlike calling
   // show() on a hidden window.
   //
-  // Fallback: if the signal never arrives (e.g. renderer crash, very slow
-  // startup, slow first import), reveal 5 seconds after `did-finish-load`
-  // so the user is never stuck with no window. The splash CSS injected
-  // above keeps the canvas themed if the fallback fires before antd renders.
+  // Bound the invisible period even if did-finish-load never arrives.
   let mainWindowShown = false;
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
   const showMainWindowOnce = () => {
     if (mainWindowShown || mainWindow.isDestroyed()) return;
     mainWindowShown = true;
+    clearTimeout(revealTimer);
     mainWindow.setOpacity(1);
+    if (activationRequested) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      activationRequested = false;
+    }
   };
+  revealTimer = setTimeout(showMainWindowOnce, 10_000);
+  revealTimer.unref();
   const paintReadyListener = (event: Electron.IpcMainEvent) => {
     if (event.sender === mainWindow.webContents) {
       ipcMain.removeListener('window.paintReady', paintReadyListener);
@@ -959,57 +1013,56 @@ async function bootstrap(): Promise<void> {
   };
   ipcMain.on('window.paintReady', paintReadyListener);
   mainWindow.on('closed', () => {
+    activationWindow = null;
+    clearTimeout(revealTimer);
     ipcMain.removeListener('window.paintReady', paintReadyListener);
   });
-  mainWindow.webContents.once('did-finish-load', () => {
-    setTimeout(showMainWindowOnce, 5000);
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    logger.error('Renderer failed to load', { code, description, url, isMainFrame });
   });
 
   // Register the main window with the Invalidation_Bus.
   // Requirements: 15.3
   invalidationBus.registerWindow(mainWindow);
 
+  mainWindow.on('close', () => {
+    void Promise.allSettled([graphCoreWindowManager.close(), spawnManager.close()]).then(results => {
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          logger.error('Failed to close an auxiliary window during shutdown', { error: String(result.reason) });
+        }
+      }
+    });
+  });
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     logger.info('Loading renderer from dev server', { devUrl });
     await mainWindow.loadURL(devUrl);
   } else {
-    logger.info('Loading packaged renderer file');
-    await mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    const rendererPath = path.join(__dirname, '../renderer/index.html');
+    logger.info('Loading packaged renderer file', { rendererPath });
+    try {
+      if (!statSync(rendererPath).size) throw new Error('The renderer entry file is empty');
+      await mainWindow.loadFile(rendererPath);
+    } catch (err) {
+      throw new Error(`Unable to load the RiaCore application page at ${rendererPath}. ` +
+        `Reinstall RiaCore using the complete installer. ${String(err)}`, { cause: err });
+    }
   }
-
-  // Shutdown ordering: close Graph-Core window and Spawn_Window before the worker shuts down.
-  // Requirements: 10.1, 10.2, 10.3, 3.8
-  mainWindow.on('close', () => {
-    // DIAGNOSTIC (temporary): correlate window-close timestamp against the
-    // last persistor.store / canvas-mutation log lines to investigate the
-    // intermittent missing-tile/missing-connection bug on reopen. Remove
-    // once root-caused.
-    logger.info('[DIAG] Main window close event fired', { ts: new Date().toISOString() });
-    graphCoreWindowManager.close().catch((err) => {
-      logger.error('Failed to close Graph-Core window during main-window shutdown', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-    spawnManager.close().catch((err) => {
-      logger.error('Failed to close Spawn_Window during main-window shutdown', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  });
-
-  // Requirement 1.4, 7.1, 7.3 — graceful shutdown before quitting
-  app.on('window-all-closed', async () => {
-    logger.info('All windows closed; beginning shutdown');
-    await manager.shutdown();
-    app.quit();
-  });
 }
 
-bootstrap().catch((err) => {
+bootstrap().catch(async (err) => {
+  if (isQuitting) return;
+  isQuitting = true;
   const logger = app.isReady() ? getAppLogger() : null;
   logger?.fatal('Bootstrap failed', { error: err instanceof Error ? err.message : String(err) });
   console.error('[RiaCore] Bootstrap failed:', err);
+  try {
+    await manager?.shutdown();
+  } catch (shutdownError) {
+    logger?.error('Worker cleanup after startup failure failed', { error: String(shutdownError) });
+  }
   dialog.showErrorBox(
     'RiaCore Startup Error',
     `The application failed to start:\n\n${String(err)}`

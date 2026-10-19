@@ -18,46 +18,27 @@
  *
  */
 /**
- * Snapshot baseline — the record of WHAT CONTENT the in-memory database was
+ * Snapshot baseline -- the record of WHAT CONTENT the in-memory database was
  * loaded from, and the drift check built on top of it.
  *
- * See docs/coreSpecs/RiaDataChangeDetection.md (Steps 1 and 2).
- *
- * ## Why this exists
- *
  * `ria-data/` is a per-branch artifact; `db` is a branch-agnostic cache at a
- * fixed path. Without a record of which snapshot the DB was built from, a
- * `persistor.store` cannot tell these two situations apart:
+ * fixed path. Without a record of which snapshot the DB was built from, a store
+ * cannot tell "the files on disk moved under me" (refuse) from "I have unsaved
+ * changes" (write). The DB's own `content_hash` cannot serve as that record: the
+ * instance service invalidates it on the first edit, precisely when the baseline
+ * matters most.
  *
- *   1. "The files on disk moved under me"  → must refuse (git checkout, pull,
- *      reset, stash pop, a restore from backup, a concurrent CLI store).
- *   2. "I have unsaved changes"            → must write (the normal save path).
- *
- * The DB's own `content_hash` cannot serve as that record, because the instance
- * service deliberately invalidates it (`content_hash = ''`) the moment the user
- * edits anything — precisely when the baseline is needed most. Hence a separate,
- * explicitly stamped baseline.
- *
- * ## Why a module-level store rather than DI
- *
- * The writer is `workspace-service.ts` and the reader is `persistor-store.ts`.
- * Routing the baseline through constructor injection would mean threading it
- * through `persistorFactory` at six call sites (worker, web-dev-server, CLI
- * `_shared`, three CLI commands) and would still leave the hole that matters:
- * the auto-save coordinator calls `persistorFactory(wd).store(...)` DIRECTLY,
- * bypassing the command dispatcher. A caller that forgets to pass the baseline
- * silently loses the protection, and auto-save is the exact path the reported
- * bug travels. A module-level store keyed by working directory cannot be
- * bypassed by forgetting a parameter.
- *
- * Keyed by resolved working directory so parallel tests on separate temp
- * directories cannot collide.
+ * A module-level store keyed by resolved working directory rather than DI: the
+ * auto-save coordinator calls `persistorFactory(wd).store(...)` directly,
+ * bypassing the dispatcher, so a parameter a caller can forget would silently
+ * lose the protection on the exact path the bug travels.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   SNAPSHOT_DRIFT_CODE,
+  type PendingSyncDecision,
   type SnapshotDriftInfo,
   type SnapshotSyncReason,
 } from '@riacore/app-contracts';
@@ -77,6 +58,15 @@ export interface SnapshotBaseline {
   namespaceHashes: Record<string, string>;
   /** `manifest.json` → `universe_hashes` as of the stamp. */
   universeHashes: Record<string, string>;
+  /**
+   * `manifest.json` → `sourcemaster_hashes` as of the stamp. Compared, like the
+   * namespace and universe maps: a branch switch that changed only import-source
+   * configuration is a real content change, and before this layer was hashed the
+   * next store overwrote the committed config with no warning.
+   */
+  sourcemasterHashes: Record<string, string>;
+  /** Cross-namespace file hashes, including relation metadata independent of namespace content. */
+  crossNamespaceHashes: Record<string, string>;
   /** `manifest.json` → `meta_hash` as of the stamp. Recorded, not gated — see `detectDrift`. */
   metaHash: string | null;
 
@@ -123,6 +113,13 @@ export interface SnapshotDriftDetails {
   changedNamespaces: string[];
   /** True when a universe-layer file hash no longer matches the baseline. */
   universeChanged: boolean;
+  /**
+   * True when a sourcemaster-layer file hash (the serialized import-source and
+   * import-run records) no longer matches the baseline.
+   */
+  sourcemasterChanged: boolean;
+  /** True when cross-namespace relation files changed, even if namespaces did not. */
+  crossNamespaceChanged: boolean;
   /** Branch the DB content belongs to. Null outside a repository. */
   dbBranch: string | null;
   /** Branch checked out right now. Null outside a repository. */
@@ -131,6 +128,20 @@ export interface SnapshotDriftDetails {
   dbCommit: string | null;
   /** HEAD commit checked out right now. Null outside a repository. */
   diskCommit: string | null;
+  /**
+   * The manifest is present but could not be parsed. The change lists are empty
+   * because nothing could be compared — the refusal rests on the unreadability
+   * itself, not on an observed difference.
+   */
+  manifestUnreadable: boolean;
+  /**
+   * Set when the last workspace open's per-domain evaluation ended in
+   * `needs_decision`. A store is refused on this alone, with every change list
+   * empty: the open-time evaluation found that this database did not come from
+   * these files, which `detectDrift` cannot see because the baseline it compares
+   * against was stamped from the very same files moments earlier.
+   */
+  pendingDecision: PendingSyncDecision | null;
 }
 
 /**
@@ -162,8 +173,37 @@ export class SnapshotDriftError extends Error {
 export interface ManifestHashes {
   namespaceHashes: Record<string, string>;
   universeHashes: Record<string, string>;
+  /**
+   * Empty for a manifest written before `sourcemaster_hashes` existed. Both
+   * sides of the comparison default the same way, so an older manifest compares
+   * equal rather than reporting phantom drift on the whole layer.
+   */
+  sourcemasterHashes: Record<string, string>;
+  /** Cross-namespace file hashes, including relation metadata independent of namespace content. */
+  crossNamespaceHashes: Record<string, string>;
   metaHash: string | null;
 }
+
+/**
+ * The outcome of reading `manifest.json` for drift purposes.
+ *
+ * Three outcomes, not two: the previous `ManifestHashes | null` conflated "no
+ * manifest" (a legitimate Case A state) with "a manifest that cannot be
+ * parsed". Callers read the collapsed `null` as "no comparison possible" and
+ * let the store proceed, which turned the write fence OFF at exactly the moment
+ * the on-disk evidence was least trustworthy.
+ *
+ * **Rejected: a `manifest.json` self-hash field.** A hash stored inside the
+ * manifest is exactly as unreadable as the rest of the manifest in the failure
+ * case this classifier exists to fix — it could only be checked after a
+ * successful parse, which is the case that already works. Do not re-propose it.
+ */
+export type ManifestHashesRead =
+  | { kind: 'ok'; hashes: ManifestHashes }
+  /** Legitimate: Case A, a brand-new workspace whose first store has not run. */
+  | { kind: 'absent' }
+  /** Present but not parseable: truncated, half-written, or corrupt. Never fail open. */
+  | { kind: 'unreadable'; reason: string };
 
 // ── Baseline store ───────────────────────────────────────────────────────────
 
@@ -174,35 +214,66 @@ function keyFor(workingDir: string): string {
 }
 
 /**
- * Read the hashes out of `{workingDir}/ria-data/manifest.json`.
+ * Read the hashes out of `{workingDir}/ria-data/manifest.json`, classifying the
+ * read rather than collapsing every failure into one value.
  *
- * Returns null when there is no manifest or it is unreadable — which is a
- * legitimate state (Case A, a brand-new workspace), not an error.
+ * `absent` is a legitimate state (Case A, a brand-new workspace whose first
+ * store has not run). `unreadable` is not: a truncated, half-written or corrupt
+ * manifest means the on-disk state cannot be characterised at all, and callers
+ * must not treat that as "nothing changed".
  *
  * Cheap by construction: no file hashing. The manifest already carries the
  * hashes. The expensive integrity check that recomputes hashes FROM the files
  * (`computeNamespaceHashFromFiles`) stays where it belongs, in
  * `checkConsistency` at open time.
  */
-export function readManifestHashes(workingDir: string): ManifestHashes | null {
+export function readManifestHashes(workingDir: string): ManifestHashesRead {
   const manifestPath = path.join(workingDir, 'ria-data', 'manifest.json');
+
+  let raw: string;
   try {
-    const raw = fs.readFileSync(manifestPath, 'utf-8');
+    raw = fs.readFileSync(manifestPath, 'utf-8');
+  } catch (err) {
+    // ENOENT is the only outcome that means "there is no manifest". Anything
+    // else (EACCES, EISDIR, EBUSY, an I/O error) means a manifest may well be
+    // there and we simply cannot see it, which is the unreadable case.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'unreadable', reason: `cannot read manifest.json: ${describeError(err)}` };
+  }
+
+  try {
     const manifest = JSON.parse(raw) as {
       namespace_hashes?: Record<string, string>;
       universe_hashes?: Record<string, string>;
+      sourcemaster_hashes?: Record<string, string>;
+      cross_namespace_hashes?: Record<string, string>;
       meta_hash?: string;
-    };
+    } | null;
+    // A JSON file whose top level is not an object carries no hashes and is not
+    // a manifest, so reading its fields would silently yield empty maps.
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+      return { kind: 'unreadable', reason: 'manifest.json is not a JSON object' };
+    }
     return {
-      namespaceHashes: manifest.namespace_hashes ?? {},
-      universeHashes: manifest.universe_hashes ?? {},
-      metaHash: manifest.meta_hash ?? null,
+      kind: 'ok',
+      hashes: {
+        namespaceHashes: manifest.namespace_hashes ?? {},
+        universeHashes: manifest.universe_hashes ?? {},
+        // Absent until the store writes it. Defaulting to `{}` on both the
+        // baseline and the on-disk side is what keeps a pre-`sourcemaster_hashes`
+        // manifest from reading as a whole-layer change.
+        sourcemasterHashes: manifest.sourcemaster_hashes ?? {},
+        crossNamespaceHashes: manifest.cross_namespace_hashes ?? {},
+        metaHash: manifest.meta_hash ?? null,
+      },
     };
-  } catch {
-    // Missing, partially written, or corrupt. Callers treat null as
-    // "no comparison possible", never as drift.
-    return null;
+  } catch (err) {
+    return { kind: 'unreadable', reason: `manifest.json is not parseable: ${describeError(err)}` };
   }
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -257,7 +328,8 @@ export function stampBaseline(
     reason?: SnapshotSyncReason;
   },
 ): SnapshotBaseline {
-  const hashes = readManifestHashes(workingDir);
+  const read = readManifestHashes(workingDir);
+  const hashes = read.kind === 'ok' ? read.hashes : null;
   const repoDir = findRepoRoot(workingDir);
   const now = new Date().toISOString();
   const previous = baselines.get(keyFor(workingDir));
@@ -265,6 +337,11 @@ export function stampBaseline(
   const baseline: SnapshotBaseline = {
     namespaceHashes: hashes?.namespaceHashes ?? {},
     universeHashes: hashes?.universeHashes ?? {},
+    // Must be read here, not left empty. `detectDrift` compares this map, so a
+    // baseline that omitted it would hold `{}` against a populated on-disk map
+    // and report sourcemaster drift on the very first check after every open.
+    sourcemasterHashes: hashes?.sourcemasterHashes ?? {},
+    crossNamespaceHashes: hashes?.crossNamespaceHashes ?? {},
     metaHash: hashes?.metaHash ?? null,
     repoDir,
     branch: repoDir ? readCurrentBranch(repoDir) : null,
@@ -274,11 +351,22 @@ export function stampBaseline(
     stampReason: opts?.reason ?? null,
   };
   baselines.set(keyFor(workingDir), baseline);
+  if (read.kind === 'unreadable') {
+    // Louder than the normal debug line: a baseline stamped from an unreadable
+    // manifest holds empty hash maps, so it can compare against nothing. The
+    // store fence catches the condition itself via `detectDrift`, but the only
+    // record of WHY the baseline is empty is this line.
+    logger?.warn?.('[baseline] stamped from an unreadable manifest — baseline has no hashes', {
+      workingDir,
+      reason: read.reason,
+      stampReason: baseline.stampReason ?? '(unspecified)',
+    });
+  }
   logger?.debug?.('[baseline] stamped', {
     workingDir,
     namespaces: Object.keys(baseline.namespaceHashes).length,
     branch: baseline.branch,
-    hadManifest: hashes !== null,
+    manifest: read.kind,
     reason: baseline.stampReason ?? '(unspecified)',
   });
   return baseline;
@@ -292,43 +380,91 @@ export function getBaseline(workingDir: string): SnapshotBaseline | null {
 /** Forget the baseline for `workingDir`. Called on workspace close. */
 export function clearBaseline(workingDir: string): void {
   baselines.delete(keyFor(workingDir));
+  pendingDecisions.delete(keyFor(workingDir));
 }
 
 /** Forget every baseline. Test helper; not used in production code. */
 export function clearAllBaselines(): void {
   baselines.clear();
+  pendingDecisions.clear();
+}
+
+// ── Pending sync decision ────────────────────────────────────────────────────
+//
+// Held beside the baseline, and for the same reason: `persistor.store` is
+// reached from the auto-save coordinator without going through the dispatcher,
+// so a parameter a caller can forget would lose the protection on exactly the
+// path the bug travels.
+//
+// The open path writes it (null when nothing is pending). A successful explicit
+// full Store resolves it, and `clearBaseline` drops it on close.
+
+const pendingDecisions = new Map<string, PendingSyncDecision>();
+
+/**
+ * Record — or clear, with null — the domains the last open could not resolve.
+ * Set by the workspace open path; also cleared after an explicit full Store.
+ */
+export function setPendingSyncDecision(
+  workingDir: string,
+  decision: PendingSyncDecision | null,
+): void {
+  const key = keyFor(workingDir);
+  if (decision === null || decision.domains.length === 0) pendingDecisions.delete(key);
+  else pendingDecisions.set(key, decision);
+}
+
+/** The outstanding decision for `workingDir`, or null. */
+export function getPendingSyncDecision(workingDir: string): PendingSyncDecision | null {
+  return pendingDecisions.get(keyFor(workingDir)) ?? null;
 }
 
 // ── Drift detection ──────────────────────────────────────────────────────────
 
 /**
- * Compare the on-disk `manifest.json` against the recorded baseline.
+ * Compare the on-disk `manifest.json` against the recorded baseline. Returns
+ * null when there is no drift, or when no comparison is possible.
  *
- * Returns null when there is no drift, or when no comparison is possible.
+ * Fail-closed when the manifest is present but unreadable: that is positive
+ * evidence the on-disk state cannot be characterised, so the result is drift
+ * with `manifestUnreadable` and empty change lists. An ABSENT manifest returns
+ * null, since there is nothing on disk to overwrite.
  *
- * **Fail-open when there is no baseline.** A persistor constructed directly —
- * which several CLI commands and tests do — has never been through
- * `workspaceService.open()`, so nothing stamped a baseline. Refusing those
- * stores would break existing callers for no safety gain, because without a
- * baseline there is no evidence of drift either way. Every path that opens a
- * workspace through the workspace service stamps one, so in the running
- * application a baseline is always present.
+ * Fail-open when there is no baseline: a directly constructed persistor never
+ * went through `workspaceService.open()`, and without a baseline there is no
+ * evidence of drift either way.
  *
- * **What is compared:** namespace hashes and universe hashes. `metaHash` is
- * recorded on the baseline but deliberately not gated on in this first version:
- * `writeDefaultChecks` runs on every open and the meta layer is rewritten by
- * several open-time repair paths, so gating on it risks false refusals. The
- * trade is that an external change touching ONLY the meta layer is not caught
- * here; it is still caught by `checkConsistency` at the next open.
+ * Compares namespace, universe, sourcemaster and cross-namespace hashes. `metaHash` is recorded
+ * but deliberately not compared -- the application rewrites `meta/` at open, so
+ * the fence would otherwise refuse saves for its own change. That difference is
+ * caught at open as `db_stale` instead.
  */
 export function detectDrift(workingDir: string): SnapshotDriftDetails | null {
   const baseline = getBaseline(workingDir);
   if (!baseline) return null;
 
-  const onDisk = readManifestHashes(workingDir);
-  // No manifest on disk: nothing to compare against. A brand-new workspace
-  // whose first store has not run yet lands here.
-  if (!onDisk) return null;
+  const read = readManifestHashes(workingDir);
+  // No manifest on disk: nothing to compare against, and nothing to overwrite.
+  // A brand-new workspace whose first store has not run yet lands here.
+  if (read.kind === 'absent') return null;
+  if (read.kind === 'unreadable') {
+    // Drift with no named changes. The change lists are empty because nothing
+    // could be compared, not because nothing changed — `describeDrift` and the
+    // dialog read `manifestUnreadable` to tell those two apart.
+    return {
+      changedNamespaces: [],
+      universeChanged: false,
+      sourcemasterChanged: false,
+      crossNamespaceChanged: false,
+      dbBranch: baseline.branch,
+      diskBranch: baseline.repoDir ? readCurrentBranch(baseline.repoDir) : null,
+      dbCommit: baseline.headCommit,
+      diskCommit: baseline.repoDir ? readHeadCommit(baseline.repoDir) : null,
+      manifestUnreadable: true,
+      pendingDecision: getPendingSyncDecision(workingDir),
+    };
+  }
+  const onDisk = read.hashes;
 
   const changedNamespaces: string[] = [];
   // Union of both sides, so an externally ADDED or REMOVED namespace entry
@@ -356,15 +492,45 @@ export function detectDrift(workingDir: string): SnapshotDriftDetails | null {
     }
   }
 
-  if (changedNamespaces.length === 0 && !universeChanged) return null;
+  // Same union-of-both-sides shape as the two maps above, so a sourcemaster file
+  // added or removed on disk counts as drift and not only a changed hash. Both
+  // maps default to `{}` when the manifest predates the carrier, so an older
+  // manifest compares equal here rather than reporting the layer as changed.
+  let sourcemasterChanged = false;
+  const sourcemasterFiles = new Set([
+    ...Object.keys(baseline.sourcemasterHashes),
+    ...Object.keys(onDisk.sourcemasterHashes),
+  ]);
+  for (const file of sourcemasterFiles) {
+    if (baseline.sourcemasterHashes[file] !== onDisk.sourcemasterHashes[file]) {
+      sourcemasterChanged = true;
+      break;
+    }
+  }
+
+  // Cross-namespace metadata can change without changing any namespace hash.
+  // Compare both key sets to protect additions and removals as well as edits.
+  const crossNamespaceFiles = new Set([
+    ...Object.keys(baseline.crossNamespaceHashes),
+    ...Object.keys(onDisk.crossNamespaceHashes),
+  ]);
+  const crossNamespaceChanged = [...crossNamespaceFiles].some(
+    file => baseline.crossNamespaceHashes[file] !== onDisk.crossNamespaceHashes[file],
+  );
+
+  if (changedNamespaces.length === 0 && !universeChanged && !sourcemasterChanged && !crossNamespaceChanged) return null;
 
   return {
     changedNamespaces,
     universeChanged,
+    sourcemasterChanged,
+    crossNamespaceChanged,
     dbBranch: baseline.branch,
     diskBranch: baseline.repoDir ? readCurrentBranch(baseline.repoDir) : null,
     dbCommit: baseline.headCommit,
     diskCommit: baseline.repoDir ? readHeadCommit(baseline.repoDir) : null,
+    manifestUnreadable: false,
+    pendingDecision: getPendingSyncDecision(workingDir),
   };
 }
 
@@ -374,7 +540,70 @@ export function detectDrift(workingDir: string): SnapshotDriftDetails | null {
  * back to naming what changed. The DECISION never depends on them.
  */
 export function describeDrift(details: SnapshotDriftDetails): string {
-  const { changedNamespaces, universeChanged, dbBranch, diskBranch } = details;
+  const {
+    changedNamespaces,
+    universeChanged,
+    sourcemasterChanged,
+    crossNamespaceChanged,
+    manifestUnreadable,
+    pendingDecision,
+    dbBranch,
+    diskBranch,
+  } = details;
+
+  if (
+    pendingDecision &&
+    changedNamespaces.length === 0 && !universeChanged && !sourcemasterChanged && !crossNamespaceChanged && !manifestUnreadable
+  ) {
+    // The decision-only refusal. Its own message because the ordinary one says
+    // "the files have changed since this database was loaded", which is not what
+    // happened: the files were already in this state when the workspace opened,
+    // and the open-time evaluation is what established that this database did
+    // not come from them. Saying "since loaded" would send the user looking for
+    // a change they did not make.
+    const listed = pendingDecision.domains
+      .slice(0, 6)
+      .map((d) => `${d.kind}:${d.id} (${d.state})`)
+      .join(', ');
+    const more = pendingDecision.domains.length > 6
+      ? ` (+${pendingDecision.domains.length - 6} more)` : '';
+    return (
+      `Refusing to save: opening this workspace found that the database did not come from the ` +
+      `files currently in ria-data/, and the difference is not one the app may resolve on its own. ` +
+      `${pendingDecision.reason === 'three_way'
+        ? 'manifest.json, the files and the database all disagree.'
+        : pendingDecision.reason === 'manifest_unusable'
+          ? 'ria-data/manifest.json cannot be read, so nothing can be compared.'
+          : 'the files were changed without manifest.json being updated.'} ` +
+      `Affected: ${listed}${more}. ` +
+      `Choose "Load from ria-data" to adopt what is on disk, or "Store to ria-data" to ` +
+      `deliberately write this session's content over it. ` +
+      `See Help / Data Management.`
+    );
+  }
+
+  if (manifestUnreadable) {
+    // A separate message, not the ordinary one with a clause bolted on. The
+    // ordinary text says "the files in ria-data/ have changed", which is not
+    // what happened and is not even known here, and it offers two recoveries
+    // that cannot work: Load and `repairManifest` both parse the same
+    // manifest.json and throw on it. Naming them would send the user through
+    // two failures before reaching the one action that does work.
+    return (
+      `Refusing to save: ria-data/manifest.json is present but cannot be read, so there is no ` +
+      `way to tell whether the files on disk still match this database.${
+        dbBranch && diskBranch && dbBranch !== diskBranch
+          ? ` The database holds content from branch '${dbBranch}', but '${diskBranch}' is ` +
+            `checked out now.`
+          : ''
+      } ` +
+      `The only recovery is to store with "allowSnapshotMismatch", which rewrites manifest.json ` +
+      `wholesale from this database — do that once you are satisfied this session's content is ` +
+      `what you want on disk. Loading from ria-data and repairing the manifest both read the ` +
+      `same unreadable file and will fail. ` +
+      `See Help / Data Management.`
+    );
+  }
 
   const what: string[] = [];
   if (changedNamespaces.length > 0) {
@@ -383,6 +612,8 @@ export function describeDrift(details: SnapshotDriftDetails): string {
     what.push(`namespace(s): ${shown}${more}`);
   }
   if (universeChanged) what.push('universe layer (connections / layout / views)');
+  if (sourcemasterChanged) what.push('import source configuration');
+  if (crossNamespaceChanged) what.push('cross-namespace relations');
 
   const because =
     dbBranch && diskBranch && dbBranch !== diskBranch
@@ -400,7 +631,8 @@ export function describeDrift(details: SnapshotDriftDetails): string {
 }
 
 /**
- * Throw a `SnapshotDriftError` when `ria-data/` no longer matches the baseline.
+ * Throw a `SnapshotDriftError` when `ria-data/` no longer matches the baseline,
+ * or when its `manifest.json` is present but cannot be parsed.
  *
  * Must be called BEFORE any file is written, and inside the per-workspace store
  * serialisation chain so that the check and the write are atomic with respect to
@@ -411,14 +643,56 @@ export function assertNoSnapshotDrift(
   allowSnapshotMismatch: boolean | undefined,
   logger?: { info: (msg: string) => void; warn: (msg: string) => void },
 ): void {
-  const details = detectDrift(workingDir);
+  const fileDrift = detectDrift(workingDir);
+  // A pending decision refuses on its own, with no file drift to point at.
+  //
+  // Without this the dispatcher's auto-save resolves an S3 in the files'
+  // disfavour roughly 150 ms after the user's next keystroke: the open path
+  // decided not to load and not to store, and the very next save would store
+  // anyway and overwrite the committed content the decision exists to protect.
+  //
+  // `detectDrift` cannot see it. It compares the session baseline against the
+  // manifest on disk, and at open those are equal by construction — which is
+  // why it reported `none` in all twelve measured matrix rows, including every
+  // damaging one.
+  const pendingDecision = getPendingSyncDecision(workingDir);
+  const details: SnapshotDriftDetails | null = fileDrift ?? (pendingDecision
+    ? {
+      changedNamespaces: [],
+      universeChanged: false,
+      sourcemasterChanged: false,
+      crossNamespaceChanged: false,
+      dbBranch: getBaseline(workingDir)?.branch ?? null,
+      diskBranch: null,
+      dbCommit: getBaseline(workingDir)?.headCommit ?? null,
+      diskCommit: null,
+      manifestUnreadable: false,
+      pendingDecision,
+    }
+    : null);
   if (!details) return;
 
   if (allowSnapshotMismatch) {
+    // Honouring the override on the `manifestUnreadable` path is deliberate, not
+    // a hole in the fence. It is the ONE working recovery from an unreadable
+    // manifest: `storeImpl` already treats one as `forceFullReExport` and
+    // rewrites `manifest.json` wholesale from the database. Load and
+    // `repairManifest` both parse the same manifest and throw, so refusing here
+    // too would leave the workspace with no way out. The fence closes the
+    // SILENT overwrite; the user's explicit, informed overwrite stays available.
     logger?.warn(
-      `[drift] proceeding despite snapshot drift (allowSnapshotMismatch) — ` +
-      `changed namespaces: ${details.changedNamespaces.join(', ') || '(none)'}` +
-      `${details.universeChanged ? ', universe layer' : ''}`,
+      details.manifestUnreadable
+        ? `[drift] proceeding despite an unreadable ria-data/manifest.json ` +
+          `(allowSnapshotMismatch) — the manifest will be rewritten from the database`
+        : details.pendingDecision && details.changedNamespaces.length === 0
+          ? `[drift] proceeding despite an unresolved sync decision (allowSnapshotMismatch) — ` +
+            `overwriting: ${details.pendingDecision.domains
+              .map((d) => `${d.kind}:${d.id}`).join(', ') || '(none)'}`
+        : `[drift] proceeding despite snapshot drift (allowSnapshotMismatch) — ` +
+          `changed namespaces: ${details.changedNamespaces.join(', ') || '(none)'}` +
+          `${details.universeChanged ? ', universe layer' : ''}` +
+          `${details.sourcemasterChanged ? ', import source configuration' : ''}` +
+          `${details.crossNamespaceChanged ? ', cross-namespace relations' : ''}`,
     );
     return;
   }
@@ -470,11 +744,19 @@ export async function buildSnapshotDriftInfo(
 ): Promise<SnapshotDriftInfo> {
   const baseline = getBaseline(workingDir);
   const details = detectDrift(workingDir);
-  if (!details) {
+  const pendingDecision = getPendingSyncDecision(workingDir);
+  // A pending decision counts as drifted even with no file drift, so the dialog
+  // is raised: both questions end in the same user choice, and the one the user
+  // has to answer here is the open-time one.
+  if (!details && !pendingDecision) {
     return {
       drifted: false,
       changedNamespaces: [],
       universeChanged: false,
+      sourcemasterChanged: false,
+      crossNamespaceChanged: false,
+      manifestUnreadable: false,
+      pendingDecision: null,
       dirtyNamespaces: [],
       dbBranch: baseline?.branch ?? null,
       diskBranch: baseline?.repoDir ? readCurrentBranch(baseline.repoDir) : null,
@@ -488,13 +770,17 @@ export async function buildSnapshotDriftInfo(
   }
   return {
     drifted: true,
-    changedNamespaces: details.changedNamespaces,
-    universeChanged: details.universeChanged,
+    changedNamespaces: details?.changedNamespaces ?? [],
+    universeChanged: details?.universeChanged ?? false,
+    sourcemasterChanged: details?.sourcemasterChanged ?? false,
+    crossNamespaceChanged: details?.crossNamespaceChanged ?? false,
+    manifestUnreadable: details?.manifestUnreadable ?? false,
+    pendingDecision,
     dirtyNamespaces: await readDirtyNamespaces(dbModule),
-    dbBranch: details.dbBranch,
-    diskBranch: details.diskBranch,
-    dbCommit: details.dbCommit,
-    diskCommit: details.diskCommit,
+    dbBranch: details?.dbBranch ?? baseline?.branch ?? null,
+    diskBranch: details?.diskBranch ?? (baseline?.repoDir ? readCurrentBranch(baseline.repoDir) : null),
+    dbCommit: details?.dbCommit ?? baseline?.headCommit ?? null,
+    diskCommit: details?.diskCommit ?? (baseline?.repoDir ? readHeadCommit(baseline.repoDir) : null),
     // The three moments that make the undo case legible: when the session began,
     // when the database last agreed with the files, and when the files changed
     // underneath it. In that case git identity is identical on both sides, so

@@ -69,6 +69,7 @@ import type {
   NamespaceDeleteImpactPreview,
   GraphQueryResult,
   ConceptInstanceData,
+  RelationshipData,
   MalfunctionData,
   CreateMalfunctionParams,
   CreateRiskRatingParams,
@@ -79,6 +80,7 @@ import type {
   CreateTagParams,
   ScopedPropagationResult,
   GetChildrenResponse,
+  TreeNodeLocation,
   PortConnectorResult,
   NamespacePortConnectorsResult,
   ComponentPortConnectorsResult,
@@ -272,6 +274,7 @@ declare global {
         createAuthored(params: CreateAuthoredNamespaceParams): Promise<CreatedNamespaceInfo>;
         getChildren(params: { namespace: string; parentNodeId?: number; offset?: number; limit?: number; showAll?: boolean; scopeNamespace?: string }): Promise<GetChildrenResponse>;
         getAncestorPath(params: { namespace: string; nodeId: number }): Promise<number[]>;
+        getNodeLocation(params: { namespace: string; nodeId: number; showAll?: boolean }): Promise<TreeNodeLocation>;
         search(params: { query: string; offset?: number; limit?: number }): Promise<SearchResult>;
         previewDeleteImpact(namespace: string): Promise<NamespaceDeleteImpactPreview>;
         delete(namespace: string): Promise<void>;
@@ -353,6 +356,7 @@ declare global {
         createNoteForElement(params: { elementNodeId: number; namespace: string; noteText: string }): Promise<{ node_id: number }>;
         previewDeleteImpact(params: { nodeId: number }): Promise<import('@riacore/app-contracts').DeleteImpactPreview>;
         getInstance(params: { nodeId: number }): Promise<ConceptInstanceData>;
+        getRelationships(params: { nodeId: number }): Promise<RelationshipData[]>;
         createTag(params: CreateTagParams): Promise<{ node_id: number }>;
         getTag(params: { nodeId: number }): Promise<ConceptInstanceData>;
         getAllTags(params: { namespace: string }): Promise<ConceptInstanceData[]>;
@@ -370,6 +374,7 @@ declare global {
         getDirectRequirementsForFm(params: { failureModeNodeId: number }): Promise<ConceptInstanceData[]>;
         searchRequirementsAcrossNamespaces(params: { query: string }): Promise<ConceptInstanceData[]>;
         exportSphinxNeeds(params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }): Promise<{ exportedFiles: string[]; outputDir: string }>;
+        exportOkf(params: { namespace: string; outputDir: string; includeRiskRatings?: boolean }): Promise<{ exportedFiles: string[]; outputDir: string }>;
         exportXlsx(params: { namespace: string; outputPath: string }): Promise<{ outputPath: string }>;
         getSafetyData(params: { namespace: string }): Promise<SafetyExportData>;
       };

@@ -52,9 +52,15 @@ function e(s: string): string {
 }
 
 interface SourceConfigMeta {
+  /** Workspace-relative whenever the config lives inside the workspace. */
   configPath?: string;
   configDigest?: string;
-  metamodelPath?: string;
+  /**
+   * Content digest of the metamodel. There is deliberately no `metamodelPath`
+   * companion: that path points into the installed application, so storing it
+   * wrote an absolute, machine-specific path into committed `ria-data/`.
+   * Nothing ever read it back. `upsertSource` strips the legacy key.
+   */
   metamodelDigest?: string;
   configDirty?: boolean;
   lastAppliedAt?: string;
@@ -69,18 +75,45 @@ function parseSourceConfigMeta(raw: unknown): SourceConfigMeta {
   }
 }
 
-function mergeSourceConfigMeta(raw: unknown, patch: Partial<SourceConfigMeta>): string {
+/**
+ * Keys earlier versions wrote into the config meta blob and that must now be
+ * removed on sight.
+ *
+ * Dropping the write is not enough on its own: the merge below preserves keys it
+ * does not recognise, so a value already stored in a workspace would survive
+ * every future store. `metamodelPath` held an absolute path into the installed
+ * application — machine-specific data in a committed file, which nothing ever
+ * read back.
+ */
+const RETIRED_CONFIG_META_KEYS = ['metamodelPath'] as const;
+
+/**
+ * Merges `patch` into the source's existing config meta so unrelated keys
+ * survive.
+ *
+ * `undefined` means "leave untouched"; `null` means "remove the key". Same
+ * semantics as `serializeSourceConfigMeta` in
+ * `dispatch/handlers/import-channels.ts` — they must agree, because both write
+ * the same blob.
+ */
+function mergeSourceConfigMeta(
+  raw: unknown,
+  patch: { [K in keyof SourceConfigMeta]?: SourceConfigMeta[K] | null },
+): string {
   const merged: Record<string, unknown> = { ...parseSourceConfigMeta(raw) };
   for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) merged[key] = value;
+    if (value === undefined) continue;
+    if (value === null) delete merged[key];
+    else merged[key] = value;
   }
+  for (const key of RETIRED_CONFIG_META_KEYS) delete merged[key];
   return JSON.stringify(merged);
 }
 
 async function updateSourceConfigMeta(
   db: IDbModule,
   sourceId: string,
-  patch: Partial<SourceConfigMeta>,
+  patch: { [K in keyof SourceConfigMeta]?: SourceConfigMeta[K] | null },
 ): Promise<void> {
   const rows = await db.runQuery(
     `MATCH (s:RIA_SRC_Source) WHERE s.source_id = $sourceId RETURN s.config AS config`,
@@ -641,7 +674,6 @@ async function upsertSource(
   const configJson = mergeSourceConfigMeta(existing[0]?.config, {
     configPath: params.configPath,
     configDigest: params.configDigest,
-    metamodelPath: params.metamodelPath,
     metamodelDigest: params.metamodelDigest,
     configDirty: true,
   });

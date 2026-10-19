@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Builds the RiaCore desktop application for Windows (NSIS installer, x64).
+    Builds the RiaCore desktop application for Windows (MSI installer, x64).
 .DESCRIPTION
     Installs dependencies, compiles all packages, and runs electron-builder to
     produce a Windows installer.  Output lands in:

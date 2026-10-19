@@ -158,8 +158,12 @@ export function loadSnapshotNamespace(
   // Load attribute metadata from the meta/ layer JSON files
   const { nodeKeyAttrs, edgeKeyAttrs } = loadAttributeMetadataFromFiles(exportDir);
 
+  // Parse manifest.json once: it is the authority for both the namespace's
+  // directory and its metamodel, so there is no reason to read it twice.
+  const manifestEntry = findManifestNamespaceEntry(exportDir, namespace);
+
   // Find the namespace directory (the persistor sanitizes namespace names)
-  const nsDir = findNamespaceDir(exportDir, namespace);
+  const nsDir = findNamespaceDir(exportDir, namespace, manifestEntry);
   if (!nsDir) {
     throw new Error(
       `Namespace '${namespace}' not found in export directory '${exportDir}'. ` +
@@ -167,9 +171,9 @@ export function loadSnapshotNamespace(
     );
   }
 
-  // Load namespace.json for metamodel info
-  const namespaceMeta = loadNamespaceMeta(nsDir, namespace);
-  const metamodel = String(namespaceMeta.metamodel ?? '');
+  // Resolve the metamodel from the manifest entry — `<nsDir>/namespace.json` is
+  // no longer part of the on-disk contract.
+  const metamodel = resolveSnapshotMetamodel(exportDir, namespace, manifestEntry);
 
   // Load concept instances from nsDir/concepts/<ConceptType>.json
   // (The persistor writes one file per concept type under a concepts/ subdirectory,
@@ -208,7 +212,45 @@ function parseEdgeAttributes(raw: unknown): Record<string, unknown> {
   try { return JSON.parse(String(raw ?? '{}')) as Record<string, unknown>; } catch { return {}; }
 }
 
-function findNamespaceDir(exportDir: string, namespace: string): string | null {
+/** The slice of a `manifest.namespaces[]` entry this loader consumes. */
+interface ManifestNamespaceEntry {
+  name?: unknown;
+  directory?: unknown;
+  metamodel?: unknown;
+}
+
+/**
+ * Parse `<exportDir>/manifest.json` and return the entry for `namespace`, or
+ * null when the manifest is absent, unparseable or does not list it.
+ *
+ * Called once per snapshot load and shared by directory resolution and
+ * metamodel resolution, both of which are answered by the same entry.
+ */
+function findManifestNamespaceEntry(
+  exportDir: string,
+  namespace: string,
+): ManifestNamespaceEntry | null {
+  const manifestPath = path.join(exportDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+      namespaces?: ManifestNamespaceEntry[];
+    };
+    if (!Array.isArray(manifest.namespaces)) return null;
+    return manifest.namespaces.find(n => n?.name === namespace) ?? null;
+  } catch {
+    // Unparseable manifest — treated the same as an absent one. Directory
+    // resolution still has the sanitized-name path; metamodel resolution does
+    // not, and reports the failure itself.
+    return null;
+  }
+}
+
+function findNamespaceDir(
+  exportDir: string,
+  namespace: string,
+  manifestEntry: ManifestNamespaceEntry | null,
+): string | null {
   // First try the sanitized name directly
   const sanitized = sanitizeDirectoryName(namespace);
   const directPath = path.join(exportDir, sanitized);
@@ -216,36 +258,55 @@ function findNamespaceDir(exportDir: string, namespace: string): string | null {
     return directPath;
   }
 
-  // Fall back: look in manifest.json
-  const manifestPath = path.join(exportDir, 'manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
-        namespaces?: Array<{ name: string; directory: string }>;
-      };
-      const entry = manifest.namespaces?.find(n => n.name === namespace);
-      if (entry) {
-        const entryPath = path.join(exportDir, entry.directory);
-        if (fs.existsSync(entryPath)) return entryPath;
-      }
-    } catch {
-      // ignore parse errors
-    }
+  // Fall back: the directory recorded in the manifest entry
+  if (typeof manifestEntry?.directory === 'string' && manifestEntry.directory !== '') {
+    const entryPath = path.join(exportDir, manifestEntry.directory);
+    if (fs.existsSync(entryPath)) return entryPath;
   }
 
   return null;
 }
 
-function loadNamespaceMeta(nsDir: string, namespace: string): Record<string, unknown> {
-  const nsJsonPath = path.join(nsDir, 'namespace.json');
-  if (fs.existsSync(nsJsonPath)) {
-    try {
-      return JSON.parse(fs.readFileSync(nsJsonPath, 'utf-8')) as Record<string, unknown>;
-    } catch {
-      // fallback below
-    }
+/**
+ * Resolve a snapshot namespace's metamodel from its `manifest.namespaces[]`
+ * entry — the sole authority now that `<nsDir>/namespace.json` has been removed
+ * from the on-disk contract.
+ *
+ * This fails explicitly rather than inheriting the old reader's leniency (a
+ * missing or unparseable `namespace.json` yielded `metamodel: ''`). The diff
+ * engine is read-only, so the argument that a bad value corrupts the database
+ * does not apply here — but an empty metamodel has two downstream outcomes and
+ * both are worse than a named error:
+ *
+ *  - snapshot↔snapshot: both sides resolve to `''`, so `runDiff`'s
+ *    same-metamodel guard passes vacuously and the diff is reported — and
+ *    exported to HTML — with a blank metamodel.
+ *  - live↔snapshot: the live side comes from the database and is populated, so
+ *    `runDiff` throws "Cannot diff namespaces with different metamodels … uses
+ *    ''", blaming a metamodel mismatch for what is really a manifest gap.
+ *
+ * Every `ria-data/` directory a store produces carries a manifest listing every
+ * namespace it wrote, so reaching this error means the manifest is absent,
+ * unparseable, or out of sync with the directories beside it. Saying so is
+ * strictly more actionable than either symptom above.
+ */
+function resolveSnapshotMetamodel(
+  exportDir: string,
+  namespace: string,
+  manifestEntry: ManifestNamespaceEntry | null,
+): string {
+  const metamodel =
+    typeof manifestEntry?.metamodel === 'string' ? manifestEntry.metamodel : '';
+  if (metamodel === '') {
+    throw new Error(
+      `Cannot resolve the metamodel for namespace '${namespace}': ` +
+      `'${path.join(exportDir, 'manifest.json')}' is missing, unreadable, or has no ` +
+      `namespaces[] entry for '${namespace}' carrying a metamodel. ` +
+      `Run a full 'persistor store' from a workspace whose database still holds this ` +
+      `namespace, or restore ria-data/manifest.json from version control.`,
+    );
   }
-  return { namespace };
+  return metamodel;
 }
 
 /**
