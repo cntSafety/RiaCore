@@ -116,7 +116,8 @@ Select a new folder or the folder of a previous export of the same analysis.
 The export contains linked Markdown documents with YAML metadata, following
 Open Knowledge Format v0.2.
 
-Documents follow the source namespace and element hierarchy. Component malfunctions
+Documents follow the source namespace and element hierarchy and are named after
+the element or record they describe. Component malfunctions
 sit beneath their component; port malfunctions sit beneath the particular port.
 Tasks, requirements, SOTIF details, notes, reviews, and tags are shared documents.
 Start with `index.md` to browse the analysis.

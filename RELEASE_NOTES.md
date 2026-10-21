@@ -1,1 +1,1 @@
-Improved dependency visualization, further stability improvements, and OKF (Open Knowledge Format) export.
+UI improvements regarding coloring, updates on OCAF export, and persistence stability improved.

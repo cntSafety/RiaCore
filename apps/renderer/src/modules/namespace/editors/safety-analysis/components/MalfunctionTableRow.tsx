@@ -43,7 +43,8 @@ import { App, Button, Dropdown, Input, Select, Tag, Tooltip, Typography, theme }
 import { MoreOutlined, PlusOutlined, SnippetsOutlined, WarningOutlined } from '@ant-design/icons';
 
 import { useUpdateMalfunction } from '../hooks/useSafetyMutations';
-import { getAsilColor, buildAsilOptionGroups } from '../config/asilColors';
+import { useAsilOptionGroups } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import { getNodeDecoration } from '../config/nodeTypeConfig';
 import type { MalfunctionRow } from '../utils/malfunctionTableHelpers';
 import type { SelectedTreeElement } from '../types';
@@ -130,7 +131,7 @@ export function MalfunctionTableRow({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
-  const asilOptions = buildAsilOptionGroups(profile.asilGroups);
+  const asilOptions = useAsilOptionGroups(profile.asilGroups);
 
   // ── Mutation hook ─────────────────────────────────────────────────────────
   const updateMalfunction = useUpdateMalfunction(namespace, workspaceKey, triggerAutoSave);
@@ -519,21 +520,22 @@ export function MalfunctionTableRow({
           />
         ) : (
           <Tooltip title="Click to edit ASIL" mouseEnterDelay={0.6}>
-            <Tag
-              color={asilValue ? getAsilColor(asilValue) : 'default'}
+            {/*
+              An unset ASIL keeps the neutral QM chip and an em dash, rather than
+              borrowing a level's colour for "nothing chosen yet".
+            */}
+            <AsilTag
+              asil={asilValue || ''}
+              label={asilValue || '—'}
               onClick={() => setAsilEditing(true)}
               style={{
-                cursor: 'pointer',
                 fontSize: 12,
                 fontWeight: 600,
-                margin: 0,
                 minWidth: 32,
                 textAlign: 'center',
                 letterSpacing: '0.02em',
               }}
-            >
-              {asilValue || '—'}
-            </Tag>
+            />
           </Tooltip>
         )}
       </div>

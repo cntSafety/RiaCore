@@ -31,7 +31,7 @@ import { useElementRelationships } from '../hooks/useElementRelationships';
 import { useRelationshipTreeNavigation } from '../hooks/useRelationshipTreeNavigation';
 import { useTreeDecorations } from '../hooks/useTreeDecorations';
 import { getNodeDecoration, type NodeDecoration } from '../config/nodeTypeConfig';
-import { getAsilHexColor } from '../config/asilColors';
+import { useAsilPalette } from '../config/asilColors';
 import type { ScopedTreeNavigator, SelectedTreeElement } from '../types';
 import {
   buildSphinxRelationshipGraph, layoutSphinxRelationshipGraph, RELATIONSHIP_NODE_WIDTH,
@@ -47,6 +47,7 @@ interface RelationshipNodeData extends Record<string, unknown> {
 
 function RelationshipNode({ data }: NodeProps<Node<RelationshipNodeData>>) {
   const { token } = theme.useToken();
+  const asilPalette = useAsilPalette();
   const { node, decorations, navigate, onShowDetails } = data;
   const element = node.element;
   const target = { nodeId: element.node_id, namespace: element.namespace, concept: element.concept, name: element.name };
@@ -72,7 +73,7 @@ function RelationshipNode({ data }: NodeProps<Node<RelationshipNodeData>>) {
         onShowDetails={node.role === 'focus' ? onShowDetails : undefined}
         wrapperStyle={{ display: 'flex', width: 'calc(100% - 20px)', alignItems: 'flex-start', gap: 8 }}
       >
-        {createElement(decoration.icon, { style: { marginTop: 2, color: element.concept === 'malfunction' ? getAsilHexColor(element.asil ?? '') : decoration.color } } as Record<string, unknown>)}
+        {createElement(decoration.icon, { style: { marginTop: 2, color: element.concept === 'malfunction' ? asilPalette.icon(element.asil) : decoration.color } } as Record<string, unknown>)}
         <span title={element.name} style={{ fontSize: 13, lineHeight: '19px', fontWeight: 600, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflowWrap: 'anywhere' }}>{element.name}</span>
       </ShowInTreeTrigger>
       {element.identifier && element.identifier !== element.name && (

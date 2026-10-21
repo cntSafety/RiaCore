@@ -1,6 +1,6 @@
 {
   "name": "riacoredev",
-  "version": "0.5.0",
+  "version": "0.5.2",
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "engines": {

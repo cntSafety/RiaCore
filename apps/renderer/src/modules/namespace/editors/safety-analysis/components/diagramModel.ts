@@ -178,84 +178,26 @@ export interface DiagramMalfunctionRef {
 // ASIL ordering
 // ---------------------------------------------------------------------------
 
-export const ASIL_ORDER: Record<string, number> = {
-  QM: 0,
-  A: 1,
-  B: 2,
-  C: 3,
-  D: 4,
-};
-
 /**
- * Converts an ASIL string to a numeric level for comparison.
+ * Re-exported from `config/asilColors.ts`, which owns the ASIL scale outright.
  *
- * Core levels map directly: QM=0, A=1, B=2, C=3, D=4.
- * Decomposition variants (e.g. `A(B)`, `QM(D)`) resolve to the highest
- * component level. Unrecognized strings return -1.
- */
-export function parseAsilLevel(asil: string): number {
-  if (!asil) return -1;
-
-  const trimmed = asil.trim();
-
-  // Check for decomposition variant like "A(B)" or "QM(D)"
-  const decompositionMatch = trimmed.match(/^([A-Z]+)\(([A-Z]+)\)$/);
-  if (decompositionMatch) {
-    const level1 = ASIL_ORDER[decompositionMatch[1]] ?? -1;
-    const level2 = ASIL_ORDER[decompositionMatch[2]] ?? -1;
-    return Math.max(level1, level2);
-  }
-
-  // Direct lookup
-  const level = ASIL_ORDER[trimmed];
-  return level !== undefined ? level : -1;
-}
-
-/**
- * Returns the ASIL string with the highest resolved level from a list of
- * malfunctions, or `null` for empty arrays.
+ * This file used to carry its own copy of the ordering table, its own
+ * decomposition regex, and its own hex ramp in an inline `LEVEL_COLORS`. Two
+ * copies of one scale is two things to keep in step, and they had already
+ * drifted: the ASIL dropdown resolved its dot colour through one of them while
+ * the diagram resolved tile borders through the other, so the same level could
+ * be drawn two different ways in one window. The ramp is also theme-dependent
+ * now, which a bare module constant cannot express at all.
  *
- * Uses the ordering QM < A < B < C < D. Decomposition variants resolve to
- * their highest component level.
+ * Importers of `diagramModel` keep working through these re-exports.
  */
-export function resolveMaxAsil(malfunctions: MalfunctionInfo[]): string | null {
-  if (malfunctions.length === 0) return null;
-
-  let maxLevel = -1;
-  let maxAsil: string | null = null;
-
-  for (const malfunction of malfunctions) {
-    const level = parseAsilLevel(malfunction.asil);
-    if (level > maxLevel) {
-      maxLevel = level;
-      maxAsil = malfunction.asil;
-    }
-  }
-
-  // Malfunctions exist but none have a recognized ASIL → treat as QM
-  if (maxAsil === null || maxLevel < 0) return 'QM';
-
-  return maxAsil;
-}
-
-/**
- * Maps an ASIL rating string to a CSS hex color for diagram rendering.
- * Uses the same ASIL ordering as getAsilColor but returns hex values
- * suitable for inline styles (borders, squares).
- *
- * Returns null when there is no ASIL (no malfunctions).
- */
-export function getAsilHexColor(asil: string | null): string | null {
-  if (!asil) return null;
-
-  // Resolve decomposition to highest component
-  const level = parseAsilLevel(asil);
-  const LEVEL_COLORS: Record<number, string> = {
-    0: '#8c8c8c', // QM — neutral grey
-    1: '#52c41a', // A — green
-    2: '#a0d911', // B — lime
-    3: '#ffa940', // C — light orange
-    4: '#d4380d', // D — dark orange-red (volcano)
-  };
-  return LEVEL_COLORS[level] ?? null;
-}
+export {
+  ASIL_ORDER,
+  parseAsilLevel,
+  resolveMaxAsil,
+  higherAsil,
+  getAsilLineColor,
+  getAsilIconColor,
+  getAsilLineWeight,
+  ASIL_LINE_WEIGHT_NONE,
+} from '../config/asilColors';

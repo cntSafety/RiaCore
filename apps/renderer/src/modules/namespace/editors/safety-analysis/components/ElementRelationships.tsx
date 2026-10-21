@@ -28,7 +28,7 @@ import { SectionHeader } from './SectionHeader';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
 import { useTreeDecorations } from '../hooks/useTreeDecorations';
 import { getNodeDecoration } from '../config/nodeTypeConfig';
-import { getAsilHexColor } from '../config/asilColors';
+import { useAsilPalette } from '../config/asilColors';
 import type { ScopedTreeNavigator } from '../types';
 
 /** Read-only database links. Deliberately independent of diagram mappings and analysis scope. */
@@ -39,6 +39,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
 }) {
   const { token } = theme.useToken();
   const decorations = useTreeDecorations();
+  const asilPalette = useAsilPalette();
   const showInTree = useRelationshipTreeNavigation(onShowInTree);
   const relationships = useElementRelationships(nodeId, workspaceKey);
   const rows = sortElementRelationships(relationships.data ?? []);
@@ -54,7 +55,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
         wrapperStyle={{ maxWidth: '100%', paddingRight: 20 }}
       >
         <Space align="start" size={8}>
-          {createElement(decoration.icon, { style: { color: node.concept === 'malfunction' ? getAsilHexColor(node.asil ?? '') : decoration.color } } as Record<string, unknown>)}
+          {createElement(decoration.icon, { style: { color: node.concept === 'malfunction' ? asilPalette.icon(node.asil) : decoration.color } } as Record<string, unknown>)}
           <Space orientation="vertical" size={0}>
             <Typography.Text>{node.name}</Typography.Text>
             {node.identifier && node.identifier !== node.name && (

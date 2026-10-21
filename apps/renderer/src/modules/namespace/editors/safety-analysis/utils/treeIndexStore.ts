@@ -18,8 +18,7 @@
  *
  */
 import React from 'react';
-import { Tag } from 'antd';
-import { getAsilColor } from '../config/asilColors';
+import { AsilTag } from '../components/AsilTag';
 import { treeDebug } from './treeDebugLog';
 
 /**
@@ -539,10 +538,14 @@ export function deriveAntTreeData(
           React.Fragment,
           null,
           nameSpan,
-          React.createElement(Tag, {
-            color: getAsilColor(record.asil),
+          // `AsilTag` rather than a `Tag` with a resolved colour: the ASIL ramp is
+          // theme-dependent, and this function is not a component so it cannot
+          // read the theme. Creating the element defers that resolution to render
+          // time, where the hook inside `AsilTag` runs in the right context.
+          React.createElement(AsilTag, {
+            asil: record.asil,
             style: { marginLeft: 6, fontSize: 11, lineHeight: '18px', padding: '0 4px' },
-          }, record.asil),
+          }),
         ) as React.ReactNode;
       } else {
         titleNode = nameSpan as React.ReactNode;

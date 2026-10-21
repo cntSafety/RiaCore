@@ -28,7 +28,8 @@ import { useAllNamespaces } from '../hooks/useTreeQueries';
 import { useNamespaceConnections } from '../../../../../hooks/useNamespaceConnections';
 import { selectAnalysisRootNamespaces } from '../utils/treeUtils';
 import { getNodeDecoration, type NodeDecoration } from '../config/nodeTypeConfig';
-import { getAsilHexColor } from '../config/asilColors';
+import { getAsilIconColor } from '../config/asilColors';
+import { useThemeMode, type ThemeMode } from '../../../../../theme/ThemeProvider';
 import { useTreeDecorations } from '../hooks/useTreeDecorations';
 import { navigateScopedTree, type TreeNavigationScope } from '../utils/scopedTreeNavigation';
 import { getNamespaceDecorationByMetamodel } from '../../../../../lib/namespaceTypeDecoration';
@@ -210,6 +211,15 @@ export function buildIcon(
   asil?: string,
   sysmlDecorations?: Record<string, NodeDecoration>,
   record?: TreeNodeRecord,
+  /**
+   * Theme the malfunction ASIL colour is resolved against.
+   *
+   * Explicit rather than read from context, because this is a plain function
+   * called from the reducer-driven `deriveAntTreeData` path and from
+   * `buildIconCached`, neither of which is a component. The caller that *is* a
+   * component (`buildIconBound`) reads the theme and threads it down.
+   */
+  themeMode: ThemeMode = 'dark',
 ): React.ReactNode {
   if (nodeType === 'namespace') {
     // Use the shared namespace-type decoration when the record carries a metamodel
@@ -227,7 +237,7 @@ export function buildIcon(
   }
   if (nodeType === 'reference') {
     const decoration = getNodeDecoration(concept);
-    const iconColor = concept === 'malfunction' ? getAsilHexColor(asil ?? '') : decoration.color;
+    const iconColor = concept === 'malfunction' ? getAsilIconColor(asil ?? '', themeMode) : decoration.color;
     return createElement(
       'span',
       { style: { position: 'relative', display: 'inline-flex', alignItems: 'center' } },
@@ -236,7 +246,7 @@ export function buildIcon(
     );
   }
   const decoration = getNodeDecoration(concept, sysmlDecorations);
-  const iconColor = concept === 'malfunction' ? getAsilHexColor(asil ?? '') : decoration.color;
+  const iconColor = concept === 'malfunction' ? getAsilIconColor(asil ?? '', themeMode) : decoration.color;
   return createElement(decoration.icon, { style: { color: iconColor } } as Record<string, unknown>);
 }
 
@@ -254,6 +264,7 @@ export function buildIconCached(
   sysmlDecorations?: Record<string, NodeDecoration>,
   configVersion = 0,
   record?: TreeNodeRecord,
+  themeMode: ThemeMode = 'dark',
 ): React.ReactNode {
   // Namespace roots are keyed by their metamodel so each distinct type gets its
   // own cached icon (rather than sharing a single 'namespace' entry).
@@ -263,9 +274,19 @@ export function buildIconCached(
   // plus a LinkOutlined badge) than for own nodes, so nodeType has to be part of
   // the key. Without it a reference malfunction and an own malfunction with the
   // same ASIL collide and whichever renders first wins for both.
-  const cacheKey = `${configVersion}:${record?.nodeType ?? ''}:${base}`;
+  //
+  // `themeMode` is in the key for the same reason `configVersion` is: a cached
+  // element holds a resolved colour, and the malfunction ASIL ramp has different
+  // values per theme. Without it, switching the OS between light and dark serves
+  // every already-built malfunction icon in the colour of the previous theme —
+  // and because these entries never expire, they would stay wrong for the rest of
+  // the session.
+  const cacheKey = `${configVersion}:${themeMode}:${record?.nodeType ?? ''}:${base}`;
   if (!_iconCache.has(cacheKey)) {
-    _iconCache.set(cacheKey, buildIcon(concept, record?.nodeType, record?.role, asil, sysmlDecorations, record));
+    _iconCache.set(
+      cacheKey,
+      buildIcon(concept, record?.nodeType, record?.role, asil, sysmlDecorations, record, themeMode),
+    );
   }
   return _iconCache.get(cacheKey)!;
 }
@@ -350,6 +371,7 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   // Both the JSON importer (SysMLv2) and the textual importer (SysMLv2Textual) are
   // fetched and merged so elements from either source get the correct icon/color.
   const sysmlDecorations = useTreeDecorations();
+  const themeMode = useThemeMode();
   // Bump a version counter whenever the overlay identity changes so the
   // module-level icon cache (keyed by configVersion) rebuilds icons after a
   // metamodel reload instead of serving stale cached elements.
@@ -364,9 +386,15 @@ export const NamespaceTreePanel = forwardRef<NamespaceTreePanelHandle, Namespace
   }, [sysmlDecorations]);
   // Icon builder bound with the SysML overlay + config version, passed to
   // deriveAntTreeData so every node resolves its decoration through the overlay.
+  //
+  // `themeMode` joins the binding for the same reason `configVersion` does: a
+  // malfunction icon's colour comes from the theme-dependent ASIL ramp, and both
+  // this callback's identity and the module cache's key have to move with it or
+  // the tree keeps painting the previous theme's colours.
   const buildIconBound = useCallback(
-    (concept: string, asil?: string, record?: TreeNodeRecord) => buildIconCached(concept, asil, sysmlDecorations, configVersion, record),
-    [sysmlDecorations, configVersion],
+    (concept: string, asil?: string, record?: TreeNodeRecord) =>
+      buildIconCached(concept, asil, sysmlDecorations, configVersion, record, themeMode),
+    [sysmlDecorations, configVersion, themeMode],
   );
 
   // Mutation hook for right-click delete — uses workspaceKey so tree.children is invalidated

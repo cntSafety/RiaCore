@@ -30,18 +30,27 @@ const isPort = (node: OkfSourceNode) => ['r_port', 'p_port', 'pr_port', 'port_us
 const inline = (value: string) => value.replace(/\s+/g, ' ').trim().replace(/[\\`*_[\]<>]/g, '\\$&');
 const excerpt = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 100);
 
-/** One rule for names and hierarchy segments, including Windows device names. */
+/**
+ * One rule for names and hierarchy segments, including Windows device names.
+ * The source name is preserved, so a filename can be searched against the model,
+ * its exported sources and code. Only path-unsafe characters are replaced;
+ * letters, digits, case, `_`, `-` and interior `.` survive. A device name
+ * followed by an extension is still that device on Windows, so reserve both.
+ */
 export function okfSlug(value: string): string {
-  let result = value.normalize('NFKD').replace(/\p{M}/gu, '')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2').replace(/([a-z\d])([A-Z])/g, '$1-$2')
-    .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '');
+  let result = value.normalize('NFC')
+    .replace(/[^\p{L}\p{N}_.-]+/gu, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '');
   if (!result) result = 'record';
-  if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9]|index|log|element|ports|malfunctions)$/i.test(result)) result = `record-${result}`;
-  // Byte limits matter for multibyte filesystem names as well as character counts.
-  if (Buffer.byteLength(result) > 90) {
+  if (/^(?:(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)|(?:index|log|element|ports|malfunctions)$)/i
+    .test(result)) result = `record-${result}`;
+  // Names are both filenames and hierarchy segments, so a long one is paid at
+  // every level below it. Trim only the long tail and keep a short identity hash
+  // so two names sharing a prefix stay distinct. Byte limits matter for
+  // multibyte filesystem names as well as character counts.
+  if (Buffer.byteLength(result) > 40) {
     let prefix = '';
-    for (const char of result) { if (Buffer.byteLength(prefix + char) > 65) break; prefix += char; }
-    result = `${prefix.replace(/-+$/, '')}-${hash(value)}`;
+    for (const char of result) { if (Buffer.byteLength(prefix + char) > 31) break; prefix += char; }
+    result = `${prefix.replace(/-+$/, '')}-${hash(value).slice(0, 8)}`;
   }
   return result;
 }
@@ -122,7 +131,10 @@ export function generateSafetyOkf(
   const siblingGroups = new Map<string, number[]>();
   for (const id of elements) {
     const n = source(id), parent = context.parents.get(id);
-    const key = JSON.stringify([n.namespace, parent === undefined ? null : identity(source(parent)), isPort(n), okfSlug(n.name || n.concept)]);
+    // Group case-insensitively: names differing only by case are one directory
+    // on Windows and macOS, so both siblings must take the disambiguating hash.
+    const key = JSON.stringify([n.namespace, parent === undefined ? null : identity(source(parent)), isPort(n),
+      okfSlug(n.name || n.concept).toLowerCase()]);
     const group = siblingGroups.get(key) ?? []; group.push(id); siblingGroups.set(key, group);
   }
   for (const group of siblingGroups.values()) for (const id of group) {
@@ -131,8 +143,8 @@ export function generateSafetyOkf(
   }
   const namespaces = [...new Set([...context.nodes.values()].map(node => node.namespace))];
   function namespaceSegment(ns: string): string {
-    const slug = okfSlug(ns);
-    return namespaces.filter(other => okfSlug(other) === slug).length > 1 ? `${slug}-${hash(ns)}` : slug;
+    const slug = okfSlug(ns), folded = slug.toLowerCase();
+    return namespaces.filter(other => okfSlug(other).toLowerCase() === folded).length > 1 ? `${slug}-${hash(ns)}` : slug;
   }
   const directories = new Map<number, string>();
   function elementDir(id: number): string {
@@ -145,7 +157,10 @@ export function generateSafetyOkf(
   }
   for (const id of elements) {
     const doc = byNode.get(id)!;
-    doc.filename = `${elementDir(id)}/element.md`;
+    // The document is named after the element and sits beside the directory
+    // holding its children, ports and malfunctions. Readers and search results
+    // show the element name, and a leaf element needs no directory at all.
+    doc.filename = `${elementDir(id)}.md`;
     doc.fields.element_type = doc.node.concept;
     if (isPort(doc.node)) {
       doc.fields.port_kind = portKinds.get(id) || (doc.node.concept === 'r_port' || doc.node.direction === 'in' ? 'receiver' : doc.node.concept === 'pr_port' || doc.node.direction === 'inout' ? 'bidirectional' : 'provider');
@@ -315,20 +330,36 @@ export function generateSafetyOkf(
     `Read element documents to locate malfunctions, then follow their propagation, requirement, task, note and review links.\n\n` +
     `Risk ratings and workflow states reproduce the analysis; export does not imply verification or residual-risk acceptance.\n\n## Contents\n\n` +
     [...counts].sort(([a], [b]) => compare(a, b)).map(([type, count]) => `- ${type}: ${count}`).join('\n') + '\n');
+  // Index only what cannot be reached by following links: the entry path into the
+  // element tree, and the unassigned groups whose records have no owner to be
+  // reached from. An element document already links to its own children, ports and
+  // malfunctions, and every shared record outside `unassigned/` is linked from the
+  // element or malfunction that uses it, so a further index would only restate them.
+  const structural = new Set<string>();
+  for (const id of elements) {
+    const dir = elementDir(id);
+    for (const container of [dir, `${dir}/ports`, `${dir}/malfunctions`]) structural.add(container);
+  }
+  const navigable = (dir: string) => dir === '' || dir === 'elements' || /^elements\/[^/]+$/.test(dir)
+    || dir === 'unassigned' || dir.startsWith('unassigned/');
+  const indexed = (dir: string) => navigable(dir) && !structural.has(dir);
+
   const topDirectories = [...new Set([...docs.values()].map(doc => doc.filename.split('/')[0]))].sort(compare);
   files.set('analysis.md', files.get('analysis.md')! + '\n## Navigation\n\n' + topDirectories
-    .map(dir => `- ${markdownLink('analysis.md', `${dir}/index.md`, dir)}`).join('\n') + '\n');
-
-  // Every populated directory, including ancestry-only containers, is discoverable.
+    .filter(dir => indexed(dir)).map(dir => `- ${markdownLink('analysis.md', `${dir}/index.md`, dir)}`).join('\n') + '\n'
+    + (topDirectories.some(dir => !indexed(dir))
+      ? `\nShared records live in ${topDirectories.filter(dir => !indexed(dir)).map(dir => `\`${dir}/\``).join(', ')}. `
+        + 'Each one is linked from the elements and malfunctions that use it.\n' : ''));
   const dirs = new Set(['']);
   for (const filename of files.keys()) {
     let dir = path.dirname(filename);
     while (dir !== '.') { dirs.add(dir); dir = path.dirname(dir); }
   }
   for (const dir of [...dirs].sort(compare)) {
+    if (!indexed(dir)) continue;
     const indexPath = dir ? `${dir}/index.md` : 'index.md';
     let content = dir ? `# ${inline(path.basename(dir))}\n\n` : `---\nokf_version: "0.2"\n---\n\n# ${inline(data.namespace)}\n\n`;
-    for (const child of [...dirs].filter(d => d && (path.dirname(d) === (dir || '.'))).sort(compare)) {
+    for (const child of [...dirs].filter(d => d && path.dirname(d) === (dir || '.') && indexed(d)).sort(compare)) {
       content += `- ${markdownLink(indexPath, `${child}/index.md`, path.basename(child))}\n`;
     }
     for (const [filename] of [...files].filter(([f]) => path.dirname(f) === (dir || '.')).sort(([a], [b]) => compare(a, b))) {

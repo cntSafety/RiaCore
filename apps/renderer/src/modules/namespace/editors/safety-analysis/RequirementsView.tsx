@@ -29,7 +29,7 @@ import { useDeleteRequirement, useUpdateRequirement, useCreateRequirement } from
 import { api } from '../../../../api/riacore';
 import { DataTable } from '../../../../components/data-table';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
-import { getAsilColor } from './config/asilColors';
+import { AsilTag } from './components/AsilTag';
 import { useSafetyProfileMetadata } from './hooks/useSafetyProfileMetadata';
 
 interface RequirementRow {
@@ -159,7 +159,7 @@ function CreateRequirementModal({ open, namespace, onClose }: CreateRequirementM
                 label: g.label,
                 options: g.options.map((v) => ({
                   value: v,
-                  label: <Tag color={getAsilColor(v)} style={{ margin: 0 }}>{v}</Tag>,
+                  label: <AsilTag asil={v} />,
                 })),
               }))}
             />
@@ -263,7 +263,7 @@ function EditRequirementModal({ record, namespace, onClose }: EditRequirementMod
                 label: g.label,
                 options: g.options.map((v) => ({
                   value: v,
-                  label: <Tag color={getAsilColor(v)} style={{ margin: 0 }}>{v}</Tag>,
+                  label: <AsilTag asil={v} />,
                 })),
               }))}
             />
@@ -411,7 +411,7 @@ export function RequirementsView({ ns }: { ns: NamespaceContext }) {
       width: 100,
       filters: asilFilters,
       onFilter: (value, record) => record.reqAsil === value,
-      render: (value: string) => (value ? <Tag color={getAsilColor(value)}>{value}</Tag> : null),
+      render: (value: string) => (value ? <AsilTag asil={value} /> : null),
     },
     {
       title: 'Description',

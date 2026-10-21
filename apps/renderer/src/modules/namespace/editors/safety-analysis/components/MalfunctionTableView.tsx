@@ -45,7 +45,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { usePropagationsForComponent } from '../hooks/useSafetyQueries';
 import { usePasteMalfunction } from '../hooks/useSafetyMutations';
 import { toRows } from '../utils/malfunctionTableHelpers';
-import { getAsilColor } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import type { SelectedTreeElement } from '../types';
 import type { MalfunctionRow } from '../utils/malfunctionTableHelpers';
 import { useWorkspaceStore } from '../../../../../store/workspaceStore';
@@ -356,9 +356,7 @@ export function MalfunctionTableView({
             if (!option.value) return <span>{option.label}</span>;
             return (
               <Space size={4}>
-                <Tag color={getAsilColor(String(option.value))} style={{ margin: 0, fontSize: 11 }}>
-                  {option.label}
-                </Tag>
+                <AsilTag asil={String(option.value)} label={option.label} fontSize={11} />
               </Space>
             );
           }}

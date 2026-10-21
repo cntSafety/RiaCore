@@ -107,6 +107,7 @@ import {
 } from './modelElkInput';
 import { RoutedModelEdge, type EdgeEmphasis, type RoutedModelEdgeData } from './RoutedModelEdge';
 import type { ModelGraph, ModelTile } from './modelGraph';
+import { useAsilPalette } from '../safety-analysis/config/asilColors';
 
 const NODE_TYPES = { modelTile: ModelTileNode };
 const EDGE_TYPES = { routed: RoutedModelEdge };
@@ -517,6 +518,9 @@ function ModelViewCanvasInner({
   onNavigateToNode, onNavigateToReference, onShowDetails,
 }: ModelViewCanvasProps) {
   const { token } = theme.useToken();
+  // Stable per theme, so including it below does not re-run the edge build on
+  // every render — which would thrash the ELK sections the routes depend on.
+  const asilPalette = useAsilPalette();
   const { fitView, getNodes } = useReactFlow();
   const nodesInitialized = useNodesInitialized();
   const presentation = useCommonModelPresentation(workspaceKey);
@@ -711,15 +715,24 @@ function ModelViewCanvasInner({
       type: 'routed',
       data: {
         section: edgeSections[edge.id],
-        // A malfunction still outranks everything: an edge touching one reads red
-        // whatever kind it is. Otherwise a flow takes the colour the SysML
-        // metamodel itself assigns to flows, so it is legible as a different kind
-        // of thing from a static connection at a glance.
+        // Safety still outranks everything: an edge whose endpoints carry a
+        // malfunction is drawn at that malfunction's ASIL, whatever kind of link
+        // it is. Otherwise a flow takes the colour the SysML metamodel itself
+        // assigns to flows, so it is legible as a different kind of thing from a
+        // static connection at a glance.
+        //
+        // This used to be `edge.warn ? '#d4380d'` — one flat red for every
+        // severity. A QM path and an ASIL D path were drawn identically, so a
+        // model with malfunctions spread through it rendered as a uniform wall of
+        // red carrying no information. The stroke now says which level it is, and
+        // a path with no safety content goes back to neutral instead of shouting.
         stroke: edge.kind === 'ownership' ? token.colorTextSecondary
-          : edge.warn ? '#d4380d'
-            : edge.kind === 'flow' ? FLOW_STROKE
-              : token.colorTextSecondary,
-        strokeWidth: edge.kind === 'ownership' ? 2 : 2.5,
+          : asilPalette.line(edge.maxAsil)
+            ?? (edge.kind === 'flow' ? FLOW_STROKE : token.colorTextSecondary),
+        // Weight is the second channel. Colour alone is weak on a thin line, and
+        // in the light theme adjacent levels are only ~1.43:1 apart, so a D route
+        // is both deeper and visibly heavier than an A route.
+        strokeWidth: edge.kind === 'ownership' ? 2 : asilPalette.weight(edge.maxAsil),
         strokeDasharray: edge.dashed ? '6 4' : edge.kind === 'ownership' ? '2 3' : undefined,
       } satisfies RoutedModelEdgeData,
       markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
@@ -729,7 +742,7 @@ function ModelViewCanvasInner({
       selectable: true,
     })));
   }, [resolvedGraph, layoutReady, edgeSections, presentation, safetyNamespace, handleExpand,
-    onNavigateToNode, onNavigateToReference, onShowDetails, setNodes, setEdges, token]);
+    onNavigateToNode, onNavigateToReference, onShowDetails, setNodes, setEdges, token, asilPalette]);
 
   /**
    * Apply the emphasis for the selected route.
@@ -1176,13 +1189,15 @@ function hintForLoneTile(focus: ModelTile | undefined): string {
 
 function Legend() {
   const { token } = theme.useToken();
-  const asilLevels = [
-    { label: 'QM', color: '#8c8c8c' },
-    { label: 'A', color: '#52c41a' },
-    { label: 'B', color: '#a0d911' },
-    { label: 'C', color: '#ffa940' },
-    { label: 'D', color: '#d4380d' },
-  ];
+  const asilPalette = useAsilPalette();
+  // Drawn as line segments rather than squares, because the ramp's main job on
+  // this canvas is colouring routes, and the segment can show the weight channel
+  // at the same time. Port pins use the identical colour as a filled square.
+  const asilLevels = ['QM', 'A', 'B', 'C', 'D'].map((label) => ({
+    label,
+    color: asilPalette.icon(label),
+    weight: asilPalette.weight(label),
+  }));
   const caption: React.CSSProperties = {
     fontSize: 11,
     fontFamily: token.fontFamilyCode,
@@ -1209,9 +1224,15 @@ function Legend() {
         boxShadow: token.boxShadowTertiary,
       }}
     >
-      {asilLevels.map(({ label, color }) => (
+      {asilLevels.map(({ label, color, weight }) => (
         <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: color }} />
+          <span style={{
+            display: 'inline-block',
+            width: 14,
+            height: weight,
+            borderRadius: 1,
+            background: color,
+          }} />
           <span style={caption}>{label}</span>
         </div>
       ))}
@@ -1231,9 +1252,14 @@ function Legend() {
         }} />
         <span style={caption}>bidirectional port</span>
       </div>
+      {/*
+        Shown in the QM grey because the icon itself takes the port's ASIL colour
+        wherever it is actually drawn — the legend entry is explaining the symbol,
+        not claiming a level.
+      */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <WarningOutlined style={{ fontSize: 11, color: '#d4380d' }} />
-        <span style={caption}>has malfunction</span>
+        <WarningOutlined style={{ fontSize: 11, color: asilPalette.icon('QM') }} />
+        <span style={caption}>malfunction (ASIL coloured)</span>
       </div>
       {/* A flow is the one link whose arrow means something — see `isFlowLink`. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

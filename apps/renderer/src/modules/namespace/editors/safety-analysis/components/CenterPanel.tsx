@@ -72,7 +72,8 @@ import {
   useUpdateSafetyTask,
   usePasteMalfunction,
 } from '../hooks/useSafetyMutations';
-import { getAsilColor, getAsilHexColor, buildAsilOptionGroups } from '../config/asilColors';
+import { useAsilPalette, useAsilOptionGroups } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import type { AsilSelectEntry } from '../config/asilColors';
 import { canHostCrossNSSafetyElements } from '../config/conceptHosting';
 import { DeleteWithPreview } from './DeleteWithPreview';
@@ -866,10 +867,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
     setFmAsil(asilValue || undefined);
   }, [fmQuery.data]);
 
-  const asilOptions = useMemo<AsilSelectEntry[]>(
-    () => buildAsilOptionGroups(profile.asilGroups),
-    [profile.asilGroups],
-  );
+  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
 
   const saveFmField = useCallback(async (updates: Record<string, string>) => {
     if (!fmQuery.data) return;
@@ -1321,6 +1319,10 @@ function MalfunctionTabContent({
   onDeleteNote: (nodeId: number) => Promise<void>;
   triggerAutoSave?: () => void;
 }) {
+  // Before the early returns below, so the hook order is stable across the
+  // loading, not-found and loaded renders.
+  const asilPalette = useAsilPalette();
+
   if (fmQuery.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
   }
@@ -1356,7 +1358,9 @@ function MalfunctionTabContent({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Typography.Text strong style={{ flexShrink: 0 }}>ASIL</Typography.Text>
             <div style={{
-              borderLeft: `3px solid ${fmAsil ? getAsilHexColor(fmAsil) : 'transparent'}`,
+              // `line` rather than `icon`: an unset ASIL has no colour here and
+              // the accent stays transparent, instead of borrowing the QM grey.
+              borderLeft: `3px solid ${asilPalette.line(fmAsil) ?? 'transparent'}`,
               borderRadius: 2,
               transition: 'border-color 0.2s',
             }}>
@@ -1372,7 +1376,7 @@ function MalfunctionTabContent({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{
                       width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                      background: (option.data as any).color ?? '#8c8c8c',
+                      background: (option.data as any).color ?? asilPalette.icon(''),
                     }} />
                     {option.label}
                   </div>
@@ -1981,6 +1985,7 @@ function MalfunctionWorkspace({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
+  const asilPalette = useAsilPalette();
   const fmQuery = useMalfunction(selectedTreeElement.nodeId);
   const riskRatingQuery = useRiskRating(selectedTreeElement.nodeId);
   const tasksQuery = useSafetyTasks(selectedTreeElement.nodeId);
@@ -2008,10 +2013,7 @@ function MalfunctionWorkspace({
     setAsil(asilValue || undefined);
   }, [fmQuery.data]);
 
-  const asilOptions = useMemo<AsilSelectEntry[]>(
-    () => buildAsilOptionGroups(profile.asilGroups),
-    [profile.asilGroups],
-  );
+  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
 
   if (fmQuery.isLoading || profile.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
@@ -2110,7 +2112,7 @@ function MalfunctionWorkspace({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Typography.Text strong style={{ flexShrink: 0 }}>ASIL</Typography.Text>
               <div style={{
-                borderLeft: `3px solid ${asil ? getAsilHexColor(asil) : 'transparent'}`,
+                borderLeft: `3px solid ${asilPalette.line(asil) ?? 'transparent'}`,
                 borderRadius: 2,
                 transition: 'border-color 0.2s',
               }}>
@@ -2126,7 +2128,7 @@ function MalfunctionWorkspace({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{
                         width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                        background: (option.data as any).color ?? '#8c8c8c',
+                        background: (option.data as any).color ?? asilPalette.icon(''),
                       }} />
                       {option.label}
                     </div>
@@ -2915,7 +2917,7 @@ function PropagationSection({
                     <span style={{ flex: 1 }}>{name}</span>
                     <span>node {failureMode.node_id}</span>
                     {asil && (
-                      <Tag color={getAsilColor(asil)} style={{ margin: 0, fontSize: token.fontSizeSM }}>{asil}</Tag>
+                      <AsilTag asil={asil} fontSize={token.fontSizeSM} />
                     )}
                     <Button
                       type="text"
@@ -2964,7 +2966,7 @@ function PropagationSection({
                     <span style={{ flex: 1 }}>{name}</span>
                     <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>node {failureMode.node_id}</Typography.Text>
                     {asil && (
-                      <Tag color={getAsilColor(asil)} style={{ margin: 0, fontSize: token.fontSizeSM }}>{asil}</Tag>
+                      <AsilTag asil={asil} fontSize={token.fontSizeSM} />
                     )}
                   </div>
                 </ShowInTreeTrigger>
@@ -3265,6 +3267,7 @@ function TaskEditorCard({ namespace, fmNodeId, task, workspaceKey, triggerAutoSa
 function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey, triggerAutoSave }: { namespace: string; fmNodeId: number; requirement: ConceptInstanceData; workspaceKey?: string | null; triggerAutoSave?: () => void }) {
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
+  const asilPalette = useAsilPalette();
   const updateRequirement = useUpdateRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
   const unlinkRequirement = useUnlinkRequirementFromFm(namespace, triggerAutoSave);
   const deleteRequirement = useDeleteRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
@@ -3293,10 +3296,7 @@ function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey,
     }
   }, [updateRequirement, requirement.node_id, markSaved]);
 
-  const asilOptions = useMemo<AsilSelectEntry[]>(
-    () => buildAsilOptionGroups(profile.asilGroups),
-    [profile.asilGroups],
-  );
+  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -3325,7 +3325,7 @@ function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey,
           <Typography.Text strong>ASIL</Typography.Text>
           <div style={{
             marginTop: 6,
-            borderLeft: `3px solid ${asil ? getAsilHexColor(asil) : 'transparent'}`,
+            borderLeft: `3px solid ${asilPalette.line(asil) ?? 'transparent'}`,
             borderRadius: 2,
             transition: 'border-color 0.2s',
           }}>
@@ -3341,7 +3341,7 @@ function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey,
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{
                     width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                    background: (option.data as any).color ?? '#8c8c8c',
+                    background: (option.data as any).color ?? asilPalette.icon(''),
                   }} />
                   {option.label}
                 </div>

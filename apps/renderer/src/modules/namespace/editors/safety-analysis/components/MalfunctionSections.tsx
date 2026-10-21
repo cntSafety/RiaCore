@@ -88,7 +88,8 @@ import {
   useUnlinkSafetyTaskFromFm,
 } from '../hooks/useSafetyMutations';
 import { useRequirements } from '../hooks/useSafetyQueries';
-import { getAsilColor, getAsilHexColor, ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
+import { useAsilPalette, ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import { DeleteWithPreview } from './DeleteWithPreview';
 import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
@@ -738,7 +739,7 @@ export function RequirementsSection({
       ...profile.asilGroups.map((group) => ({
         label: group.label,
         options: group.options.map((value) => ({
-          label: <Tag color={getAsilColor(value)} style={{ margin: 0 }}>{value}</Tag>,
+          label: <AsilTag asil={value} />,
           value,
         })),
       })),
@@ -830,7 +831,7 @@ export function RequirementsSection({
                         {reqName}
                       </span>
                       {reqAsil && (
-                        <Tag color={getAsilColor(reqAsil)} style={{ fontSize: 10, margin: 0, flexShrink: 0 }}>{reqAsil}</Tag>
+                        <AsilTag asil={reqAsil} fontSize={10} style={{ flexShrink: 0 }} />
                       )}
                     </div>
                   );
@@ -1550,7 +1551,7 @@ function RequirementEditorCard({
       ...profile.asilGroups.map((group) => ({
         label: group.label,
         options: group.options.map((value) => ({
-          label: <Tag color={getAsilColor(value)} style={{ margin: 0 }}>{value}</Tag>,
+          label: <AsilTag asil={value} />,
           value,
         })),
       })),
@@ -1641,7 +1642,7 @@ function RequirementEditorCard({
           )}
           {displayAsil && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-              <Tag color={getAsilColor(displayAsil)} style={{ fontSize: 10, margin: 0 }}>ASIL {displayAsil}</Tag>
+              <AsilTag asil={displayAsil} label={`ASIL ${displayAsil}`} fontSize={10} />
             </div>
           )}
         </div>

@@ -59,7 +59,8 @@ import {
 import type { ConceptPresentation } from '@riacore/app-contracts';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { PortPin } from '../safety-analysis/components/PortPin';
-import { PORT_CONCEPTS, getAsilHexColor, isBidirectionalPort } from '../safety-analysis/components/diagramModel';
+import { PORT_CONCEPTS, isBidirectionalPort } from '../safety-analysis/components/diagramModel';
+import { useAsilPalette } from '../safety-analysis/config/asilColors';
 import {
   TILE_SOURCE_HANDLE,
   TILE_TARGET_HANDLE,
@@ -161,6 +162,7 @@ export interface ModelTileNodeData extends Record<string, unknown> {
 
 function ModelTileNodeImpl({ data }: NodeProps) {
   const { token } = theme.useToken();
+  const asilPalette = useAsilPalette();
   const {
     tile, isFrame = false, portOffsets, presentation, safetyNamespace, onExpand,
     onNavigateToNode, onNavigateToReference, onShowDetails,
@@ -181,7 +183,7 @@ function ModelTileNodeImpl({ data }: NodeProps) {
   // ASIL dominates the border when there are malfunctions, because that is the
   // thing the safety workflows are reading the diagram for. The focus tile is
   // otherwise distinguished by the accent colour and a heavier border.
-  const asilHex = getAsilHexColor(tile.maxAsil);
+  const asilHex = asilPalette.line(tile.maxAsil);
   const borderColor = asilHex ?? (tile.isFocus ? token.colorInfo : token.colorBorder);
 
   const extraItems = expansionsFor(tile.concept).map((kind) => ({
@@ -232,7 +234,7 @@ function ModelTileNodeImpl({ data }: NodeProps) {
         dir={port.dir}
         bidirectional={isBidirectionalPort(port.concept)}
         warn={port.warn}
-        asilColor={getAsilHexColor(port.maxAsil)}
+        asilColor={asilPalette.line(port.maxAsil)}
         side={pinSide(port.dir, placement)}
         refCb={() => { /* the SVG overlay this existed for is gone — React Flow routes edges */ }}
         hovered={hoveredPortId}

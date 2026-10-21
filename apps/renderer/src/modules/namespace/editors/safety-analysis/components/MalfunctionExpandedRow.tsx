@@ -27,7 +27,8 @@ import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { DeleteWithPreview } from './DeleteWithPreview';
 import { api } from '../../../../../api/riacore';
 import { useQueryClient } from '@tanstack/react-query';
-import { getAsilColor, buildAsilOptionGroups } from '../config/asilColors';
+import { useAsilOptionGroups } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import { useTagsForElement } from '../../../../../hooks/useTags';
 import { useTags } from '../../../../../hooks/useTags';
 import { useTagMutations } from '../../../../../hooks/useTagMutations';
@@ -396,7 +397,7 @@ function EditableNoteTag({ note, namespace, fmNodeId, onDelete }: { note: Concep
 function EditableRequirementTag({ req, namespace, fmNodeId }: { req: ConceptInstanceData; namespace: string; fmNodeId: number }) {
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
-  const asilOptions = buildAsilOptionGroups(profile.asilGroups);
+  const asilOptions = useAsilOptionGroups(profile.asilGroups);
   const attrs = req.attributes ?? {};
   const reqId = String(attrs.req_id ?? '');
   const reqName = String(attrs.req_name ?? attrs.has_name ?? '');
@@ -436,8 +437,7 @@ function EditableRequirementTag({ req, namespace, fmNodeId }: { req: ConceptInst
       );
     }
     if (key === 'req_asil' && value) {
-      return <Tag color={getAsilColor(value)} style={{ fontSize: 11, margin: 0, cursor: 'pointer', padding: '0 4px' }}
-        onClick={() => setEditField(key)}>{value}</Tag>;
+      return <AsilTag asil={value} fontSize={11} style={{ padding: '0 4px' }} onClick={() => setEditField(key)} />;
     }
     return (
       <Tag color={key === 'req_linked_to' ? 'cyan' : 'blue'}

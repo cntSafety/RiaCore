@@ -47,6 +47,8 @@ import {
   isFlowLink,
   portDirection,
   resolveMaxAsil,
+  higherAsil,
+  parseAsilLevel,
   type DiagramMalfunctionRef,
   type PortConcept,
 } from '../safety-analysis/components/diagramModel';
@@ -125,6 +127,21 @@ export interface ModelEdge {
   /** Delegation connectors render dashed; an unrecognized kind renders solid. */
   dashed: boolean;
   warn: boolean;
+  /**
+   * The higher ASIL of the two endpoint ports, or `null` where neither carries a
+   * malfunction.
+   *
+   * `warn` alone used to decide the edge colour, which meant every edge touching
+   * any malfunction was painted one flat red regardless of level — a QM path and
+   * an ASIL D path were drawn identically, and a model with malfunctions
+   * scattered through it rendered as a uniform wall of alarm with no information
+   * in it. The level has to travel with the edge for the stroke to say anything.
+   *
+   * `warn` is kept because it answers a different question: "is there a
+   * malfunction here at all", which is still what the port pin's warning icon
+   * keys off. An edge can be `warn: true` with `maxAsil: 'QM'`.
+   */
+  maxAsil: string | null;
 }
 
 export interface ModelGraph {
@@ -373,6 +390,9 @@ export function buildModelGraph(
       targetHandle: portTargetHandle(targetPortId),
       dashed: isDelegationLink(connectorKind),
       warn: sourcePort.warn || targetPort.warn,
+      // The connection is drawn at the higher integrity of its two ends: a line
+      // from an unclassified port into an ASIL D port is an ASIL D concern.
+      maxAsil: higherAsil(sourcePort.maxAsil, targetPort.maxAsil),
     });
   }
 
@@ -405,6 +425,9 @@ export function buildModelGraph(
       targetHandle: TILE_TARGET_HANDLE,
       dashed: false,
       warn: false,
+      // Ownership says "this contains that". It carries no safety meaning, so it
+      // stays neutral however its endpoints are classified.
+      maxAsil: null,
     });
   }
 
@@ -416,7 +439,7 @@ export function buildModelGraph(
     // ports', matching how the connection diagram aggregated it.
     const asils = [tile.maxAsil, ...tile.ports.map((p) => p.maxAsil)].filter((a): a is string => a !== null);
     tile.maxAsil = asils.length > 0
-      ? asils.reduce((a, b) => (asilLevel(a) >= asilLevel(b) ? a : b))
+      ? asils.reduce((a, b) => higherAsil(a, b)!)
       : null;
     tile.warn = tile.warn || tile.ports.some((p) => p.warn);
   }
@@ -431,7 +454,7 @@ export function buildModelGraph(
     const parent = tile.parentId === undefined ? undefined : tiles.get(tile.parentId);
     if (!parent) continue;
     if (tile.maxAsil !== null
-      && (parent.maxAsil === null || asilLevel(tile.maxAsil) > asilLevel(parent.maxAsil))) {
+      && (parent.maxAsil === null || parseAsilLevel(tile.maxAsil) > parseAsilLevel(parent.maxAsil))) {
       parent.maxAsil = tile.maxAsil;
     }
     parent.warn = parent.warn || tile.warn;
@@ -501,16 +524,6 @@ function assignParents(
     tiles.get(owned)!.parentId = owner;
   }
   return nested;
-}
-
-/** Local copy of the ASIL ordering used for the per-tile aggregation above. */
-function asilLevel(asil: string): number {
-  const order: Record<string, number> = { QM: 0, A: 1, B: 2, C: 3, D: 4 };
-  const decomposition = asil.trim().match(/^([A-Z]+)\(([A-Z]+)\)$/);
-  if (decomposition) {
-    return Math.max(order[decomposition[1]] ?? -1, order[decomposition[2]] ?? -1);
-  }
-  return order[asil.trim()] ?? -1;
 }
 
 /**

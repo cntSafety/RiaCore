@@ -243,10 +243,17 @@ export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor,
         onContextMenu={malfunctions && malfunctions.length > 0 ? handleMalfunctionContextMenu : undefined}
         style={{ display: 'inline-flex', cursor: malfunctions && malfunctions.length > 0 ? 'context-menu' : 'default', flexShrink: 0 }}
       >
+        {/*
+          Takes the port's own ASIL rather than a fixed red. It was hardcoded
+          `#d4380d`, so a port whose only malfunction was QM — "there is a
+          malfunction here and nobody has classified it" — still rendered a red
+          error triangle, which overstated it. `squareColor` already resolves the
+          ASIL with the same QM-grey fallback, so icon and square agree.
+        */}
         <WarningOutlined
           style={{
             fontSize: 11,
-            color: '#d4380d',
+            color: squareColor,
             flexShrink: 0,
           }}
         />

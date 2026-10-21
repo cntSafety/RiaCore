@@ -18,8 +18,30 @@
  *
  */
 import { App, ConfigProvider, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { riacoreTokens } from './tokens';
+
+/**
+ * Which of the two palettes a surface should draw from.
+ *
+ * antd's own tokens cover most of the UI, but a few scales are authored by hand
+ * because they carry domain meaning rather than UI state — the ASIL ramp is the
+ * one that matters. Those scales need two sets of values, because "more severe"
+ * has to mean "more visually dominant" and dominance inverts with the
+ * background: a deep burnt orange reads as the heaviest step on white and as the
+ * faintest on near-black. `useThemeMode` is how such a scale finds out which
+ * side it is on.
+ *
+ * Defaults to `'dark'` so a component mounted outside the provider (as several
+ * unit tests do) still resolves a complete palette instead of `undefined`.
+ */
+export type ThemeMode = 'dark' | 'light';
+
+const ThemeModeContext = createContext<ThemeMode>('dark');
+
+export function useThemeMode(): ThemeMode {
+  return useContext(ThemeModeContext);
+}
 
 const getSystemDark = () =>
   typeof window !== 'undefined' &&
@@ -93,9 +115,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         // portals regardless of where they mount in the DOM.
       }}
     >
-      <App style={{ height: '100%' }}>
-        {children}
-      </App>
+      <ThemeModeContext.Provider value={dark ? 'dark' : 'light'}>
+        <App style={{ height: '100%' }}>
+          {children}
+        </App>
+      </ThemeModeContext.Provider>
     </ConfigProvider>
   );
 }

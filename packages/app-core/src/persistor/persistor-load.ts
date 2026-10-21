@@ -584,10 +584,17 @@ export async function load(
     existingHashes.set(String(row.name ?? ''), String(row.content_hash ?? ''));
   }
 
-  // Warn about DB namespaces not in manifest
+  // An explicit full load adopts snapshot membership as well as content. A
+  // supplied open-time plan must preserve DB-only work outside its scope.
+  const manifestNamespaces = new Set(manifest.namespaces.map(n => n.name));
+  const namespacesToRemove: string[] = [];
   for (const [dbNs] of existingHashes) {
-    if (!manifest.namespaces.find(n => n.name === dbNs)) {
-      logger.warn(`namespace '${dbNs}' exists in DB but is not listed in the manifest — skipped`);
+    if (!manifestNamespaces.has(dbNs)) {
+      if (params.plan === undefined) {
+        namespacesToRemove.push(dbNs);
+      } else {
+        logger.warn(`namespace '${dbNs}' exists in DB but is not listed in the manifest — preserved by scoped load`);
+      }
     }
   }
 
@@ -1173,6 +1180,27 @@ CREATE (:RIA_UNIV_RelationshipInstance {
     namespacesImported.push(namespace);
     // Emit namespace_done after successful import (1-based index)
     emitNamespaceProgress('namespace_done', namespace, nsIdx + 1);
+  }
+
+  // Wait until the manifest namespaces have loaded successfully before pruning
+  // DB-only namespaces, but do it before restoring shared references so those
+  // references cannot bind to namespaces absent from the selected snapshot.
+  // Use the graph-aware deletion path to remove instances and dependent rows,
+  // rather than leaving orphaned content that a later store could resurrect.
+  if (namespacesToRemove.length > 0) {
+    const tx = await dbModule.beginTransaction?.();
+    try {
+      for (const namespace of namespacesToRemove) {
+        await deleteNamespace(namespace, dbModule, tx);
+      }
+      await tx?.commit();
+    } catch (err) {
+      await tx?.rollback();
+      throw err;
+    }
+    for (const namespace of namespacesToRemove) {
+      logger.info(`remove ${namespace}: absent from manifest during full load`, { namespace });
+    }
   }
 
   // Cross-namespace resolution must happen AFTER all namespaces are processed,

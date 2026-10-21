@@ -54,7 +54,7 @@ import { computeElkLayout } from '../utils/elkLayout';
 import { MalfunctionNode, type MalfunctionNodeData } from './MalfunctionNode';
 import { PropagationEdge } from './PropagationEdge';
 import { usePropagationMutation } from '../hooks/useSafetyMutations';
-import { getAsilHexColor } from '../config/asilColors';
+import { useAsilPalette } from '../config/asilColors';
 
 // ---------------------------------------------------------------------------
 // Public node / edge types
@@ -503,6 +503,7 @@ export function PropagationCanvas({
   emptyDescription = 'No malfunctions with propagation relationships found.',
 }: PropagationCanvasProps) {
   const { token } = theme.useToken();
+  const asilPalette = useAsilPalette();
   const { message } = App.useApp();
   const { add: addPropagation, remove: removePropagation } = usePropagationMutation(namespace);
 
@@ -682,7 +683,9 @@ export function PropagationCanvas({
           namespace: node.namespace,
           concept: node.concept,
           asil: node.asil,
-          asilColor: getAsilHexColor(node.asil),
+          // `icon`, not `line`: a propagation node always *is* a malfunction, so
+          // an unclassified one still needs a colour rather than `null`.
+          asilColor: asilPalette.icon(node.asil),
           occursAtTarget: node.occursAtTarget,
           occursAtLabel: buildOccursAtLabel(node.occursAtTarget),
           isEntry: node.isEntry,

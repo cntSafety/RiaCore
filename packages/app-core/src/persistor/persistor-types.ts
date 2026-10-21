@@ -64,10 +64,10 @@ export interface PersistorLoadParams {
    * whatever the database already holds, so resolving one stale layer cannot
    * wipe a layer that was never stale.
    *
-   * Omitted: the load evaluates the sync state itself and plans from it, so a
-   * direct caller and the CLI behave exactly like the open path. An explicit
-   * plan is honoured as given — the drift dialog's Load button passes a full
-   * plan deliberately, overriding an evaluation that would have planned nothing.
+   * Omitted: full snapshot adoption, including removal of DB namespaces absent
+   * from the manifest. CLI and renderer Load actions use this mode. A supplied
+   * open-time plan preserves DB-only namespaces; an epoch difference promotes
+   * its import scope to full without changing that membership policy.
    */
   plan?: import('../workspace/sync-state.js').LoadPlan;
   onProgress?: OnLoadProgress;

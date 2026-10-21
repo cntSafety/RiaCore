@@ -21,7 +21,8 @@ import { Modal, Form, Input, Select, Alert, Tag } from 'antd';
 import { WarningOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { useCreateMalfunction } from '../hooks/useSafetyMutations';
-import { getAsilColor, ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
+import { ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
+import { AsilTag } from './AsilTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 import type { SelectedTreeElement } from '../types';
 
@@ -77,7 +78,7 @@ export function CreateMalfunctionModal({ open, namespace, selectedTreeElement, o
     ...profile.asilGroups.map((group) => ({
       label: group.label,
       options: group.options.map((v) => ({
-        label: <Tag color={getAsilColor(v)} style={{ margin: 0 }}>{v}</Tag>,
+        label: <AsilTag asil={v} />,
         value: v,
       })),
     })),

@@ -31,7 +31,7 @@ import { DataTable } from '../../../../components/data-table';
 import { TagChip } from './components/TagChip';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { useSafetyProfileMetadata } from './hooks/useSafetyProfileMetadata';
-import { getAsilColor } from './config/asilColors';
+import { AsilTag } from './components/AsilTag';
 import './safety-editor.css';
 
 const TAG_PRESET_COLORS = [
@@ -723,7 +723,7 @@ function ElementsToTagsTable({
       render: (_: unknown, record: ElementWithTags) => {
         const asil = maxAsilQuery.data?.get(record.element.node_id) ?? '';
         if (!asil) return <Typography.Text type="secondary">—</Typography.Text>;
-        return <Tag color={getAsilColor(asil)} style={{ fontSize: 11 }}>{asil}</Tag>;
+        return <AsilTag asil={asil} fontSize={11} />;
       },
     },
   ];
