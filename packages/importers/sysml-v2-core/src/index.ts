@@ -24,25 +24,13 @@
  * a first useful subset of elements to Import Write Service bulk operations.
  */
 
-import * as path from 'node:path';
+import { importerAssetPath } from '@riacore/importer-sdk';
 import type { ImporterDescriptor } from '@riacore/importer-sdk';
 import { createSysmlV2Runtime } from './sysml-v2-runtime.js';
 
-const metamodelPath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'metamodel',
-  'sysml-v2.linkml.yaml',
-);
+const metamodelPath = importerAssetPath('@riacore/importer-sysml-v2', 'importer-data/metamodel/sysml-v2.linkml.yaml', __dirname);
 
-const configTemplatePath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'config-template',
-  'sysml-v2-import-config.yaml',
-);
+const configTemplatePath = importerAssetPath('@riacore/importer-sysml-v2', 'importer-data/config-template/sysml-v2-import-config.yaml', __dirname);
 
 export const sysmlV2ImporterDescriptor: ImporterDescriptor = {
   name: 'sysml_v2',

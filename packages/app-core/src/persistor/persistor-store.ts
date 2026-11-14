@@ -40,7 +40,12 @@ import type {
   NodeKeyAttrMap,
   EdgeKeyAttrMap,
 } from './persistor-types.js';
-import { assertNoSnapshotDrift, setPendingSyncDecision, stampBaseline } from '../workspace/snapshot-baseline.js';
+import {
+  assertNoSnapshotDrift,
+  beginStoreWindow,
+  setPendingSyncDecision,
+  stampBaseline,
+} from '../workspace/snapshot-baseline.js';
 import { e, exportLayer, loadAttributeMetadata, writeFileAtomic } from './persistor-helpers.js';
 import { sortConceptInstances, sortRelationshipInstances } from './persistor-sort.js';
 import { computeMetaHash, computeNamespaceHashFromFiles } from './persistor.js';
@@ -472,27 +477,40 @@ export function store(
     // between "verified" and "written".
     assertNoSnapshotDrift(params.workingDir, params.allowSnapshotMismatch, logger);
 
-    const result = await storeImpl(params, dbModule, logger);
+    // Opened AFTER the fence and closed only once the baseline has been
+    // re-stamped, so the drift REPORT cannot describe this store's own writes as
+    // an external change. See `beginStoreWindow` for why the fence itself is
+    // deliberately left outside the window.
+    const closeStoreWindow = beginStoreWindow(params.workingDir);
+    try {
+      const result = await storeImpl(params, dbModule, logger);
 
-    // The files on disk are now exactly what we just wrote, so they become the
-    // new baseline. Doing this here rather than in the dispatch handler covers
-    // the auto-save coordinator too, which calls the persistor directly and
-    // never passes through the dispatcher.
-    //
-    // CONFIRMED BEHAVIOUR the hash-epoch migration depends on: the re-stamp is
-    // unconditional, so the store that moves a workspace into a new epoch also
-    // replaces a baseline holding previous-epoch hashes. Without it the next
-    // detectDrift would compare across epochs and report drift for files this
-    // store just wrote.
-    stampBaseline(params.workingDir, undefined, { reason: 'store' });
-    // The dialog's explicit full Store resolves the open-time decision as well
-    // as file drift. Clear it only after export succeeds, inside this queue, so
-    // the next save can proceed. A scoped store may leave disputed domains
-    // untouched and must not dismiss their decision.
-    if (params.allowSnapshotMismatch && params.namespace === undefined && params.scope === undefined) {
-      setPendingSyncDecision(params.workingDir, null);
+      // The files on disk are now exactly what we just wrote, so they become the
+      // new baseline. Doing this here rather than in the dispatch handler covers
+      // the auto-save coordinator too, which calls the persistor directly and
+      // never passes through the dispatcher.
+      //
+      // CONFIRMED BEHAVIOUR the hash-epoch migration depends on: the re-stamp is
+      // unconditional, so the store that moves a workspace into a new epoch also
+      // replaces a baseline holding previous-epoch hashes. Without it the next
+      // detectDrift would compare across epochs and report drift for files this
+      // store just wrote.
+      stampBaseline(params.workingDir, undefined, { reason: 'store' });
+      // The dialog's explicit full Store resolves the open-time decision as well
+      // as file drift. Clear it only after export succeeds, inside this queue, so
+      // the next save can proceed. A scoped store may leave disputed domains
+      // untouched and must not dismiss their decision.
+      if (params.allowSnapshotMismatch && params.namespace === undefined && params.scope === undefined) {
+        setPendingSyncDecision(params.workingDir, null);
+      }
+      return result;
+    } finally {
+      // A failed store closes the window WITHOUT a re-stamp, so the next poll
+      // sees whatever half-written state is on disk and reports it. That is the
+      // intended direction: a partially rewritten ria-data/ is a real
+      // divergence the user has to resolve.
+      closeStoreWindow();
     }
-    return result;
   });
   // Keep the chain alive regardless of this run's outcome so a failed store
   // never wedges subsequent stores for the same workspace.

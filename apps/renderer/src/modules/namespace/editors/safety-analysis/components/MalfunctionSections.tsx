@@ -32,10 +32,12 @@
  * Requirements: 5.1, 5.2, 5.3, 5.4
  */
 
+import { AsilSelect } from './AsilSelect';
 import {
   App,
   Button,
   Card,
+  ConfigProvider,
   Dropdown,
   Input,
   Popover,
@@ -88,7 +90,6 @@ import {
   useUnlinkSafetyTaskFromFm,
 } from '../hooks/useSafetyMutations';
 import { useRequirements } from '../hooks/useSafetyQueries';
-import { useAsilPalette, ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
 import { AsilTag } from './AsilTag';
 import { DeleteWithPreview } from './DeleteWithPreview';
 import { ImportedRequirementPicker } from './ImportedRequirementPicker';
@@ -97,6 +98,7 @@ import { ReviewInstructionsModal } from './ReviewInstructionsModal';
 import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 import { useSafetyMetamodel } from '../hooks/safetyMetamodelContext';
+import './malfunction-editor.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared prop interface
@@ -130,8 +132,9 @@ function SavedBadge({ visible }: { visible: boolean }) {
   return (
     <Typography.Text
       type="secondary"
+      role="status"
       style={{
-        fontSize: 11,
+        fontSize: 12,
         opacity: visible ? 1 : 0,
         transition: 'opacity 0.3s',
         pointerEvents: 'none',
@@ -293,21 +296,21 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
         icon={<PlusOutlined />}
         loading={createRiskRating.isPending}
         onClick={() => void handleCreate()}
-        style={{ fontSize: 11, height: 22 }}
+        style={{ fontSize: 12 }}
       >
         {isSotif ? 'Add Risk Rating Note' : 'Add Risk Rating'}
       </Button>
     );
   }
 
-  const gridLabelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 500, color: rrt.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' };
+  const gridLabelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 500, color: rrt.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' };
 
   // SOTIF: note-only view — the residual-risk argument that points at the
   // scenario-based validation evidence. No Severity/Occurrence/Detection/RPN.
   if (isSotif) {
     return (
       <>
-        <Card size="small" styles={{ body: { padding: 14 } }}>
+        <Card className="malfunction-section" size="small" styles={{ body: { padding: 14 } }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
             <div style={gridLabelStyle}>Risk Rating Note — residual-risk argument</div>
             <Input.TextArea
@@ -322,7 +325,7 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
             <Typography.Text type="secondary" style={{ fontSize: 11, marginTop: 8 }}>
               For SOTIF, Severity / Occurrence / Detection and the RPN are not used — an ordinal score is not a SOTIF acceptance argument. Only this free-text argument is kept.
             </Typography.Text>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
+            <div className="malfunction-actions" style={{ justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
               <SavedBadge visible={isSaved} />
               <DeleteWithPreview nodeId={riskRating.node_id} onConfirm={() => deleteRiskRating.mutateAsync(riskRating.node_id)}>
                 {(openPreview) => (
@@ -340,10 +343,10 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
     <>
       {/* Card matches the SafetyTaskSection / RequirementsSection row style:
           same padding, uppercase field labels, and a bordered-top action footer. */}
-      <Card size="small" styles={{ body: { padding: 14 } }}>
+      <Card className="malfunction-section" size="small" styles={{ body: { padding: 14 } }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
           {/* Metadata grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px 12px' }}>
+          <div className="malfunction-fields malfunction-fields--risk">
             <div>
               <div style={gridLabelStyle}>Severity</div>
               <Select
@@ -405,8 +408,8 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
           </div>
 
           {/* Actions — bordered-top footer matching the Safety Task / Requirement rows */}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
-            <Space size={8}>
+          <div className="malfunction-actions" style={{ justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${rrt.colorBorderSecondary}` }}>
+            <Space size={8} wrap>
               <Tag color="purple" style={{ fontSize: 12, margin: 0 }}>RPN {String(riskRating.attributes?.risk_priority_number ?? 'N/A')}</Tag>
               <ActionPriorityTag
                 actionPriority={profile.actionPriority}
@@ -416,7 +419,7 @@ export function RiskRatingSection({ fmNodeId, workspaceKey: _workspaceKey, trigg
               />
               <SavedBadge visible={isSaved} />
             </Space>
-            <Space size={8}>
+            <Space size={8} wrap>
               <Button size="small" icon={<FileTextOutlined />} onClick={() => setInstructionsOpen(true)}>Review Instructions</Button>
               <DeleteWithPreview nodeId={riskRating.node_id} onConfirm={() => deleteRiskRating.mutateAsync(riskRating.node_id)}>
                 {(openPreview) => (
@@ -520,21 +523,21 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="malfunction-section malfunction-stack">
       {/* ── Toolbar: add + link actions top-right (matches RequirementsSection) ── */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
+      <div className="malfunction-toolbar">
         <Button
           size="small"
           type="dashed"
           icon={<PlusOutlined />}
           onClick={() => setGhostActive(true)}
           disabled={ghostActive}
-          style={{ fontSize: 11, height: 22 }}
+          style={{ fontSize: 12 }}
         >
           Add Task
         </Button>
         {linkingExisting ? (
-          <Space wrap>
+          <Space wrap style={{ minWidth: 0, maxWidth: '100%' }}>
             <Select
               showSearch
               placeholder={availableTasks.length === 0 ? 'No reusable tasks available' : 'Search existing tasks…'}
@@ -546,7 +549,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
               }))}
               loading={allTasksQuery.isLoading}
               disabled={availableTasks.length === 0}
-              style={{ width: 280 }}
+              style={{ width: 240, maxWidth: '100%' }}
               optionFilterProp="label"
             />
             <Button size="small" type="primary" onClick={() => void handleLinkExisting()} loading={linkTask.isPending} disabled={selectedTaskId === undefined}>Link</Button>
@@ -559,7 +562,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
             icon={<LinkOutlined />}
             onClick={() => setLinkingExisting(true)}
             disabled={allTasksQuery.isLoading || availableTasks.length === 0}
-            style={{ fontSize: 11, height: 22 }}
+            style={{ fontSize: 12 }}
           >
             Link Existing Task
           </Button>
@@ -585,17 +588,16 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
           style={{
             border: `1px solid ${token.colorBorder}`,
             borderRadius: token.borderRadius,
-            padding: '12px 14px',
+            padding: 14,
             display: 'flex',
             flexDirection: 'column',
             gap: 0,
             background: token.colorBgContainer,
-            boxShadow: `0 1px 4px ${token.colorBorder}44`,
           }}
         >
           {/* Name — borderless title input (required — the Save button stays
               disabled until this has text, since a task must have a name). */}
-          <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Task name <span style={{ color: token.colorError }}>*</span>
           </div>
           <Input.TextArea
@@ -613,9 +615,9 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
           />
 
           {/* Metadata grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 12px', paddingTop: 12 }}>
+          <div className="malfunction-fields" style={{ paddingTop: 12 }}>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</div>
               <Select
                 size="small"
                 value={ghostType}
@@ -625,7 +627,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
               />
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</div>
               <Select
                 size="small"
                 value={ghostStatus}
@@ -635,7 +637,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
               />
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Responsible</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Responsible</div>
               <Input
                 size="small"
                 placeholder="—"
@@ -645,7 +647,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
               />
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
               <Input
                 size="small"
                 placeholder="—"
@@ -659,7 +661,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
 
           {/* Description — full width */}
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</div>
+            <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</div>
             <Input.TextArea
               size="small"
               placeholder="Optional — describe the task intent, scope, or acceptance criteria."
@@ -672,7 +674,7 @@ export function SafetyTaskSection({ fmNodeId, namespace, workspaceKey, triggerAu
           </div>
 
           {/* Actions */}
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+          <div className="malfunction-actions" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
             <Button size="small" onClick={() => resetGhost()}>Cancel</Button>
             <Tooltip title={ghostName.trim() ? undefined : 'Enter a task name to save'}>
               <Button
@@ -713,7 +715,6 @@ export function RequirementsSection({
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const profile = useSafetyProfileMetadata();
   const requirementsQuery = useRequirementsForFm(fmNodeId);
   const directRequirementsQuery = useDirectRequirementsForFm(fmNodeId);
   const requirements = requirementsQuery.data ?? [];
@@ -731,21 +732,6 @@ export function RequirementsSection({
   const [ghostAsil, setGhostAsil] = useState<string | undefined>(undefined);
   const [ghostDescription, setGhostDescription] = useState('');
   const [selectedRequirementId, setSelectedRequirementId] = useState<number | undefined>();
-
-  // Grouped ASIL options with color tags — same dropdown used for malfunctions.
-  const asilOptions = useMemo(
-    () => [
-      { label: ASIL_UNSET_LABEL, value: ASIL_UNSET_VALUE },
-      ...profile.asilGroups.map((group) => ({
-        label: group.label,
-        options: group.options.map((value) => ({
-          label: <AsilTag asil={value} />,
-          value,
-        })),
-      })),
-    ],
-    [profile.asilGroups],
-  );
 
   const linkedRequirementIds = useMemo(() => new Set(requirements.map((r) => r.node_id)), [requirements]);
   const directRequirementIds = useMemo(() => new Set(directRequirements.map((r) => r.node_id)), [directRequirements]);
@@ -789,9 +775,9 @@ export function RequirementsSection({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="malfunction-section malfunction-stack">
       {/* Link existing row */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' }}>
+      <div className="malfunction-toolbar">
         <ImportedRequirementPicker fmNodeId={fmNodeId} linkedNodeIds={directRequirementIds} malfunctionNamespace={namespace} />
         <Popover
           open={linkingExisting}
@@ -800,7 +786,7 @@ export function RequirementsSection({
           placement="bottomRight"
           title="Link Safety-Internal Requirement"
           content={
-            <div style={{ width: 340 }}>
+            <div style={{ width: 340, maxWidth: 'calc(100vw - 48px)' }}>
               <Select
                 showSearch
                 placeholder={availableRequirements.length === 0 ? 'No reusable requirements available' : 'Select a requirement…'}
@@ -853,7 +839,7 @@ export function RequirementsSection({
             type="dashed"
             icon={<LinkOutlined />}
             disabled={allRequirementsQuery.isLoading || availableRequirements.length === 0}
-            style={{ fontSize: 11, height: 22 }}
+            style={{ fontSize: 12 }}
           >
             Link Safety Internal
           </Button>
@@ -864,7 +850,7 @@ export function RequirementsSection({
           icon={<PlusOutlined />}
           onClick={() => setGhostActive(true)}
           disabled={ghostActive}
-          style={{ fontSize: 11, height: 22 }}
+          style={{ fontSize: 12 }}
         >
           Add requirement
         </Button>
@@ -887,27 +873,29 @@ export function RequirementsSection({
       {ghostActive && (
         <div
           style={{
-            border: `1px dashed ${token.colorBorder}`,
-            borderRadius: token.borderRadiusSM,
-            padding: 10,
+            border: `1px solid ${token.colorBorder}`,
+            borderRadius: token.borderRadius,
+            padding: 14,
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
-            background: token.colorFillQuaternary,
+            background: token.colorBgContainer,
           }}
         >
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div className="malfunction-requirement-fields">
             <Input
               size="small"
+              aria-label="Requirement ID"
               placeholder="Req ID"
               value={ghostReqId}
               onChange={(e) => setGhostReqId(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') resetGhost(); }}
               autoFocus
-              style={{ width: 120, fontSize: 12 }}
+              style={{ fontSize: 13, fontFamily: 'monospace' }}
             />
             <Input
               size="small"
+              aria-label="Requirement name"
               placeholder="Name"
               value={ghostName}
               onChange={(e) => setGhostName(e.target.value)}
@@ -915,28 +903,26 @@ export function RequirementsSection({
                 if (e.key === 'Enter') { void handleCreate(); }
                 if (e.key === 'Escape') resetGhost();
               }}
-              style={{ flex: 1, fontSize: 12 }}
+              style={{ minWidth: 0, fontSize: 13 }}
             />
-            <Select
+            <AsilSelect
               size="small"
-              allowClear
-              placeholder="ASIL"
               value={ghostAsil}
               onChange={(v) => setGhostAsil(v)}
-              options={asilOptions}
-              style={{ width: 110 }}
+              style={{ width: '100%' }}
             />
           </div>
           <Input.TextArea
             size="small"
+            aria-label="Requirement description"
             placeholder="Description"
             value={ghostDescription}
             onChange={(e) => setGhostDescription(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Escape') resetGhost(); }}
-            autoSize={{ minRows: 2, maxRows: 5 }}
-            style={{ fontSize: 12 }}
+            autoSize={{ minRows: 2 }}
+            style={{ fontSize: 13 }}
           />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <div className="malfunction-actions" style={{ marginTop: 4, paddingTop: 12, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
             <Button size="small" onClick={() => resetGhost()}>Cancel</Button>
             <Button
               size="small"
@@ -955,7 +941,7 @@ export function RequirementsSection({
       {/* Imported (cross-namespace) requirements */}
       {directRequirements.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
             Imported
           </Typography.Text>
           {directRequirements.map((r) => {
@@ -977,7 +963,7 @@ export function RequirementsSection({
                 styles={{ body: { padding: 14 } }}
               >
                 {/* Header row: source badge + ID + title + kebab (Show in Tree) + Unlink */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <div className="malfunction-requirement-summary">
                   <Tag color={badgeColor} style={{ fontSize: 10, margin: 0, flexShrink: 0, marginTop: 1 }}>{badgeText}</Tag>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* ID above name — ID small + muted, Name on next line with emphasis */}
@@ -1004,6 +990,7 @@ export function RequirementsSection({
                         <Button
                           size="small"
                           type="text"
+                          aria-label="More actions"
                           icon={<MoreOutlined />}
                           style={{ padding: '0 4px', height: 20, width: 20, color: token.colorTextTertiary, flexShrink: 0 }}
                           onClick={(e) => e.stopPropagation()}
@@ -1013,8 +1000,7 @@ export function RequirementsSection({
                     {/* Body text */}
                     {bodyText && (
                       <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12, display: 'block', marginTop: 4, lineHeight: '1.5', wordBreak: 'break-word' }}
+                        style={{ fontSize: 13, display: 'block', marginTop: 4, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
                       >
                         {bodyText}
                       </Typography.Text>
@@ -1104,10 +1090,10 @@ export function ReviewSection({ fmNodeId, namespace, workspaceKey, triggerAutoSa
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 24 }}>
+    <div className="malfunction-section malfunction-stack">
       {/* ── Toolbar: status summary on the left, add action on the right
           (matches SafetyTaskSection / RequirementsSection). ─────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+      <div className="malfunction-toolbar">
         {statTags.map(st => (
           <Tag key={st.label} color={st.color} style={{ margin: 0 }}>{st.count} {st.label}</Tag>
         ))}
@@ -1118,7 +1104,7 @@ export function ReviewSection({ fmNodeId, namespace, workspaceKey, triggerAutoSa
           icon={<PlusOutlined />}
           onClick={() => { void handleCreate(); }}
           loading={createReviewItem.isPending}
-          style={{ fontSize: 11, height: 22 }}
+          style={{ fontSize: 12 }}
         >
           Add review
         </Button>
@@ -1203,7 +1189,7 @@ function TaskListRow({
   const [editReference, setEditReference] = useState(String(task.attributes?.task_reference ?? ''));
   const [saving, setSaving] = useState(false);
 
-  // Sync when task data refreshes
+  // Reset the draft on edit/cancel as well as when persisted task data refreshes.
   useEffect(() => {
     setEditName(String(task.attributes?.has_name ?? ''));
     setEditType(String(task.attributes?.task_type ?? profile.taskDefaults.type));
@@ -1211,7 +1197,7 @@ function TaskListRow({
     setEditResponsible(String(task.attributes?.task_responsible ?? ''));
     setEditDescription(String(task.attributes?.task_description ?? ''));
     setEditReference(String(task.attributes?.task_reference ?? ''));
-  }, [task, profile.taskDefaults]);
+  }, [task, profile.taskDefaults, editing]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -1262,15 +1248,15 @@ function TaskListRow({
         />
 
         {/* Main content area */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div className="malfunction-task-content">
           {/* Row 1: name */}
-          <Typography.Text strong style={{ fontSize: 13, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '18px' }}>
+          <Typography.Text strong style={{ fontSize: 13, display: 'block', overflowWrap: 'anywhere', lineHeight: 1.5 }}>
             {taskName || <Typography.Text type="secondary" style={{ fontWeight: 400 }}>Unnamed</Typography.Text>}
           </Typography.Text>
 
           {/* Row 2: description (only when present) */}
           {taskDescription && (
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <Typography.Text style={{ fontSize: 13, display: 'block', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
               {taskDescription}
             </Typography.Text>
           )}
@@ -1321,6 +1307,7 @@ function TaskListRow({
         <Button
           type="text"
           size="small"
+          aria-label="Edit task"
           icon={<EditOutlined />}
           onClick={() => setEditing(true)}
           style={{ padding: '0 4px', color: token.colorTextTertiary, alignSelf: 'flex-start' }}
@@ -1346,7 +1333,7 @@ function TaskListRow({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* ── Name field — full-width title input (required — the Save button
           stays disabled until this has text). ─── */}
-      <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         Task name <span style={{ color: token.colorError }}>*</span>
       </div>
       <Input.TextArea
@@ -1359,9 +1346,9 @@ function TaskListRow({
       />
 
       {/* ── Metadata grid ─────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 12px', paddingTop: 12 }}>
+      <div className="malfunction-fields" style={{ paddingTop: 12 }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</div>
           <Select
             size="small"
             value={editType}
@@ -1371,7 +1358,7 @@ function TaskListRow({
           />
         </div>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</div>
           <Select
             size="small"
             value={editStatus}
@@ -1381,7 +1368,7 @@ function TaskListRow({
           />
         </div>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Responsible</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Responsible</div>
           <Input
             size="small"
             value={editResponsible}
@@ -1391,7 +1378,7 @@ function TaskListRow({
           />
         </div>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
           <Input
             size="small"
             value={editReference}
@@ -1404,7 +1391,7 @@ function TaskListRow({
 
       {/* ── Description — full width below grid ───────────────────────── */}
       <div style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, color: token.colorTextTertiary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</div>
+        <div style={{ fontSize: 12, fontWeight: 500, color: token.colorTextSecondary, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Description</div>
         <Input.TextArea
           size="small"
           value={editDescription}
@@ -1416,7 +1403,7 @@ function TaskListRow({
       </div>
 
       {/* ── Actions ───────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+      <div className="malfunction-actions" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
         <Button size="small" onClick={() => setEditing(false)}>Cancel</Button>
         <Tooltip title={editName.trim() ? undefined : 'Enter a task name to save'}>
           <Button size="small" type="primary" loading={saving} disabled={!editName.trim()} onClick={() => void handleSave()}>Save</Button>
@@ -1533,7 +1520,6 @@ function RequirementEditorCard({
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const profile = useSafetyProfileMetadata();
   const updateRequirement = useUpdateRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
   const unlinkRequirement = useUnlinkRequirementFromFm(namespace, triggerAutoSave);
   const deleteRequirement = useDeleteRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
@@ -1544,27 +1530,12 @@ function RequirementEditorCard({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Grouped ASIL options with color tags — same dropdown used in the create form.
-  const asilOptions = useMemo(
-    () => [
-      { label: ASIL_UNSET_LABEL, value: ASIL_UNSET_VALUE },
-      ...profile.asilGroups.map((group) => ({
-        label: group.label,
-        options: group.options.map((value) => ({
-          label: <AsilTag asil={value} />,
-          value,
-        })),
-      })),
-    ],
-    [profile.asilGroups],
-  );
-
   useEffect(() => {
     setReqId(String(requirement.attributes?.req_id ?? ''));
     setReqName(String(requirement.attributes?.req_name ?? requirement.attributes?.has_name ?? ''));
     setAsil(String(requirement.attributes?.req_asil ?? '') || undefined);
     setReqText(String(requirement.attributes?.req_text ?? ''));
-  }, [requirement]);
+  }, [requirement, editing]);
 
   const handleSave = async () => {
     if (!reqId.trim() || !reqName.trim()) return;
@@ -1596,7 +1567,7 @@ function RequirementEditorCard({
   // ── Collapsed (read) view ─────────────────────────────────────────────────
   if (!editing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div className="malfunction-requirement-summary">
         <Tag color="green" style={{ fontSize: 10, margin: 0, flexShrink: 0, marginTop: 1 }}>safety-internal</Tag>
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* ID above name: ID small + muted, Name on next line with emphasis */}
@@ -1627,6 +1598,7 @@ function RequirementEditorCard({
               <Button
                 size="small"
                 type="text"
+                aria-label="More actions"
                 icon={<MoreOutlined />}
                 style={{ padding: '0 4px', height: 20, width: 20, color: token.colorTextTertiary, flexShrink: 0 }}
               />
@@ -1634,8 +1606,7 @@ function RequirementEditorCard({
           </div>
           {displayText && (
             <Typography.Text
-              type="secondary"
-              style={{ fontSize: 12, display: 'block', marginTop: 4, lineHeight: '1.5', wordBreak: 'break-word' }}
+              style={{ fontSize: 13, display: 'block', marginTop: 4, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
             >
               {displayText}
             </Typography.Text>
@@ -1646,26 +1617,27 @@ function RequirementEditorCard({
             </div>
           )}
         </div>
-        <Space size={2} style={{ flexShrink: 0, marginTop: 1 }}>
+        <Space size={4} wrap>
           <Button
             type="text"
             size="small"
-            icon={<EditOutlined style={{ fontSize: 11 }} />}
+            aria-label="Edit requirement"
+            icon={<EditOutlined />}
             onClick={() => setEditing(true)}
-            style={{ height: 20, width: 20, padding: 0, color: token.colorTextSecondary }}
+            style={{ color: token.colorTextSecondary }}
           />
           <Button
             size="small"
             type="text"
             danger
             onClick={() => unlinkRequirement.mutate({ failureModeNodeId: fmNodeId, requirementNodeId: requirement.node_id })}
-            style={{ height: 20, padding: '0 4px', fontSize: 11 }}
+            style={{ padding: '0 4px', fontSize: 12 }}
           >
             Unlink
           </Button>
           <DeleteWithPreview nodeId={requirement.node_id} onConfirm={() => deleteRequirement.mutateAsync(requirement.node_id)}>
             {(openPreview) => (
-              <Button size="small" type="text" danger onClick={openPreview} style={{ height: 20, padding: '0 4px', fontSize: 11 }}>Delete</Button>
+              <Button size="small" type="text" danger onClick={openPreview} style={{ padding: '0 4px', fontSize: 12 }}>Delete</Button>
             )}
           </DeleteWithPreview>
         </Space>
@@ -1676,14 +1648,15 @@ function RequirementEditorCard({
   // ── Expanded (edit) view — mirrors the create form ─────────────────────────
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div className="malfunction-requirement-fields">
         <Input
           size="small"
           value={reqId}
           onChange={(e) => setReqId(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
+          aria-label="Requirement ID"
           placeholder="Req ID"
-          style={{ width: 120, fontSize: 12, fontFamily: 'monospace' }}
+          style={{ fontSize: 13, fontFamily: 'monospace' }}
           autoFocus
         />
         <Input
@@ -1694,29 +1667,28 @@ function RequirementEditorCard({
             if (e.key === 'Enter') { void handleSave(); }
             if (e.key === 'Escape') setEditing(false);
           }}
+          aria-label="Requirement name"
           placeholder="Name"
-          style={{ flex: 1, fontSize: 12 }}
+          style={{ minWidth: 0, fontSize: 13 }}
         />
-        <Select
+        <AsilSelect
           size="small"
-          allowClear
-          placeholder="ASIL"
           value={asil}
           onChange={(v) => setAsil(v)}
-          options={asilOptions}
-          style={{ width: 110 }}
+          style={{ width: '100%' }}
         />
       </div>
       <Input.TextArea
         size="small"
-        autoSize={{ minRows: 2, maxRows: 5 }}
+        autoSize={{ minRows: 2 }}
         value={reqText}
         onChange={(e) => setReqText(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
+        aria-label="Requirement description"
         placeholder="Description"
-        style={{ fontSize: 12 }}
+        style={{ fontSize: 13 }}
       />
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+      <div className="malfunction-actions" style={{ marginTop: 4, paddingTop: 12, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
         <Button size="small" onClick={() => setEditing(false)}>Cancel</Button>
         <Button size="small" type="primary" loading={saving} disabled={!reqId.trim() || !reqName.trim()} onClick={() => void handleSave()}>Save</Button>
       </div>
@@ -1829,15 +1801,17 @@ function ReviewItemEditorCard({
                   {reviewItem.suspect && <Tag color="warning" style={{ margin: 0 }}>Suspect</Tag>}
                   <div style={{ flex: 1 }} />
                   <Dropdown menu={{ items: moreMenuItems as import('antd').MenuProps['items'] }} trigger={['click']}>
-                    <Button size="small" type="text" icon={<MoreOutlined />} style={{ padding: '0 4px' }} />
+                    <Button size="small" type="text" aria-label="Review actions" icon={<MoreOutlined />} style={{ padding: '0 4px' }} />
                   </Dropdown>
                 </div>
-                <div style={{ marginTop: 6 }}>
-                  <Segmented
-                    value={reviewerVerdict || undefined}
-                    onChange={(v) => { setReviewerVerdict(String(v)); void saveField({ reviewer_verdict: String(v) }); }}
-                    options={verdictSegmentedOptions}
-                  />
+                <div className="malfunction-verdict" style={{ marginTop: 6 }}>
+                  <ConfigProvider theme={{ token: { motion: false } }}>
+                    <Segmented
+                      value={reviewerVerdict || undefined}
+                      onChange={(v) => { setReviewerVerdict(String(v)); void saveField({ reviewer_verdict: String(v) }); }}
+                      options={verdictSegmentedOptions}
+                    />
+                  </ConfigProvider>
                 </div>
                 <Input.TextArea
                   autoSize={{ minRows: 1 }}
@@ -1858,8 +1832,8 @@ function ReviewItemEditorCard({
             )}
 
             {reviewerHasVerdict && authorExpanded && (
-              <div style={{
-                marginTop: 10, marginLeft: 42,
+              <div className="malfunction-review-reply" style={{
+                marginTop: 12,
                 borderLeft: `2px solid ${token.colorBorderSecondary}`,
                 paddingLeft: 14,
               }}>
@@ -1875,12 +1849,14 @@ function ReviewItemEditorCard({
                       <Typography.Text strong style={{ fontSize: 13 }}>Author</Typography.Text>
                       {authorComment.trim().length > 0 && <Tag style={{ margin: 0, fontSize: 11, letterSpacing: 0.3 }}>RESPONDED</Tag>}
                     </div>
-                    <div style={{ marginTop: 6 }}>
-                      <Segmented
-                        value={authorStatus}
-                        onChange={(v) => { setAuthorStatus(String(v)); void saveField({ author_status: String(v) }); }}
-                        options={authorStatusSegmentedOptions}
-                      />
+                    <div className="malfunction-verdict" style={{ marginTop: 6 }}>
+                      <ConfigProvider theme={{ token: { motion: false } }}>
+                        <Segmented
+                          value={authorStatus}
+                          onChange={(v) => { setAuthorStatus(String(v)); void saveField({ author_status: String(v) }); }}
+                          options={authorStatusSegmentedOptions}
+                        />
+                      </ConfigProvider>
                     </div>
                     <Input.TextArea
                       autoSize={{ minRows: 1 }}

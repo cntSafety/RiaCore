@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { Badge, Segmented, theme } from 'antd';
+import { Badge, ConfigProvider, Segmented, theme } from 'antd';
 import { createElement } from 'react';
 import type { TabDefinition } from '../config/elementTabs';
 import { LENS_ICONS } from '../config/lensIcons';
@@ -25,6 +25,8 @@ import { LENS_ICONS } from '../config/lensIcons';
 export interface ElementLensSelectorProps {
   /** Options in display order. */
   options: TabDefinition[];
+  /** Allow wrapping in narrow malfunction panels; disable the single-row sliding thumb. */
+  wrap?: boolean;
   /** Currently selected option key. */
   value: string;
   /** Called with the newly selected option key. */
@@ -37,10 +39,10 @@ export interface ElementLensSelectorProps {
  * style — a Segmented pill group with an icon, a label and an optional count
  * badge per option.
  */
-export function ElementLensSelector({ options, value, onChange }: ElementLensSelectorProps) {
+export function ElementLensSelector({ options, value, onChange, wrap = false }: ElementLensSelectorProps) {
   const { token } = theme.useToken();
 
-  return (
+  const selector = (
     <Segmented
       size="small"
       value={value}
@@ -74,4 +76,7 @@ export function ElementLensSelector({ options, value, onChange }: ElementLensSel
       style={{ flexShrink: 0 }}
     />
   );
+
+  // Ant's sliding thumb assumes one row and can overflow after a panel resize.
+  return wrap ? <ConfigProvider theme={{ token: { motion: false } }}>{selector}</ConfigProvider> : selector;
 }

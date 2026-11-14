@@ -17,10 +17,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { App, Badge, Button, Input, Space, Spin, Tag, Typography, theme } from 'antd';
+import { Alert, App, Badge, Button, ConfigProvider, Input, Space, Spin, Tag, Typography, theme } from 'antd';
 import { CheckOutlined, CloseOutlined, PlusOutlined, TagOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import type { ColumnsType } from 'antd/es/table/interface';
 import type { NamespaceContext } from '../../../../store/workspaceStore';
 import type { ConceptInstanceData } from '@riacore/app-contracts';
@@ -33,6 +33,10 @@ import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { useSafetyProfileMetadata } from './hooks/useSafetyProfileMetadata';
 import { AsilTag } from './components/AsilTag';
 import './safety-editor.css';
+import './tags-overview.css';
+import { useThemeMode } from '../../../../theme/ThemeProvider';
+import { FindTagTarget } from './components/FindTagTarget';
+import { TagAssignmentPanel, type TagAssignmentTarget } from './components/TagAssignmentPanel';
 
 const TAG_PRESET_COLORS = [
   'magenta', 'red', 'volcano', 'orange', 'gold', 'lime', 'green',
@@ -85,12 +89,8 @@ function useTagsWithElements(namespace: string) {
     queryFn: async () => {
       const result = new Map<number, ConceptInstanceData[]>();
       for (const tag of tags) {
-        try {
-          const elements = await api.safety.getElementsForTag(tag.node_id);
-          result.set(tag.node_id, elements);
-        } catch {
-          result.set(tag.node_id, []);
-        }
+        const elements = await api.safety.getElementsForTag(tag.node_id);
+        result.set(tag.node_id, elements);
       }
       return result;
     },
@@ -110,6 +110,8 @@ function useTagsWithElements(namespace: string) {
     data,
     isLoading: tagsQuery.isLoading || elementsQuery.isLoading,
     tags,
+    error: tagsQuery.error || elementsQuery.error,
+    retry: () => { void tagsQuery.refetch(); void elementsQuery.refetch(); },
   };
 }
 
@@ -234,12 +236,14 @@ function TagsToElementsTable({
   tagElements,
   namespace,
   onNavigateToNode,
-  triggerCreate = 0,
+  creatingTag,
+  onCreatingChange,
 }: {
   tagElements: TagWithElements[];
   namespace: string;
   onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
-  triggerCreate?: number;
+  creatingTag: boolean;
+  onCreatingChange: (creating: boolean) => void;
 }) {
   const { message } = App.useApp();
   const { createTag, updateTag, deleteTag, linkTag, unlinkTag, linkTagCrossNs, unlinkTagCrossNs } = useTagMutations();
@@ -247,15 +251,10 @@ function TagsToElementsTable({
   const [editingTagId, setEditingTagId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [colorPickerTagId, setColorPickerTagId] = useState<number | null>(null);
-  const [creatingTag, setCreatingTag] = useState(false);
+  const setCreatingTag = onCreatingChange;
   const [newTagName, setNewTagName] = useState('');
-
-  useEffect(() => {
-    if (triggerCreate > 0) {
-      setCreatingTag(true);
-      setNewTagName('');
-    }
-  }, [triggerCreate]);
+  const [search, setSearch] = useState('');
+  const { modal } = App.useApp();
 
   const tagNameFilters = useMemo(
     () => tagElements.map((te) => ({
@@ -273,6 +272,7 @@ function TagsToElementsTable({
   };
 
   const handleRename = async (tagNodeId: number) => {
+    if (updateTag.isPending) return;
     if (!editName.trim()) {
       setEditingTagId(null);
       return;
@@ -283,6 +283,7 @@ function TagsToElementsTable({
       message.success('Tag renamed');
     } catch (err: unknown) {
       message.error(String((err as Error)?.message ?? 'Failed to rename tag'));
+      return;
     }
     setEditingTagId(null);
   };
@@ -294,10 +295,19 @@ function TagsToElementsTable({
       message.success('Tag deleted');
     } catch (err: unknown) {
       message.error(String((err as Error)?.message ?? 'Failed to delete tag'));
+      throw err;
     }
   };
 
+  const confirmDelete = (record: TagWithElements) => modal.confirm({
+    title: 'Delete tag?',
+    content: `Delete "${String(record.tag.attributes?.has_name ?? '')}" and remove it from ${record.elements.length} elements?`,
+    okText: 'Delete tag', okButtonProps: { danger: true },
+    onOk: () => handleDelete(record.tag.node_id),
+  });
+
   const handleCreate = async () => {
+    if (createTag.isPending) return;
     if (!newTagName.trim()) {
       setCreatingTag(false);
       return;
@@ -343,7 +353,7 @@ function TagsToElementsTable({
     } else if (selected === 'removeColor') {
       handleColorChange(record.tag.node_id, '');
     } else if (selected === 'delete') {
-      handleDelete(record.tag.node_id);
+      confirmDelete(record);
     }
   };
 
@@ -421,26 +431,27 @@ function TagsToElementsTable({
             <Space size={4}>
               <Input
                 size="small"
-                value={editName}
+                aria-label="Tag name" value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onPressEnter={() => handleRename(record.tag.node_id)}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') setEditingTagId(null);
                 }}
-                style={{ width: 120, fontSize: 12 }}
+                style={{ width: 120, fontSize: 14 }}
                 autoFocus
               />
               <Button
                 size="small"
                 type="text"
-                icon={<CheckOutlined style={{ fontSize: 11, color: '#52c41a' }} />}
+                aria-label="Save tag name"
+                icon={<CheckOutlined style={{ fontSize: 13, color: '#52c41a' }} />}
                 onClick={() => handleRename(record.tag.node_id)}
               />
               <Button
                 size="small"
                 type="text"
-                icon={<CloseOutlined style={{ fontSize: 11 }} />}
-                onClick={() => setEditingTagId(null)}
+                icon={<CloseOutlined style={{ fontSize: 13 }} />}
+                aria-label="Cancel rename" onClick={() => setEditingTagId(null)}
               />
             </Space>
           );
@@ -450,15 +461,16 @@ function TagsToElementsTable({
           return (
             <Space size={4} wrap>
               {TAG_PRESET_COLORS.map((c) => (
-                <Tag key={c} color={c} style={{ cursor: 'pointer', fontSize: 11 }} onClick={() => handleColorChange(record.tag.node_id, c)}>
-                  {c}
-                </Tag>
+                <Button key={c} size="small" aria-label={`Set color ${c}`} onClick={() => handleColorChange(record.tag.node_id, c)}>
+                  <TagChip color={c}>{c}</TagChip>
+                </Button>
               ))}
+              <Button size="small" onClick={() => handleColorChange(record.tag.node_id, '')}>Default color</Button>
               <Button
                 size="small"
                 type="text"
-                icon={<CloseOutlined style={{ fontSize: 11 }} />}
-                onClick={() => setColorPickerTagId(null)}
+                icon={<CloseOutlined style={{ fontSize: 13 }} />}
+                aria-label="Cancel color change" onClick={() => setColorPickerTagId(null)}
               />
             </Space>
           );
@@ -487,7 +499,7 @@ function TagsToElementsTable({
             {record.elements.map((el) => (
               <Tag
                 key={el.node_id}
-                style={{ cursor: 'pointer', fontSize: 11 }}
+                style={{ cursor: 'pointer', fontSize: 13 }}
                 onClick={() => onNavigateToNode?.(el.node_id, el.namespace, el.concept)}
                 onContextMenu={(e) => handleElementContextMenu(el, record.tag.node_id, e)}
               >
@@ -507,10 +519,21 @@ function TagsToElementsTable({
         <Badge count={record.elements.length} style={{ backgroundColor: '#722ed1' }} showZero />
       ),
     },
+    {
+      title: 'Actions', key: 'actions', width: 230, fixed: 'right',
+      render: (_, record) => <Space size={4}>
+        <Button size="small" type="text" onClick={() => { setEditingTagId(record.tag.node_id); setEditName(String(record.tag.attributes?.has_name ?? '')); setColorPickerTagId(null); }}>Rename</Button>
+        <Button size="small" type="text" onClick={() => { setColorPickerTagId(record.tag.node_id); setEditingTagId(null); }}>Color</Button>
+        <Button size="small" type="text" danger onClick={() => confirmDelete(record)}>Delete</Button>
+      </Space>,
+    },
   ];
 
   return (
-    <div className="ria-card" onContextMenu={handleTableContextMenu}>
+    <div onContextMenu={handleTableContextMenu}>
+      <div className="tags-toolbar">
+        <Input aria-label="Search tags" placeholder="Search tags…" allowClear value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
       {creatingTag && (
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--ria-card-border)' }}>
           <Space size={4}>
@@ -526,20 +549,20 @@ function TagsToElementsTable({
                   setNewTagName('');
                 }
               }}
-              style={{ width: 180, fontSize: 12 }}
+              style={{ width: 180, fontSize: 14 }}
               autoFocus
             />
             <Button
               size="small"
               type="primary"
               icon={<CheckOutlined />}
-              onClick={handleCreate}
+              aria-label="Create tag" onClick={handleCreate}
               disabled={!newTagName.trim()}
               loading={createTag.isPending}
             />
             <Button
               size="small"
-              icon={<CloseOutlined />}
+              icon={<CloseOutlined />} aria-label="Cancel create tag"
               onClick={() => {
                 setCreatingTag(false);
                 setNewTagName('');
@@ -549,7 +572,9 @@ function TagsToElementsTable({
         </div>
       )}
       <DataTable<TagWithElements>
-        dataSource={tagElements}
+        size="middle"
+        scroll={{ x: 1000 }}
+        dataSource={tagElements.filter(record => String(record.tag.attributes?.has_name ?? '').toLocaleLowerCase().includes(search.toLocaleLowerCase()))}
         columns={columns}
         rowKey={(record) => record.tag.node_id}
         onRow={(record) => ({
@@ -572,6 +597,10 @@ function ElementsToTagsTable({
   const { message } = App.useApp();
   const { linkTag, unlinkTag, linkTagCrossNs, unlinkTagCrossNs } = useTagMutations();
   const qc = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState<React.Key[]>([]);
+  const [finding, setFinding] = useState(false);
+  const [editingTargets, setEditingTargets] = useState<TagAssignmentTarget[] | null>(null);
   const profile = useSafetyProfileMetadata();
   const asilOrder = profile.asilGroups.find((group) => group.label === 'Core')?.options ?? [];
 
@@ -594,8 +623,12 @@ function ElementsToTagsTable({
         }
       }
     }
-    return Array.from(elementMap.values());
+    return Array.from(elementMap.values()).sort((a, b) => elementName(a.element).localeCompare(elementName(b.element)));
   }, [tagElements]);
+
+  const visibleElements = elementsWithTags.filter(record =>
+    `${elementName(record.element)} ${record.element.concept} ${record.tags.map(tag => tag.attributes?.has_name).join(' ')}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const selectedTargets = visibleElements.filter(record => selectedIds.includes(record.element.node_id));
 
   const maxAsilQuery = useMaxAsilForElements(elementsWithTags.map((et) => et.element), asilOrder);
 
@@ -704,7 +737,7 @@ function ElementsToTagsTable({
       render: (_: unknown, record: ElementWithTags) => (
         <Space size={4} wrap>
           {record.tags.map((tag) => (
-            <TagChip key={tag.node_id} color={String(tag.attributes?.tag_color || 'purple')} style={{ fontSize: 11 }}>
+            <TagChip key={tag.node_id} color={String(tag.attributes?.tag_color || 'purple')} style={{ fontSize: 13 }}>
               {String(tag.attributes?.has_name ?? '—')}
             </TagChip>
           ))}
@@ -723,15 +756,36 @@ function ElementsToTagsTable({
       render: (_: unknown, record: ElementWithTags) => {
         const asil = maxAsilQuery.data?.get(record.element.node_id) ?? '';
         if (!asil) return <Typography.Text type="secondary">—</Typography.Text>;
-        return <AsilTag asil={asil} fontSize={11} />;
+        return <AsilTag asil={asil} fontSize={13} />;
       },
+    },
+    {
+      title: 'Actions', key: 'actions', width: 140, fixed: 'right',
+      render: (_, record) => <Button size="small" onClick={() => setEditingTargets([record])} disabled={Boolean(editingTargets) || finding}>Manage tags</Button>,
     },
   ];
 
   return (
-    <div className="ria-card">
+    <div>
+      <div className="tags-toolbar">
+        <Input aria-label="Search tagged elements" placeholder="Search elements or tags…" allowClear value={search}
+          disabled={Boolean(editingTargets) || finding} onChange={e => { setSearch(e.target.value); setSelectedIds([]); }} />
+        <Button icon={<PlusOutlined />} disabled={Boolean(editingTargets) || finding} onClick={() => { setFinding(true); setSelectedIds([]); }}>Tag an element</Button>
+        {selectedTargets.length > 0 ? <div className="tags-toolbar__selection">
+          <Typography.Text>{selectedTargets.length} selected</Typography.Text>
+          <Button icon={<TagOutlined />} disabled={Boolean(editingTargets) || finding} onClick={() => setEditingTargets(selectedTargets)}>Manage selected tags</Button>
+          <Button type="text" disabled={Boolean(editingTargets) || finding} onClick={() => setSelectedIds([])}>Clear selection</Button>
+        </div> : <Typography.Text type="secondary">Select rows to manage tags together.</Typography.Text>}
+      </div>
+      {finding && <FindTagTarget namespace={namespace} onCancel={() => setFinding(false)} onSelect={target => { setFinding(false); setEditingTargets([target]); }} />}
+      {editingTargets && <TagAssignmentPanel targets={editingTargets} tags={tagElements.map(record => record.tag)} namespace={namespace}
+        onClose={() => { setEditingTargets(null); setSelectedIds([]); }} />}
       <DataTable<ElementWithTags>
-        dataSource={elementsWithTags}
+        size="middle"
+        scroll={{ x: 1050 }}
+        dataSource={visibleElements}
+        rowSelection={{ selectedRowKeys: selectedIds, onChange: setSelectedIds, getCheckboxProps: () => ({ disabled: Boolean(editingTargets) || finding }) }}
+        onChange={() => setSelectedIds([])}
         columns={columns}
         rowKey={(record) => record.element.node_id}
         tableLayout="auto"
@@ -743,11 +797,20 @@ function ElementsToTagsTable({
   );
 }
 
-export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps) {
+export function TagsOverviewView(props: TagsOverviewViewProps) {
+  const mode = useThemeMode();
+  return <ConfigProvider theme={{
+    algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+    token: { fontSize: 14, fontSizeSM: 13 },
+    components: { Table: { cellFontSizeMD: 14, cellPaddingBlockMD: 12 } },
+  }}><div className="tags-overview"><TagsOverviewContent {...props} /></div></ConfigProvider>;
+}
+
+function TagsOverviewContent({ ns, onNavigateToNode }: TagsOverviewViewProps) {
   const { token } = theme.useToken();
-  const { data: tagElements, isLoading, tags } = useTagsWithElements(ns.name);
+  const { data: tagElements, isLoading, tags, error, retry } = useTagsWithElements(ns.name);
   const [activeKey, setActiveKey] = useState<'tags' | 'elements'>('tags');
-  const [createTagTrigger, setCreateTagTrigger] = useState(0);
+  const [creatingTag, setCreatingTag] = useState(false);
 
   if (isLoading) {
     return (
@@ -760,6 +823,8 @@ export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps
       </div>
     );
   }
+
+  if (error) return <Alert type="error" showIcon title="Could not load tags" description={String(error.message)} action={<Button onClick={retry}>Retry</Button>} />;
 
   if (tags.length === 0) {
     return (
@@ -780,43 +845,46 @@ export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps
   const activeNav = navItems.find((n) => n.key === activeKey)!;
 
   return (
-    <div className="ria-scope" style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      <div style={{
-        width: 260, flexShrink: 0,
+    <div className="ria-scope tags-layout" style={{ display: 'flex', height: '100%', overflow: 'hidden',
+      '--ria-card-bg': token.colorBgContainer, '--ria-card-border': token.colorBorderSecondary,
+      '--ria-table-head': token.colorFillAlter, '--ria-accent': token.colorPrimary,
+      '--ria-fg': token.colorText, '--ria-fg-muted': token.colorTextSecondary,
+      '--ria-nav-active': token.colorPrimaryBg, '--ria-row-hover': token.colorBgTextHover,
+    } as CSSProperties}>
+      <div className="tags-sidebar" style={{
+        width: 220, flexShrink: 0,
         background: token.colorBgContainer,
         borderRight: `1px solid ${token.colorBorderSecondary}`,
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
       }}>
-        <div style={{ padding: '14px 16px 10px' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: token.colorTextSecondary, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+        <div className="tags-sidebar-summary" style={{ padding: '14px 16px 10px' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: token.colorTextSecondary, marginBottom: 4 }}>
             Tags Overview
           </div>
-          <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+          <div style={{ fontSize: 14, color: token.colorTextSecondary }}>
             {tags.length} tag{tags.length !== 1 ? 's' : ''} · {taggedElementCount} tagged element{taggedElementCount !== 1 ? 's' : ''}
           </div>
         </div>
-        <div style={{ flex: 1, overflow: 'auto', padding: '4px 8px 8px' }}>
+        <div className="tags-nav" style={{ flex: 1, overflow: 'auto', padding: '4px 8px 8px' }}>
           {navItems.map((item) => {
             const isActive = item.key === activeKey;
-            const dot = item.issues === 0 ? '#52c41a' : '#f5222d';
             return (
-              <div
+              <button type="button" aria-pressed={isActive}
                 key={item.key}
                 className={'ria-navitem' + (isActive ? ' is-active' : '')}
-                onClick={() => setActiveKey(item.key as 'tags' | 'elements')}
+                onClick={() => { setActiveKey(item.key as 'tags' | 'elements'); setCreatingTag(false); }}
               >
-                <span className="ria-navitem__dot" style={{ background: dot }} />
                 <span className="ria-navitem__label">{item.label}</span>
                 <span className="ria-navitem__count">{item.count}</span>
-              </div>
+              </button>
             );
           })}
         </div>
       </div>
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        <div style={{
+        <div className="tags-header" style={{
           display: 'flex', alignItems: 'flex-start', gap: 16,
           padding: '20px 24px',
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
@@ -837,10 +905,10 @@ export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps
             </div>
             <div style={{ fontSize: 13, color: token.colorTextSecondary, marginTop: 2, lineHeight: 1.5 }}>
               {activeKey === 'tags'
-                ? 'Manage tags applied to safety elements. Right-click rows to rename, recolor or delete.'
-                : 'Safety elements with at least one tag applied.'}
+                ? 'Manage reusable tags, names and colors.'
+                : 'Search tagged elements, or select rows to apply and remove tags together.'}
             </div>
-            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16, fontSize: 12 }}>
+            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16, fontSize: 14 }}>
               <span style={{ color: token.colorTextSecondary }}>
                 <span className="mono" style={{ color: token.colorText, fontWeight: 600 }}>{activeNav.count}</span> total
               </span>
@@ -848,7 +916,7 @@ export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps
                 <>
                   <span style={{ width: 1, height: 12, background: token.colorBorderSecondary }} />
                   {orphanTagCount > 0 ? (
-                    <span className="ria-fg-err" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span className="ria-fg-muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span className="mono" style={{ fontWeight: 600 }}>{orphanTagCount}</span> with no elements
                     </span>
                   ) : (
@@ -859,19 +927,20 @@ export function TagsOverviewView({ ns, onNavigateToNode }: TagsOverviewViewProps
             </div>
           </div>
           {activeKey === 'tags' && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateTagTrigger((n) => n + 1)}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreatingTag(true)}>
               Create Tag
             </Button>
           )}
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', background: token.colorBgLayout }}>
+        <div className="tags-body" style={{ flex: 1, overflow: 'auto', padding: '20px 24px', background: token.colorBgLayout }}>
           {activeKey === 'tags' ? (
             <TagsToElementsTable
               tagElements={tagElements}
               namespace={ns.name}
               onNavigateToNode={onNavigateToNode}
-              triggerCreate={createTagTrigger}
+              creatingTag={creatingTag}
+              onCreatingChange={setCreatingTag}
             />
           ) : (
             <ElementsToTagsTable

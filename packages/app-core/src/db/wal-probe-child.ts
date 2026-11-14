@@ -34,21 +34,43 @@
  * shared marker, so that nothing but the database engine can influence how it
  * exits.
  */
-import lbug from '@ladybugdb/core';
+import { createRequire } from 'node:module';
+import type lbugModule from '@ladybugdb/core';
 import { WAL_PROBE_ERROR_PREFIX } from './wal-probe-protocol.js';
+
+type Engine = Pick<typeof lbugModule, 'Database' | 'Connection'>;
+
+/**
+ * The engine to probe with: ladybug, unless the parent passes
+ * `riagraph <modulePath>` (see walProbeTarget in graph-engine.ts). Exactly one
+ * engine is loaded — never both: the two native libraries embed the same C++
+ * code, and a process holding both crashes on exit, which this probe would
+ * misread as an unreplayable WAL.
+ */
+function engineFromArgs(): Engine {
+  const load = createRequire(__filename);
+  if (process.argv[3] !== 'riagraph') {
+    const lbug = load('@ladybugdb/core') as { default?: Engine } & Engine;
+    return lbug.default ?? lbug;
+  }
+  const modulePath = process.argv[4];
+  if (!modulePath) throw new Error('RiaGraph binding not found');
+  return load(modulePath) as Engine;
+}
 
 async function main(): Promise<void> {
   const dbPath = process.argv[2];
   if (!dbPath) {
     throw new Error('no database path argument');
   }
+  const engine = engineFromArgs();
 
   // Opening is lazy in the binding — the WAL is not touched until a connection
   // forces initialisation, so the query below is load-bearing rather than a
   // sanity check. `show_tables` is the cheapest statement that guarantees the
   // catalog has been read back after replay.
-  const db = new lbug.Database(dbPath);
-  const conn = new lbug.Connection(db);
+  const db = new engine.Database(dbPath);
+  const conn = new engine.Connection(db);
   try {
     const raw = await conn.query('CALL show_tables() RETURN *');
     const queryResult = Array.isArray(raw) ? raw[0] : raw;

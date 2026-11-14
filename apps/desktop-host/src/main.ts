@@ -1042,12 +1042,40 @@ async function bootstrap(): Promise<void> {
   } else {
     const rendererPath = path.join(__dirname, '../renderer/index.html');
     logger.info('Loading packaged renderer file', { rendererPath });
-    try {
-      if (!statSync(rendererPath).size) throw new Error('The renderer entry file is empty');
-      await mainWindow.loadFile(rendererPath);
-    } catch (err) {
-      throw new Error(`Unable to load the RiaCore application page at ${rendererPath}. ` +
-        `Reinstall RiaCore using the complete installer. ${String(err)}`, { cause: err });
+    // Windows startups intermittently fail here with ERR_FAILED while the entry
+    // file and every asset it references are readable from the same path moments
+    // later (RIA-GAP-095). A single attempt made that transient condition fatal
+    // and told the user to reinstall a sound installation, so the load is
+    // retried a bounded number of times. Every failed attempt is logged, which
+    // keeps the condition visible and turns the retry count into evidence for
+    // that gap instead of hiding it. A genuinely unloadable renderer still
+    // fails, only later and with the attempt count reported.
+    const maximumAttempts = 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (!statSync(rendererPath).size) throw new Error('The renderer entry file is empty');
+        await mainWindow.loadFile(rendererPath);
+        if (attempt > 1) {
+          logger.warn('Packaged renderer loaded after retrying', { rendererPath, attempt });
+        }
+        break;
+      } catch (err) {
+        // Do not retry into a window that is gone or a shutdown in progress:
+        // loadFile would fail for an unrelated reason and mask the first error.
+        const giveUp = attempt >= maximumAttempts || isQuitting || mainWindow.isDestroyed();
+        logger.error('Packaged renderer load failed', {
+          rendererPath,
+          attempt,
+          willRetry: !giveUp,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (giveUp) {
+          throw new Error(`Unable to load the RiaCore application page at ${rendererPath} `
+            + `after ${attempt} attempt(s). Reinstall RiaCore using the complete installer. ${String(err)}`,
+            { cause: err });
+        }
+        await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+      }
     }
   }
 }

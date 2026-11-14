@@ -38,6 +38,14 @@ import {
   ShareAltOutlined,
   ContainerOutlined,
   FunctionOutlined,
+  FileOutlined,
+  TableOutlined,
+  OrderedListOutlined,
+  NumberOutlined,
+  ImportOutlined,
+  ExportOutlined,
+  HddOutlined,
+  MinusSquareOutlined,
 } from '@ant-design/icons';
 import type { ComponentType } from 'react';
 import type { MetamodelRenderingConfig } from '@riacore/app-contracts';
@@ -112,7 +120,7 @@ export function getNodeDecoration(
 
 /**
  * Fallback decoration for Sphinx-Needs elements. Their concepts are dynamically
- * named `need_<type>` and carry no static config or SysML overlay, so without
+ * named `need_<type>` and may have no declared rendering metadata, so without
  * this they render with the generic `default` (code) icon. A document icon keeps
  * them consistent with the SW-Requirements namespace decoration.
  */
@@ -139,6 +147,23 @@ export const ICON_REGISTRY: Record<string, ComponentType> = {
   FolderOutlined,
   CodeOutlined,
   ContainerOutlined,
+  // Code-graph concepts (CGraph): files, named types, parameters and the
+  // analysis blind spots. An icon name missing from this map degrades silently
+  // to the grey default while still taking the declared colour, which looks
+  // like the metamodel declared nothing — so a new rendering block needs its
+  // icons added here in the same change.
+  FileOutlined,
+  TableOutlined,
+  OrderedListOutlined,
+  TagOutlined,
+  NumberOutlined,
+  ImportOutlined,
+  MinusSquareOutlined,
+  WarningOutlined,
+  // CGraph 2.6.0: return port, fixed-address region (indirect call sites use
+  // BranchesOutlined, already registered above).
+  ExportOutlined,
+  HddOutlined,
 };
 
 /** Fallback decoration used when a concept omits an icon name or color. */
@@ -149,16 +174,18 @@ export const DEFAULT_DECORATION: NodeDecoration = {
 
 /**
  * Build a concept → {@link NodeDecoration} overlay from the metamodel rendering
- * config. Unknown icon names fall back to the default icon and absent colors fall
- * back to the default color, so every entry resolves to a valid decoration.
+ * config. Missing fields retain the concept's fallback decoration, including
+ * the requirements icon for Sphinx-Needs. Explicit unknown icon names still use
+ * the default icon, so every entry resolves to a valid decoration.
  */
 export function buildSysmlDecorations(
   config: MetamodelRenderingConfig,
 ): Record<string, NodeDecoration> {
   const out: Record<string, NodeDecoration> = {};
   for (const [concept, r] of Object.entries(config)) {
-    const icon = (r.icon && ICON_REGISTRY[r.icon]) || DEFAULT_DECORATION.icon;
-    const color = r.color || DEFAULT_DECORATION.color;
+    const fallback = getNodeDecoration(concept);
+    const icon = r.icon ? (ICON_REGISTRY[r.icon] || DEFAULT_DECORATION.icon) : fallback.icon;
+    const color = r.color || fallback.color;
     out[concept] = { icon, color };
   }
   return out;

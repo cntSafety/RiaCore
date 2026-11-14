@@ -27,7 +27,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ApplicableCheck, CheckRunSummary, CheckPageResult, CheckViolation } from '@riacore/app-contracts';
+import { evaluateSysmlPortAsil } from '../../checks/sysml-port-asil-evaluator.js';
+import type { ApplicableCheck, CheckRunSummary, CheckPageResult, CheckViolation, CheckFinding, CheckFindingCategory } from '@riacore/app-contracts';
 import { resolveAttributeKey } from '@riacore/app-contracts';
 import type { createRegistry } from '../channel-registry.js';
 import { extractNodeName } from '../utils/node-name.js';
@@ -95,6 +96,8 @@ async function loadViolationRows(
   dbModule: import('../../db/db-module.js').IDbModule,
   nodeIds: number[],
   attributeKeys: string[],
+  computedAttributes: Record<number, Record<string, string>> = {},
+  findings?: Record<number, CheckFinding[]>,
 ): Promise<CheckViolation[]> {
   if (nodeIds.length === 0) return [];
 
@@ -137,12 +140,14 @@ async function loadViolationRows(
     }
 
     return {
+      ...(findings?.[id] ? { findings: findings[id] } : {}),
       nodeId: id,
       namespace: String(row.namespace ?? ''),
       concept: String(row.concept ?? ''),
-      attributeValues: Object.fromEntries(
-        attributeKeys.map((k) => [k, resolveCheckAttributeValue(parsedAttrs, k, String(row.concept ?? ''))]),
-      ),
+      attributeValues: {
+        ...Object.fromEntries(attributeKeys.map((k) => [k, resolveCheckAttributeValue(parsedAttrs, k, String(row.concept ?? ''))])),
+        ...computedAttributes[id],
+      },
     } satisfies CheckViolation;
   });
 }
@@ -212,17 +217,26 @@ export function registerCheckChannels(registry: Registry): void {
 
     // Extract violation node IDs: use the first column that contains integer values
     // (named `violation` by convention, but we fall back to the first numeric column)
-    const nodeIds: number[] = [];
-    for (const row of rawRows) {
-      const keys = Object.keys(row);
-      const violationKey =
-        keys.find((k) => k === 'violation') ??
-        keys.find((k) => typeof row[k] === 'number' || typeof row[k] === 'bigint');
-      if (violationKey !== undefined) {
-        const val = row[violationKey];
-        const id = typeof val === 'bigint' ? Number(val) : typeof val === 'number' ? val : NaN;
-        if (Number.isInteger(id)) {
-          nodeIds.push(id);
+    let nodeIds: number[] = [];
+    let computedAttributes: Record<number, Record<string, string>> | undefined;
+    let findings: Record<number, CheckFinding[]> | undefined;
+    if (checkDef.evaluator) {
+      const evaluated = evaluateSysmlPortAsil(rawRows, checkDef.evaluator);
+      nodeIds = evaluated.nodeIds;
+      computedAttributes = evaluated.computedAttributes;
+      findings = evaluated.findings;
+    } else {
+      for (const row of rawRows) {
+        const keys = Object.keys(row);
+        const violationKey =
+          keys.find((k) => k === 'violation') ??
+          keys.find((k) => typeof row[k] === 'number' || typeof row[k] === 'bigint');
+        if (violationKey !== undefined) {
+          const val = row[violationKey];
+          const id = typeof val === 'bigint' ? Number(val) : typeof val === 'number' ? val : NaN;
+          if (Number.isInteger(id)) {
+            nodeIds.push(id);
+          }
         }
       }
     }
@@ -234,15 +248,22 @@ export function registerCheckChannels(registry: Registry): void {
       namespace: payload.namespace,
       nodeIds,
       attributes: checkDef.attributes,
+      computedAttributes,
+      findings,
     });
 
     // Load first page eagerly
     const pageSize = payload.pageSize ?? 50;
     const firstPageIds = nodeIds.slice(0, pageSize);
     const attributeKeys = checkDef.attributes.map(resolveAttributeKey);
-    const firstPageRows = await loadViolationRows(deps.dbModule, firstPageIds, attributeKeys);
+    const firstPageRows = await loadViolationRows(deps.dbModule, firstPageIds, attributeKeys, computedAttributes, findings);
 
+    const findingCounts: Partial<Record<CheckFindingCategory, number>> = {};
+    for (const entries of Object.values(findings ?? {})) {
+      for (const category of new Set(entries.map(entry => entry.category))) findingCounts[category] = (findingCounts[category] ?? 0) + 1;
+    }
     const summary: CheckRunSummary = {
+      ...(findings ? { findingCounts } : {}),
       runId,
       checkId: checkDef.id,
       totalViolations: nodeIds.length,
@@ -275,7 +296,7 @@ export function registerCheckChannels(registry: Registry): void {
     const pageIds = runState.nodeIds.slice(start, end);
 
     const runAttributeKeys = runState.attributes.map(resolveAttributeKey);
-    const violations = await loadViolationRows(deps.dbModule, pageIds, runAttributeKeys);
+    const violations = await loadViolationRows(deps.dbModule, pageIds, runAttributeKeys, runState.computedAttributes, runState.findings);
 
     return {
       runId: payload.runId,

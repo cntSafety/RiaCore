@@ -70,6 +70,7 @@ export function mapModelToConceptBatches(model: SysmlModel): ConceptBatch[] {
           is_readonly: element.isReadonly,
           is_portion: element.isPortion,
           is_conjugated: element.isConjugated,
+          effective_is_conjugated: element.effectiveIsConjugated,
           may_time_vary: element.mayTimeVary,
           direction: element.direction,
           visibility: element.visibility,
@@ -142,8 +143,19 @@ export function mapModelToRelationshipBatches(model: SysmlModel): RelationshipBa
     addRelList('has_membership', element.id, element.membershipIds);
     addRelList('has_owned_membership', element.id, element.ownedMembershipIds);
     addRelList('has_owned_element', element.id, element.ownedElementIds);
-    addRelList('has_type', element.id, element.typeIds);
-    addRelList('has_definition', element.id, element.definitionIds);
+    // A derived ConjugatedPortDefinition is not an imported node. Normalize a
+    // resolved port's type/definition to its original definition; the separate
+    // effective_is_conjugated attribute preserves the reversal. Source IDs and
+    // the raw is_conjugated attribute remain unchanged.
+    const normalizedTypes = (ids: string[]): string[] => {
+      const definitionId = element.resolvedPortDefinitionId;
+      if (definitionId === undefined) return ids;
+      return [...new Set(ids.map((id) =>
+        model.conjugatedPortDefinitions.get(id) === definitionId ? definitionId : id,
+      ))];
+    };
+    addRelList('has_type', element.id, normalizedTypes(element.typeIds));
+    addRelList('has_definition', element.id, normalizedTypes(element.definitionIds));
     addRelList('references_source', element.id, element.sourceIds);
     addRelList('references_target', element.id, element.targetIds);
     addRelList('connects', element.id, element.connectorEndIds);

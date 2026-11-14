@@ -57,6 +57,31 @@ const isArxmlSource = (sourceType?: string) => sourceType === 'arxml_file' || so
 const isSysmlSource = (sourceType?: string) => sourceType === 'sysml_v2_json' || sourceType === 'sysml_v2';
 const isSphinxNeedsSource = (sourceType?: string) => sourceType === 'sphinx_needs_json' || sourceType === 'sphinx_needs';
 const isSysmlTextualSource = (sourceType?: string) => sourceType === 'sysml_v2_textual';
+const isCgraphSource = (sourceType?: string) => sourceType === 'cgraph_graph' || sourceType === 'cgraph';
+
+/**
+ * CGraph element groups, ordered so each builds on the one above: structure,
+ * then the symbols inside it, then the facts about those symbols.
+ *
+ * The hints say why a group would be turned off, because they are not equally
+ * cheap. On a real corpus the named-type layer dominates the graph, and
+ * parameters add a node per declared parameter for signature detail most
+ * questions do not need. Turning a group off also removes the relationships
+ * that depend on it.
+ */
+const CGRAPH_ELEMENT_FIELDS: Array<[string, string, string]> = [
+  ['structure',    'Components & Files',    'Directory groupings, files and their include graph.'],
+  ['symbols',      'Functions & Variables', 'Definitions, declarations, and symbols defined outside the analysed corpus.'],
+  ['call_graph',   'Call Graph',            'Calls, out-of-corpus calls, function addresses taken without calling, and argument bindings.'],
+  ['data_access',  'Data Access',           'Reads, writes and read-modify-writes of the objects an expression names.'],
+  ['types',        'Named Types',           'Records, enums, typedefs and builtins. The change-impact layer, and the bulk of the graph.'],
+  ['parameters',   'Parameters & Returns',  'Function ports: one node per parameter and return value. Endpoints of argument bindings and data flow.'],
+  ['members',      'Record Members',        'One node per struct or union field. Needs Named Types. What a dereference through a field is attributed to.'],
+  ['registration', 'Registration',          'Callback addresses and object references stored in initialisers.'],
+  ['asm_sites',    'Inline Assembly',       'Statements whose effects static analysis cannot see.'],
+  ['indirect_calls', 'Indirect Call Sites', 'One node per call through a function pointer, and where the pointer is read from.'],
+  ['value_analysis', 'Value Analysis',      'May-read, may-write, dispatch targets, data flow and hardware regions from the value analysis. Off gives an AST-only graph.'],
+];
 
 // `projectDirAbsolute` is derived from `projectDir` by the backend and is not
 // editable, so it must stay out of the dirty comparison.
@@ -136,6 +161,7 @@ export function ImporterConfigModal({ source, workingDir, isNewSource = false, o
   const showSysmlConfig = isSysmlSource(watchedSourceType);
   const showSphinxNeedsConfig = isSphinxNeedsSource(watchedSourceType);
   const showSysmlTextualConfig = isSysmlTextualSource(watchedSourceType);
+  const showCgraphConfig = isCgraphSource(watchedSourceType);
 
   const { data: config, isLoading, error: loadError } = useQuery<ImportConfigView>({
     queryKey: ['imports.getConfig', workingDir || 'no-workspace', sourceId],
@@ -253,7 +279,7 @@ export function ImporterConfigModal({ source, workingDir, isNewSource = false, o
       </Text>
     ) : null;
 
-  const browseForDirectory = async (field: 'projectDir') => {
+  const browseForDirectory = async (field: 'projectDir' | 'scanResultDir') => {
     if (anyRunning || saveMutation.isPending) return;
     // Start in the workspace, and anchor there so the dialog returns a relative
     // path. The field then shows exactly what will be stored.
@@ -805,7 +831,68 @@ export function ImporterConfigModal({ source, workingDir, isNewSource = false, o
             </>
           )}
 
-          {!showArxmlConfig && !showSysmlConfig && !showSphinxNeedsConfig && !showSysmlTextualConfig && (
+          {showCgraphConfig && (
+            <>
+              {renderSection('Generator Output', 'Point at a directory the CGraph generator has already produced. The generator is a separate clang-based tool; this importer only reads its output.')}
+              <Form.Item
+                label={pathFieldLabel('CGraph Output Directory')}
+                name="scanResultDir"
+                getValueFromEvent={normalizePathValue('scanResultDir')}
+                rules={[{ required: true, message: 'Select the CGraph generator output directory' }]}
+                extra={<>
+                  <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>Folder holding <code>manifest.json</code>, <code>nodes/</code> and <code>edges/</code>. Absolute, or relative to the workspace root.</Text>
+                  {pathConversionNotice('scanResultDir') && <><br />{pathConversionNotice('scanResultDir')}</>}
+                </>}
+              >
+                <Input
+                  placeholder="../out/cgraph or an absolute path"
+                  styles={pathInputStyles}
+                  addonAfter={
+                    <Tooltip title="Browse for folder">
+                      <FolderOpenOutlined style={browseIconStyle} onClick={() => void browseForDirectory('scanResultDir')} />
+                    </Tooltip>
+                  }
+                />
+              </Form.Item>
+              <Form.Item
+                label={pathFieldLabel('Repository Root')}
+                name="projectDir"
+                getValueFromEvent={normalizePathValue('projectDir')}
+                extra={<>
+                  <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>Optional. The root the generator&apos;s stable paths are relative to — used to open a file from a node, not to find the input.</Text>
+                  {pathConversionNotice('projectDir') && <><br />{pathConversionNotice('projectDir')}</>}
+                </>}
+              >
+                <Input
+                  placeholder="../src or an absolute path"
+                  styles={pathInputStyles}
+                  addonAfter={
+                    <Tooltip title="Browse for folder">
+                      <FolderOpenOutlined style={browseIconStyle} onClick={() => void browseForDirectory('projectDir')} />
+                    </Tooltip>
+                  }
+                />
+              </Form.Item>
+              {renderSection('Element Groups', 'Select which parts of the code graph to import. A relationship is imported only when both of its endpoint concepts are selected.')}
+              <Form.Item name="elements" noStyle>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {CGRAPH_ELEMENT_FIELDS.map(([key, label, hint]) => (
+                    <div key={key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <Text style={{ fontSize: 12, display: 'block' }}>{label}</Text>
+                        <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>{hint}</Text>
+                      </div>
+                      <Form.Item name={['elements', key]} valuePropName="checked" noStyle>
+                        <Switch size="small" />
+                      </Form.Item>
+                    </div>
+                  ))}
+                </div>
+              </Form.Item>
+            </>
+          )}
+
+          {!showArxmlConfig && !showSysmlConfig && !showSphinxNeedsConfig && !showSysmlTextualConfig && !showCgraphConfig && (
             <Alert
               type="info"
               showIcon

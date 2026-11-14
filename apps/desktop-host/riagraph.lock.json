@@ -1,0 +1,21 @@
+{
+  "$comment": "RiaGraph Node.js binding shipped in the desktop packages. Produced by RiaGraph's nodejs-binaries workflow; fetched and verified by scripts/fetch-riagraph.mjs. Update all fields together (see docs/knowledge/persistence/graph-engine-qualification.md). Pinned to release v0.36.0. Its Node.js archives, package.json and BUILD_INFO.json report 0.22.0, so version below follows the binding rather than the release tag. Checksums come from the release SHA256SUMS; commit matches BUILD_INFO.json in all three archives. The both-direction qualification campaign for commit ede798098 is outstanding (RIA-GAP-092).",
+  "repository": "cntSafety/RiaGraph",
+  "release": "v0.36.0",
+  "version": "0.22.0",
+  "commit": "ede798098f01c85eea4235ecd5354c4c0af566f2",
+  "assets": {
+    "win32-x64": {
+      "file": "riagraph-nodejs-0.22.0-win32-x64.tar.gz",
+      "sha256": "e2acd114ed9c67816df7e39a918c90ad82511553d1b3ad82563104c0c6d4f36b"
+    },
+    "darwin-arm64": {
+      "file": "riagraph-nodejs-0.22.0-darwin-arm64.tar.gz",
+      "sha256": "5459eb3958f3e9e5fbeaf53b17a53c74eaa51f07964ac69fb1d035f6a301ef05"
+    },
+    "linux-x64": {
+      "file": "riagraph-nodejs-0.22.0-linux-x64.tar.gz",
+      "sha256": "26768da92614f33598358477e5e69763f0e3e9eff3c7fb0eb6a29028efd31aa7"
+    }
+  }
+}

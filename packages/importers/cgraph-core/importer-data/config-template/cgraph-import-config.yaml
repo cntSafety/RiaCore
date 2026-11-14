@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CGraph Import Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# The CGraph generator is a clang-based toolchain that lives OUTSIDE RiaCore.
+# This importer consumes a directory it has already produced; it never compiles
+# C itself. Point `scan_result_dir` at that output directory.
+# ─────────────────────────────────────────────────────────────────────────────
+
+namespace: CodeGraph
+source_name: C code graph
+sourceType: cgraph_graph
+
+# Directory holding the generator's output: manifest.json, nodes/*.jsonl and
+# edges/*.jsonl. Absolute, or relative to the WORKSPACE ROOT (the folder holding
+# ria-data/) — never relative to this config file. Prefer a relative path with
+# forward slashes so the workspace stays portable across machines and operating
+# systems.
+scan_result_dir: ""
+
+# Repository root the generator's stable paths are relative to. Advisory: the
+# importer resolves nothing against it, because the generator already emitted
+# repo-relative paths. It is carried so a consumer view can open a file from a
+# node, and so branch-update flows have a repository to point at.
+project_dir: ""
+
+# Element groups. Each switch selects a set of concepts and the relationships
+# between them; a relationship is imported only when both of its endpoint
+# concepts are selected, so turning a group off also removes the edges that
+# depend on it. The import log records the resolved set.
+elements:
+  # c_component, c_file + owns_file, includes
+  structure: true
+  # c_function, c_variable, c_external_symbol + defines, declares
+  symbols: true
+  # calls, calls_external, takes_address_of, binds  (binds: schema 2.6.0, needs
+  # `parameters`)
+  call_graph: true
+  # reads, writes, read_writes
+  data_access: true
+  # c_record, c_enum, c_typedef, c_builtin_type + defines_type, has_type,
+  # returns, aliases, has_member_type
+  #
+  # The change-impact layer: has_member_type is what makes "if I change Cfg_t,
+  # what is affected" reach the records that embed one, not just the functions
+  # that name it. Also the bulk of the graph — on a reference corpus the type
+  # layer was 67% of nodes and 77% of edges, mostly vendor headers. Turn it off
+  # for a call-and-data-access-only import.
+  types: true
+  # c_parameter, c_return + has_parameter, has_return  (c_return: schema 2.6.0)
+  #
+  # A function's ports. On since 2.6.0: `binds`, `flows_to` and
+  # `dispatches_through` end at parameters and return values, so turning this
+  # off while those layers are on discards their port edges as unknown-endpoint
+  # drops, and reconciliation reports those collections as short.
+  parameters: true
+  # c_member + has_member  (schema 2.5.0)
+  #
+  # One node per declared struct or union member, contained by the record that
+  # declares it — so this group needs `types` on to have anywhere to hang from.
+  # On by default because the access layer points at it: since 2.5.0 a
+  # dereference through a field attributes `reads` / `writes` / `read_writes`
+  # to the member it went through. Turning it off while `data_access` is on
+  # discards those edges as unknown-endpoint drops, and reconciliation then
+  # reports a discrepancy on three collections that are actually complete.
+  members: true
+  # references, registers
+  registration: true
+  # c_asm_site + contains_asm
+  asm_sites: true
+  # c_indirect_call_site + has_indirect_call_site, dispatches_through
+  # (schema 2.6.0)
+  #
+  # One node per call through a function pointer, with the member, variable or
+  # parameter the pointer is read from. AST facts, always present.
+  indirect_calls: true
+  # c_absolute_region + owns_region, may_read, may_write, may_dispatch_to,
+  # flows_to  (schema 2.6.0)
+  #
+  # The value-analysis layer: sound over-approximations within an analysis unit.
+  # The import report names the analyser and how much of each unit it reached;
+  # an absent edge is meaningful only for a reached function. may_dispatch_to
+  # also needs `indirect_calls`. Turn off for an AST-only graph.
+  value_analysis: true

@@ -179,6 +179,9 @@ function stageReleaseLicenses() {
     inventory.addFile(`terms/${name.slice('terms-'.length)}`, fs.readFileSync(path.join(supplementsDir, name)));
   }
   for (const dir of collectRuntimeGraph(path.join(repoRoot, 'apps', 'renderer'))) inventory.addPackage(dir, 'frontend');
+  // Bundling can incorporate a different nested version than the final staged
+  // dependency tree. Inventory the source runtime graph before builder collects it.
+  for (const dir of collectRuntimeGraph(desktopDir)) inventory.addPackage(dir, 'worker');
   inventory.save();
   // Keep frontend evidence before packaging strips node_modules and minifies JS.
   fs.copyFileSync(path.join(legalDir, 'inventory.json'), path.join(legalDir, 'frontend-inventory.json'));
@@ -197,6 +200,12 @@ function stageReleaseLicenses() {
     if (!fs.existsSync(source)) throw new Error(`Electron distribution notice is missing: ${source}`);
     fs.copyFileSync(source, path.join(legalDir, name === 'LICENSE' ? 'Electron-LICENSE.txt' : name));
   }
+}
+
+/** Where a package carries the RiaGraph binding (electron-builder.yml extraResources). */
+function packagedRiaGraphDir(resourcesDir, platform) {
+  const target = { win: 'win32-x64', mac: 'darwin-arm64', linux: 'linux-x64' }[platform];
+  return path.join(resourcesDir, 'vendor', 'riagraph-core', target);
 }
 
 function finalizeReleaseLicenses(resourcesDir, platform) {
@@ -276,6 +285,26 @@ function finalizeReleaseLicenses(resourcesDir, platform) {
     const manifest = path.join(resourcesDir, 'node-sidecar', 'vc-runtime.json');
     localComponent('Microsoft-Visual-C++-Runtime', 'Microsoft redistributable terms', [path.join(resourcesDir, 'THIRD-PARTY-NOTICES.txt'), manifest]);
   }
+  // RiaGraph's native module compiles in its own third-party libraries and
+  // links OpenSSL statically; the binding ships their license texts and records
+  // the OpenSSL version in BUILD_INFO.json (RiaGraph's nodejs-binaries workflow).
+  const riagraphSources = [];
+  const riagraphDir = packagedRiaGraphDir(resourcesDir, platform);
+  if (fs.existsSync(riagraphDir)) {
+    const info = readJson(path.join(riagraphDir, 'BUILD_INFO.json'));
+    const thirdPartyDir = path.join(riagraphDir, 'third-party-licenses');
+    const thirdParty = fs.existsSync(thirdPartyDir) ? fs.readdirSync(thirdPartyDir).sort().map(name => path.join(thirdPartyDir, name)) : [];
+    if (!thirdParty.length) throw new Error('RiaGraph ships no third-party license texts (third-party-licenses/); use a binding from its nodejs-binaries workflow.');
+    const source = `https://github.com/cntSafety/RiaGraph/tree/${info.commit}`;
+    localComponent(`RiaGraph-native@${info.version}`, 'MIT AND upstream bundled third-party licenses', [path.join(riagraphDir, 'LICENSE'), ...thirdParty], source);
+    const opensslVersion = String(info.openssl ?? '').split(' ')[0];
+    if (!/^3\.\d+\.\d+[a-z]?$/.test(opensslVersion)) throw new Error(`RiaGraph's statically linked OpenSSL must be a complete 3.x.y version; BUILD_INFO.json says: ${info.openssl}`);
+    localComponent(`OpenSSL@${opensslVersion}`, 'Apache-2.0', [path.join(riagraphDir, 'OPENSSL-LICENSE.txt')], `https://github.com/openssl/openssl/tree/openssl-${opensslVersion}`);
+    riagraphSources.push(
+      `RiaGraph@${info.version}: ${source}`,
+      `OpenSSL@${opensslVersion} (linked into RiaGraph): https://github.com/openssl/openssl/tree/openssl-${opensslVersion}`,
+    );
+  }
   inventory.save();
   fs.writeFileSync(path.join(legalDir, 'SOURCE-CODE.txt'), [
     `RiaCore ${readJson(path.join(repoRoot, 'package.json')).version} — GPL-3.0-or-later`,
@@ -285,6 +314,7 @@ function finalizeReleaseLicenses(resourcesDir, platform) {
     'Third-party repositories, versions and license texts: inventory.json.',
     `Portable Git build recipe: https://github.com/desktop/dugite-native/tree/${nativeManifest.dugiteTag}`,
     ...(opensslSource ? [opensslSource] : []),
+    ...riagraphSources,
     ...nativeManifest.components.map(c => `${c.id}: ${c.source}`),
     'ELK/elkjs (GPL option): https://github.com/kieler/elkjs/tree/v0.12.0',
     '',
@@ -314,6 +344,14 @@ function validateReleaseLicenses(resourcesDir) {
   for (const dir of packagedPackages(path.join(resourcesDir, 'app'))) {
     const pkg = readJson(path.join(dir, 'package.json'));
     if (!pkg.name.startsWith('@riacore/') && !ids.has(`${pkg.name}@${pkg.version}`)) throw new Error(`Packaged dependency has no license inventory entry: ${pkg.name}@${pkg.version}`);
+  }
+  // The RiaGraph binding ships outside app/node_modules (resources/vendor/riagraph-core).
+  const riagraphRoot = path.join(resourcesDir, 'vendor', 'riagraph-core');
+  for (const platformDir of fs.existsSync(riagraphRoot) ? fs.readdirSync(riagraphRoot) : []) {
+    const { version, openssl } = readJson(path.join(riagraphRoot, platformDir, 'BUILD_INFO.json'));
+    for (const id of [`RiaGraph-native@${version}`, `OpenSSL@${String(openssl).split(' ')[0]}`]) {
+      if (!ids.has(id)) throw new Error(`Packaged RiaGraph has no license inventory entry: ${id}`);
+    }
   }
   for (const record of manifest.components) {
     if (!record.files.length) throw new Error(`No license files for ${record.id}`);

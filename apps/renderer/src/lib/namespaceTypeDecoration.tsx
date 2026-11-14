@@ -26,6 +26,7 @@ import {
   SecurityScanOutlined,
   ThunderboltOutlined,
   RadarChartOutlined,
+  BranchesOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -46,6 +47,7 @@ type NamespaceKind =
   | 'arxml'
   | 'sphinx_needs'
   | 'sysml'
+  | 'cgraph'
   | 'safety_analysis'
   | 'system_safety_analysis'
   | 'monitoring_analysis'
@@ -56,6 +58,10 @@ const KIND_DECORATION: Record<NamespaceKind, NamespaceTypeDecoration> = {
   arxml:             { icon: ApartmentOutlined,         color: '#1890ff', label: 'AUTOSAR (ARXML)' },
   sphinx_needs:      { icon: FileTextOutlined,           color: '#52c41a', label: 'SW Requirements' },
   sysml:             { icon: DeploymentUnitOutlined,      color: '#9254de', label: 'SysML' },
+  // The C code graph. A branching icon for the call/data-access graph, in the
+  // same blue family as ARXML because both describe implementation structure
+  // rather than an analysis viewpoint.
+  cgraph:            { icon: BranchesOutlined,            color: '#597ef7', label: 'C Code Graph' },
   // Matches the riacoreTokens.colorWarning override in theme/tokens.ts — fixed
   // regardless of light/dark algorithm, so hardcoding here stays in sync.
   safety_analysis:   { icon: SafetyCertificateOutlined,   color: '#d97706', label: 'SW Safety Analysis' },
@@ -99,6 +105,9 @@ function kindFromSourceType(sourceType: string): NamespaceKind | null {
 function kindFromMetamodel(metamodel: string): NamespaceKind | null {
   if (metamodel === 'SW_ARXML') return 'arxml';
   if (metamodel === 'SysMLv2' || metamodel === 'SysMLv2Textual') return 'sysml';
+  // Matched by prefix: the registered name carries the schema's major version
+  // (CGraphV2 today), so a future major release stays decorated without an edit.
+  if (metamodel.startsWith('CGraph')) return 'cgraph';
   if (metamodel.startsWith('SN_')) return 'sphinx_needs';
   if (metamodel === 'SAFETY_ANALYSIS') return 'safety_analysis';
   if (metamodel === 'SYSTEM_SAFETY_ANALYSIS') return 'system_safety_analysis';

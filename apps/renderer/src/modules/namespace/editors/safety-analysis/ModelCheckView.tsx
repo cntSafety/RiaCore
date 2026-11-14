@@ -51,6 +51,9 @@ import { useRunCheck, useLoadApplicableChecks, useCheckPage, useLoadCheckSelecti
 import { DataTable } from '../../../../components/data-table';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { api } from '../../../../api/riacore';
+import { CheckFindingResults } from './components/CheckFindingResults';
+import { CheckModelTheme } from './CheckModelTheme';
+import { AsilTag } from './components/AsilTag';
 import './safety-editor.css';
 
 const { Text } = Typography;
@@ -78,17 +81,6 @@ function uniqueFilters<T>(items: T[], field: keyof T): { text: string; value: st
     if (typeof val === 'string' && val) seen.add(val);
   }
   return Array.from(seen).sort().map(v => ({ text: v, value: v }));
-}
-
-
-function asilTagColor(asil: string | undefined): string {
-  if (!asil) return 'default';
-  const u = asil.toUpperCase();
-  if (u.includes('D')) return 'red';
-  if (u.includes('C')) return 'volcano';
-  if (u.includes('B')) return 'orange';
-  if (u.includes('A')) return 'gold';
-  return 'default';
 }
 
 
@@ -215,10 +207,10 @@ function CheckSelectionSplash({
         }}>
           <SafetyCertificateOutlined />
         </div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: token.colorText, letterSpacing: '-0.015em' }}>
+        <div style={{ fontSize: token.fontSizeHeading3, fontWeight: 600, color: token.colorText, letterSpacing: '-0.015em' }}>
           Run model checks
         </div>
-        <div style={{ fontSize: 14, color: token.colorTextSecondary, marginTop: 8, lineHeight: 1.55, maxWidth: 560 }}>
+        <div style={{ fontSize: token.fontSize, color: token.colorTextSecondary, marginTop: 8, lineHeight: 1.55, maxWidth: 560 }}>
           Select which checks to run. Each check queries the namespace and lists violations.
         </div>
 
@@ -243,8 +235,8 @@ function CheckSelectionSplash({
                         onClick={e => e.stopPropagation()}
                         onChange={e => toggleCategory(catIds, e.target.checked)}
                       />
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>{cat}</span>
-                      <span style={{ fontSize: 12, color: token.colorTextSecondary }}>{`(${activatedCount}/${checks.length})`}</span>
+                      <span style={{ fontSize: token.fontSize, fontWeight: 600 }}>{cat}</span>
+                      <span style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>{`(${activatedCount}/${checks.length})`}</span>
                     </span>
                   }
                 >
@@ -259,12 +251,12 @@ function CheckSelectionSplash({
                         style={{ marginTop: 2 }}
                       />
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: token.colorText }}>{c.name}</div>
+                        <div style={{ fontSize: token.fontSize, fontWeight: 500, color: token.colorText }}>{c.name}</div>
                         {c.description && (
-                          <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 3, lineHeight: 1.5 }}>{c.description}</div>
+                          <div style={{ fontSize: token.fontSize, color: token.colorTextSecondary, marginTop: 3, lineHeight: 1.5 }}>{c.description}</div>
                         )}
                       </div>
-                      <Tag color={severityColor(c.severity)} style={{ margin: 0, fontSize: 11 }}>{c.severity}</Tag>
+                      <Tag color={severityColor(c.severity)} style={{ margin: 0 }}>{c.severity}</Tag>
                     </div>
                   ))}
                 </Collapse.Panel>
@@ -284,7 +276,7 @@ function CheckSelectionSplash({
           >
             Run {selectedIds.size} check{selectedIds.size !== 1 ? 's' : ''}
           </Button>
-          <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
+          <span style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
             {selectedIds.size} of {applicableChecks.length} selected
           </span>
         </div>
@@ -313,13 +305,17 @@ function ViolationTable({
   check,
   onRerun,
   isRerunning,
+  safetyNamespace,
 }: {
+  safetyNamespace: string;
   summary: CheckRunSummary;
   check: ApplicableCheck;
   onRerun: () => void;
   isRerunning: boolean;
 }) {
   const { token } = theme.useToken();
+  const workspaceKey = useWorkspaceStore(s => s.workingDir);
+  const coverage = check.resultKind === 'coverage';
   const PAGE_SIZE = CHECK_PAGE_SIZE;
   const [currentPage, setCurrentPage] = useState(0);
 
@@ -362,7 +358,7 @@ function ViolationTable({
             <ShowInTreeTrigger
               homeTarget={{ nodeId: record.nodeId, namespace: record.namespace, concept: record.concept }}
             >
-              <Tag color="default" style={{ fontSize: 11, margin: 0, cursor: 'context-menu' }}>{concept}</Tag>
+              <Tag color="default" style={{ fontSize: token.fontSize, margin: 0, cursor: 'context-menu' }}>{concept}</Tag>
             </ShowInTreeTrigger>
           )
           : <Typography.Text type="secondary">—</Typography.Text>,
@@ -380,13 +376,17 @@ function ViolationTable({
         sorter: (a: CheckViolation, b: CheckViolation) => String(a.attributeValues?.[attrKey] ?? '').localeCompare(String(b.attributeValues?.[attrKey] ?? '')),
         render: (_: unknown, record: CheckViolation) => {
           const val = record.attributeValues[attrKey];
+          if (/(?:^|_)asil(?:_level)?$/i.test(attrKey) || attrLabel.trim().toUpperCase() === 'ASIL') {
+            const asil = String(val ?? '').trim();
+            return asil ? <AsilTag asil={asil} fontSize={token.fontSize} /> : <Typography.Text type="secondary">—</Typography.Text>;
+          }
           return val || <Typography.Text type="secondary">�</Typography.Text>;
         },
       };
     });
 
     return [...fixedCols, ...attrCols];
-  }, [check.attributes]);
+  }, [check.attributes, token.fontSize]);
 
   const issueCount = summary.totalViolations;
   const isOk = issueCount === 0;
@@ -397,36 +397,37 @@ function ViolationTable({
         title={check.name}
         subtitle={check.description || ''}
         issueCount={issueCount}
-        allOkCopy="No violations found"
-        issueCopy="violations"
+        allOkCopy={coverage ? "No connections left unassessed in the linked architecture scope" : "No violations found"}
+        issueCopy={coverage ? (issueCount === 1 ? "connection not assessed" : "connections not assessed") : summary.findingCounts ? (issueCount === 1 ? "affected consumer port" : "affected consumer ports") : "violations"}
         onRun={onRerun}
         isRunning={isRerunning}
         severity={check.severity}
       />
       <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', background: token.colorBgLayout }}>
         {isOk ? (
-          <div style={{ padding: '16px', fontSize: 13, color: token.colorTextSecondary }}>
+          <div style={{ padding: '16px', fontSize: token.fontSize, color: token.colorTextSecondary }}>
             <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 8 }} />
-            No violations found for this check.
+            {coverage ? "No connections left unassessed in the linked architecture scope." : "No violations found for this check."}
           </div>
         ) : (
           <>
-            <DataTable<CheckViolation>
+            {summary.findingCounts ? <CheckFindingResults key={summary.runId} rows={violations} counts={summary.findingCounts}
+              safetyNamespace={safetyNamespace} workspaceKey={workspaceKey} loading={pageQuery.isFetching} /> : <DataTable<CheckViolation>
               columns={columns}
               dataSource={violations}
               rowKey="nodeId"
               scroll={{ x: 'max-content' }}
-              style={{ fontSize: 12 }}
+              size="middle"
               pagination={false}
               onRow={(record) => ({
                 onDoubleClick: () => { void navigateViolation(record); },
                 style: { cursor: 'pointer' },
               })}
-            />
+            />}
             {(pageData?.hasMore || currentPage > 0) && (
               <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                  Page {currentPage + 1} · {issueCount} total violations
+                <span style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
+                  Page {currentPage + 1} · {issueCount} {coverage ? "connections not assessed" : "total violations"}
                 </span>
                 <Button
                   disabled={currentPage === 0}
@@ -468,8 +469,8 @@ function CheckErrorPane({ check, error, onRerun, isRerunning }: { check: Applica
           <ExclamationCircleFilled />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 600, color: token.colorText }}>{check.name}</div>
-          <div style={{ fontSize: 13, color: token.colorTextSecondary, marginTop: 4 }}>{check.description}</div>
+          <div style={{ fontSize: token.fontSizeLG, fontWeight: 600, color: token.colorText }}>{check.name}</div>
+          <div style={{ fontSize: token.fontSize, color: token.colorTextSecondary, marginTop: 4 }}>{check.description}</div>
           <div style={{ marginTop: 12 }}>
             <Alert type="error" message={error ? `Failed to run check: ${error}` : 'Failed to run check (unknown error)'} showIcon />
           </div>
@@ -515,7 +516,7 @@ function CategoryNav({
 
   return (
     <div style={{
-      width: collapsed ? 48 : 220,
+      width: collapsed ? 48 : 260,
       flexShrink: 0,
       background: token.colorBgContainer,
       borderRight: `1px solid ${token.colorBorderSecondary}`,
@@ -530,17 +531,17 @@ function CategoryNav({
       }}>
         {!collapsed && (
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: token.colorTextSecondary, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+            <div style={{ fontSize: token.fontSizeSM, fontWeight: 600, color: token.colorTextSecondary, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
               Checks
             </div>
-            <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+            <div style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
               {totalChecks} check{totalChecks !== 1 ? 's' : ''}
             </div>
             <div style={{ marginTop: 8 }}>
               <Checkbox
                 checked={hideSuccessful}
                 onChange={e => onToggleHideSuccessful(e.target.checked)}
-                style={{ fontSize: 12, color: token.colorTextSecondary }}
+                style={{ fontSize: token.fontSize, color: token.colorTextSecondary }}
               >
                 Hide successful
               </Checkbox>
@@ -549,8 +550,9 @@ function CategoryNav({
         )}
         <Button
           type="text"
-          size="small"
+          size="middle"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          aria-label={collapsed ? "Expand checks sidebar" : "Collapse checks sidebar"}
           onClick={() => setCollapsed(c => !c)}
           style={{ color: token.colorTextSecondary, flexShrink: 0 }}
         />
@@ -605,7 +607,7 @@ function CategoryNav({
         <div style={{
           padding: '12px 16px',
           borderTop: `1px solid ${token.colorBorderSecondary}`,
-          fontSize: 11, color: token.colorTextSecondary,
+          fontSize: token.fontSizeSM, color: token.colorTextSecondary,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
             <ClockCircleOutlined /> Last run
@@ -653,9 +655,9 @@ function CheckHeader({
         {isOk ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: token.colorText, letterSpacing: '-0.01em' }}>{title}</div>
-        <div style={{ fontSize: 13, color: token.colorTextSecondary, marginTop: 2, lineHeight: 1.5 }}>{subtitle}</div>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16, fontSize: 12 }}>
+        <div style={{ fontSize: token.fontSizeLG, fontWeight: 600, color: token.colorText, letterSpacing: '-0.01em' }}>{title}</div>
+        <div style={{ fontSize: token.fontSize, color: token.colorTextSecondary, marginTop: 2, lineHeight: 1.5 }}>{subtitle}</div>
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16, fontSize: token.fontSize }}>
           {isOk ? (
             <span className="ria-fg-ok" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <CheckCircleFilled /> {allOkCopy}
@@ -683,7 +685,11 @@ function CheckHeader({
 
 // -- ModelCheckView (export) ---------------------------------------------------
 
-export function ModelCheckView({ ns }: { ns: NamespaceContext }) {
+export function ModelCheckView(props: { ns: NamespaceContext }) {
+  return <CheckModelTheme><ModelCheckContent {...props} /></CheckModelTheme>;
+}
+
+function ModelCheckContent({ ns }: { ns: NamespaceContext }) {
   const { token } = theme.useToken();
 
   // -- State for the new dynamic check system -------------------------------
@@ -858,7 +864,8 @@ export function ModelCheckView({ ns }: { ns: NamespaceContext }) {
         {activeEntry ? (
           activeEntry.summary ? (
             <ViolationTable
-              key={resolvedKey}
+              key={`${resolvedKey}:${activeEntry.summary.runId}`}
+              safetyNamespace={ns.name}
               summary={activeEntry.summary}
               check={activeEntry.check}
               onRerun={() => handleRerunSingle(resolvedKey)}

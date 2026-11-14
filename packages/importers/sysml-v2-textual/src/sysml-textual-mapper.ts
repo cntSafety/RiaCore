@@ -99,6 +99,7 @@ export function mapModelToConceptBatches(
           is_readonly:   el.isReadonly,
           is_portion:    el.isPortion,
           is_conjugated: el.isConjugated,
+          effective_is_conjugated: el.effectiveIsConjugated,
           direction:     el.direction,
           body:          el.body,
           source_file:   toStoredSourceFile(workspaceRoot, el.sourceFile),

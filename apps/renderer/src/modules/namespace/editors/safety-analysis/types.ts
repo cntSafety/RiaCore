@@ -27,7 +27,14 @@ export interface SelectedTreeElement {
   hostNodeId?: number;
   /** Host namespace when this element is selected as a cross-namespace reference child. */
   hostNamespace?: string;
+  /** Display occurrence for a member or annotation beneath a usage. Never a write target. */
+  treeKey?: string;
 }
+
+/** Optional display context keeps a diagram port beneath its exposing usage. */
+export type TreeNodeNavigator = (
+  nodeId: number, namespace: string, concept: string, usageContext?: SelectedTreeElement,
+) => void;
 
 export type ScopedTreeNavigationResult =
   | { status: 'selected' }

@@ -56,10 +56,10 @@
  *
  * Deliberately conservative, matching the textual pass: a port whose features
  * disagree — a `MixedPort` that sends power and receives status — or that resolves
- * to no directed features at all is left alone and stays bidirectional. That is a
- * real answer rather than a missing one, and the diagram already knows how to draw
- * it. Scope is likewise the same: the port's own features, else the features its
- * definition declares. Directions inherited through a port definition's
+ * to no directed features at all retains no scalar direction. The resolved base
+ * definition and effective conjugation survive independently, including for
+ * mixed and explicitly directed ports. Scope: the port's own features, else
+ * those its definition declares. Directions inherited through a port definition's
  * supertypes are not walked.
  */
 import type { SysmlModel, SysmlElementInfo } from './sysml-v2-parser.js';
@@ -86,7 +86,8 @@ interface ResolvedType {
 }
 
 /**
- * Write the effective `direction` onto every port usage that does not declare one.
+ * Retain resolved port typing and write the effective `direction` onto every
+ * port usage that does not declare one.
  *
  * Mutates `model.elements`. Returns how many ports were resolved, for the import
  * report.
@@ -122,20 +123,30 @@ export function resolvePortDirections(model: SysmlModel): number {
   function resolveType(port: SysmlElementInfo): ResolvedType | undefined {
     for (const typeId of [...port.typeIds, ...port.definitionIds]) {
       const direct = byId.get(typeId);
-      if (direct) return { definition: direct, isConjugated: false };
+      if (direct?.concept === 'port_definition') return { definition: direct, isConjugated: false };
 
       const originalId = model.conjugatedPortDefinitions.get(typeId);
       const original = originalId === undefined ? undefined : byId.get(originalId);
-      if (original) return { definition: original, isConjugated: true };
+      if (original?.concept === 'port_definition') return { definition: original, isConjugated: true };
     }
     return undefined;
   }
 
   let resolved = 0;
   for (const port of model.elements) {
+    if (port.concept !== PORT_USAGE_CONCEPT) continue;
+
+    // Typing must survive even when a mixed request/response port has no single
+    // direction, or an explicit direction makes inference unnecessary.
+    const type = resolveType(port);
+    port.resolvedPortDefinitionId = type?.definition.id;
+    port.effectiveIsConjugated = type
+      ? type.isConjugated !== (port.isConjugated === true)
+      : undefined;
+
     // An explicit direction on the port itself is the author's word — `in port p : P`
     // is legal SysML — and is never overridden.
-    if (port.concept !== PORT_USAGE_CONCEPT || asFeatureDirection(port.direction)) continue;
+    if (asFeatureDirection(port.direction)) continue;
 
     // Features declared on the port body win over the ones it inherits, matching
     // how a redefinition shadows the definition it came from.
@@ -146,7 +157,6 @@ export function resolvePortDirections(model: SysmlModel): number {
       continue;
     }
 
-    const type = resolveType(port);
     const declared = featureDirection(type?.definition);
     if (!type || !declared) continue;
 

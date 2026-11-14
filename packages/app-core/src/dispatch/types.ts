@@ -32,7 +32,7 @@ import type { IAutoSaveCoordinator } from '../persistor/auto-save-coordinator.js
 import type { IViewService } from '../views/view-service.js';
 import type { IMappingRegistry } from '../views/mapping-registry.js';
 import type { LoggerFactory } from '../infra/logger.js';
-import type { NamespaceDiffResult, ThreeWayDiffResult, CheckAttributeEntry } from '@riacore/app-contracts';
+import type { NamespaceDiffResult, ThreeWayDiffResult, CheckAttributeEntry, CheckFinding } from '@riacore/app-contracts';
 import type { IGitService } from '@riacore/git-service';
 import type { LlmSettingsStore } from '../llm/llm-settings-store.js';
 import type { CrossNsLinkSettingsStore } from '../settings/cross-ns-link-settings-store.js';
@@ -56,6 +56,9 @@ export interface CheckRunState {
    * column headers in the UI.
    */
   attributes: CheckAttributeEntry[];
+  /** Computed check explanations, preserved across result pages. */
+  computedAttributes?: Record<number, Record<string, string>>;
+  findings?: Record<number, CheckFinding[]>;
 }
 
 export interface ServiceDependencies {

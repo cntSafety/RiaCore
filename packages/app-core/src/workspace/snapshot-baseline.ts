@@ -213,6 +213,62 @@ function keyFor(workingDir: string): string {
   return path.resolve(workingDir);
 }
 
+// ── Store-in-flight window ───────────────────────────────────────────────────
+//
+// A store rewrites `ria-data/manifest.json` and only re-stamps the baseline
+// AFTER `storeImpl` returns. Between those two moments the on-disk manifest is
+// the new one while the recorded baseline is still the old one, so `detectDrift`
+// reports the store's OWN writes as drift. The window is not small: it spans
+// `writeSnapshotOrigin` plus the recursive removal of orphaned namespace
+// directories, which is exactly the work a namespace deletion triggers.
+//
+// `workspace.getSnapshotDrift` is an ordinary read channel and is NOT enqueued
+// on the persistor's per-workspace store chain, so its 5-second poll can land
+// inside that window and raise the Load/Store dialog for a change the
+// application just made itself. That is the reported symptom: deleting a
+// namespace sometimes prompts, and sometimes does not, because whether it
+// prompts is only a question of where the next poll tick falls.
+//
+// The counter closes it. It is deliberately consulted ONLY by the report path
+// (`buildSnapshotDriftInfo`), never by `assertNoSnapshotDrift`: the write fence
+// must not be weakened by an in-flight marker. That costs nothing, because
+// stores for one workspace are serialised, so a second store's fence cannot run
+// while the first store holds the window open.
+//
+// A counter rather than a boolean, so overlapping windows for the same
+// workspace — a direct persistor call racing a dispatched one — cannot have the
+// inner one clear the outer one's marker.
+const storesInFlight = new Map<string, number>();
+
+/**
+ * Mark a store as writing `ria-data/` for `workingDir`, and return the
+ * disposer that clears the mark.
+ *
+ * The caller must invoke the disposer in a `finally`, AFTER re-stamping the
+ * baseline. Releasing it before the re-stamp would leave the same gap this
+ * exists to close; failing to release it would suppress genuine drift reports
+ * for the rest of the session.
+ */
+export function beginStoreWindow(workingDir: string): () => void {
+  const key = keyFor(workingDir);
+  storesInFlight.set(key, (storesInFlight.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    // Idempotent: a double release must not take the count negative and let a
+    // concurrent store's window be dropped.
+    if (released) return;
+    released = true;
+    const remaining = (storesInFlight.get(key) ?? 1) - 1;
+    if (remaining > 0) storesInFlight.set(key, remaining);
+    else storesInFlight.delete(key);
+  };
+}
+
+/** True while at least one store is rewriting `ria-data/` for `workingDir`. */
+export function isStoreInFlight(workingDir: string): boolean {
+  return (storesInFlight.get(keyFor(workingDir)) ?? 0) > 0;
+}
+
 /**
  * Read the hashes out of `{workingDir}/ria-data/manifest.json`, classifying the
  * read rather than collapsing every failure into one value.
@@ -743,8 +799,22 @@ export async function buildSnapshotDriftInfo(
   dbModule: IDbModule,
 ): Promise<SnapshotDriftInfo> {
   const baseline = getBaseline(workingDir);
-  const details = detectDrift(workingDir);
-  const pendingDecision = getPendingSyncDecision(workingDir);
+  // Suppress the REPORT while this process is mid-store. Everything from here
+  // down to `detectDrift` is synchronous, so the check cannot be interleaved
+  // with `beginStoreWindow` — the manifest read either happens entirely before
+  // a store opened its window, or the window is observed here.
+  //
+  // Reporting "no drift" is correct rather than merely convenient: the store
+  // passed the write fence before it started writing, so the files it is
+  // replacing were the ones this database came from. Returning the normal
+  // not-drifted payload also keeps the dialog's inputs (`syncedAt`,
+  // `filesChangedAt`) populated for the poll that follows the store.
+  //
+  // If the store fails after writing the manifest, the window closes without a
+  // re-stamp and the very next poll reports the drift — fail-closed.
+  const storeInFlight = isStoreInFlight(workingDir);
+  const details = storeInFlight ? null : detectDrift(workingDir);
+  const pendingDecision = storeInFlight ? null : getPendingSyncDecision(workingDir);
   // A pending decision counts as drifted even with no file drift, so the dialog
   // is raised: both questions end in the same user choice, and the one the user
   // has to answer here is the open-time one.

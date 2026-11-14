@@ -28,25 +28,13 @@
  * Uses the same metamodel (sysml-v2.linkml.yaml) as the JSON importer
  * so both sources appear under the same concept hierarchy in the graph.
  */
-import * as path from 'node:path';
+import { importerAssetPath } from '@riacore/importer-sdk';
 import type { ImporterDescriptor } from '@riacore/importer-sdk';
 import { createSysmlTextualRuntime } from './sysml-textual-runtime.js';
 
-const metamodelPath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'metamodel',
-  'sysml-v2-textual.linkml.yaml',
-);
+const metamodelPath = importerAssetPath('@riacore/importer-sysml-v2-textual', 'importer-data/metamodel/sysml-v2-textual.linkml.yaml', __dirname);
 
-const configTemplatePath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'config-template',
-  'sysml-v2-textual-import-config.yaml',
-);
+const configTemplatePath = importerAssetPath('@riacore/importer-sysml-v2-textual', 'importer-data/config-template/sysml-v2-textual-import-config.yaml', __dirname);
 
 export const sysmlTextualImporterDescriptor: ImporterDescriptor = {
   name: 'sysml_v2_textual',

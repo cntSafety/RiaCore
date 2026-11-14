@@ -43,6 +43,30 @@ export interface LoadGate {
 
 export interface GatedResult<T> { superseded?: true; data?: T; }
 
+/**
+ * A channel whose method names a read (`db.getStats`, `namespace.list`,
+ * `graph.expand`, `views.evaluate`, `diff.computeNamespaces`). Verbs that are
+ * reads only sometimes (`load`, `export`, `run`) are deliberately not here.
+ */
+const READ_VERB = /^(get|list|search|find|count|lookup|preview|expand|evaluate|compute)/i;
+
+/** How often a read a database reopen overtook is answered again before it reports superseded. */
+export const SUPERSEDED_READ_ATTEMPTS = 3;
+
+/**
+ * Whether `channel` may simply be run again after a database reopen overtook
+ * it: it declares no `mutates` and its name says it reads. Not every channel
+ * without `mutates` is read-only (Git commits, settings and check files write
+ * outside the database), so the name has to say so as well; anything else is
+ * reported superseded and never repeated, since repeating it would apply it to
+ * whatever database is open now — possibly another workspace's.
+ */
+export function isRepeatableRead(dispatcher: ICommandDispatcher, channel: string): boolean {
+  const meta = dispatcher.getChannelMeta(channel);
+  const method = channel.split(/[.:]/).pop() ?? '';
+  return !!meta && !meta.mutates && READ_VERB.test(method);
+}
+
 export function createLoadGate(
   dispatcher: ICommandDispatcher,
   workspaceService: IWorkspaceService,
@@ -52,13 +76,19 @@ export function createLoadGate(
   async function runDispatch<C extends keyof IpcChannelMap>(
     channel: C, payload: IpcChannelMap[C]['input'], deps: ServiceDependencies,
   ): Promise<IpcChannelMap[C]['output']> {
-    try {
-      return await dispatcher.dispatch(channel, payload, deps);
-    } catch (err) {
-      if (DbGenerationChangedError.is(err)) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await dispatcher.dispatch(channel, payload, deps);
+      } catch (err) {
+        if (!DbGenerationChangedError.is(err)) throw err;
+        // A read is answered from the database that is open now — what the
+        // renderer, which follows the current workspace, wants anyway.
+        if (attempt < SUPERSEDED_READ_ATTEMPTS && isRepeatableRead(dispatcher, channel as string)) {
+          await workspaceService.whenLoadSettled();
+          continue;
+        }
         return { superseded: true } as IpcChannelMap[C]['output'];
       }
-      throw err;
     }
   }
 

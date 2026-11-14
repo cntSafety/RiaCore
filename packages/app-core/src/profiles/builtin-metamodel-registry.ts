@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { packagedAssetPath } from '@riacore/importer-sdk';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -46,6 +47,8 @@ export interface IBuiltInMetamodelRegistry {
  */
 function resolveProfilesRoot(): string {
   const envRoot = process.env.RIACORE_PROFILES_ROOT;
+  const packaged = packagedAssetPath('profiles', envRoot);
+  if (packaged) return packaged;
   const candidates = [
     envRoot,
     path.resolve(__dirname, '..', '..', '..', 'profiles'),

@@ -1,0 +1,41 @@
+.tags-overview { height: 100%; min-width: 0; }
+.tags-overview .ant-table { font-size: 14px; }
+.tags-overview .ant-table-cell { overflow-wrap: anywhere; }
+.tags-overview .ant-tag { font-size: 13px; white-space: normal; overflow-wrap: anywhere; margin-inline-end: 0; }
+.tags-overview .ria-navitem { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; background: transparent; }
+.tags-overview .ria-navitem__label { font-size: 14px; }
+.tags-overview .ria-navitem__count { font-size: 13px; }
+.tags-overview .ria-navitem:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.tags-overview .tags-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 0 16px; }
+.tags-overview .tags-toolbar > .ant-input-affix-wrapper { width: 320px; max-width: 100%; }
+.tags-overview .tags-toolbar__selection { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tags-overview .tag-assignment { margin-bottom: 16px; padding: 16px; border: 1px solid var(--ria-card-border); border-radius: 8px; background: var(--ria-card-bg); }
+.tag-assignment { display: flex; flex-direction: column; gap: 12px; }
+.tag-assignment__options { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.tag-assignment__option { display: flex; align-items: center; gap: 10px; padding: 8px 4px; cursor: pointer; }
+.tag-assignment__option .ant-tag { font-size: 14px; }
+.tag-assignment__option > .ant-typography { margin-left: auto; flex-shrink: 0; }
+.tag-assignment__footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tags-overview .tags-header { flex-wrap: wrap; }
+@media (max-width: 900px) {
+  .tags-overview .tags-layout { flex-direction: column; }
+  .tags-overview .tags-sidebar { width: 100% !important; flex-direction: row !important; border-right: 0 !important; }
+  .tags-overview .tags-nav { display: flex; flex: 1; align-items: center; gap: 8px; }
+  .tags-overview .tags-nav .ria-navitem { width: auto; flex: 1; }
+  .tags-overview .tags-sidebar-summary { display: none; }
+  .tags-overview .tags-body, .tags-overview .tags-header { padding: 16px !important; }
+}
+
+.tags-overview .ria-navitem.is-active { background: var(--ria-nav-active); }
+.tags-overview .ria-navitem:hover { background: var(--ria-row-hover); }
+.tags-overview .ria-fg-muted { color: var(--ria-fg-muted); }
+
+.tag-target-result.ant-btn { height: auto; min-height: 48px; text-align: left; justify-content: flex-start; white-space: normal; }
+.tag-target-result.ant-btn > span { overflow-wrap: anywhere; }
+.tag-target-result.ant-btn > .ant-typography { margin-left: auto; font-size: 13px; }
+/* Override the legacy safety table's 11/12px scale only on this surface. */
+.tags-overview .ria-scope .ant-table-thead > tr > th { font-size: 14px !important; letter-spacing: normal; }
+.tags-overview .ria-scope .ant-table-tbody > tr > td { font-size: 14px; }
+
+.tag-assignment__option > span:last-child { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.tag-assignment__option .ant-typography { margin-left: auto; flex-shrink: 0; }

@@ -30,7 +30,14 @@ import type { NamespaceStats } from '@riacore/app-contracts';
 export function useNamespaceStats(enabled = true) {
   return useQuery<NamespaceStats[]>({
     queryKey: ['db.namespaceStats'],
-    queryFn: api.db.getNamespaceStats,
+    queryFn: async () => {
+      const stats: unknown = await api.db.getNamespaceStats();
+      // A request overtaken by a database reopen comes back as
+      // `{ superseded: true }` (the load gate). Failing it keeps the previous
+      // list and retries, instead of handing callers something not iterable.
+      if (!Array.isArray(stats)) throw new Error('Namespace statistics request was superseded');
+      return stats as NamespaceStats[];
+    },
     enabled,
     refetchInterval: 10000,
     staleTime: 8000,

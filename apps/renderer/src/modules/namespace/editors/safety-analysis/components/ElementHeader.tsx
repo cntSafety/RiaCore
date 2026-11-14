@@ -24,6 +24,7 @@ import type { ConceptInstanceData } from '@riacore/app-contracts';
 import type { SelectedTreeElement } from '../types';
 import type { TabDefinition } from '../config/elementTabs';
 import { getNodeDecoration } from '../config/nodeTypeConfig';
+import { useTreeDecorations } from '../hooks/useTreeDecorations';
 import { useWorkspaceStore } from '../../../../../store/workspaceStore';
 import { useQueryClient } from '@tanstack/react-query';
 import { TagChip } from './TagChip';
@@ -244,7 +245,14 @@ export function ElementHeader({
     }
   }, [displayName]);
 
-  const decoration = getNodeDecoration(selectedTreeElement.concept);
+  const treeDecorations = useTreeDecorations();
+  // The overlay matters, and leaving it out was the bug: `getNodeDecoration`
+  // resolves the static ARXML/safety table first, then the metamodel rendering
+  // config. Called without the second argument, every concept that only the
+  // metamodel knows about — all of CGraph's — fell through to the grey `default`
+  // code glyph, so the header showed a terminal icon for an element the tree
+  // two panels away was drawing as a folder.
+  const decoration = getNodeDecoration(selectedTreeElement.concept, treeDecorations);
 
   const handleAddTag = useCallback(async (tagNodeId: number) => {
     try {
@@ -582,6 +590,7 @@ export function ElementHeader({
           <Button
             type="text"
             size="small"
+            aria-label="Element actions"
             icon={<MoreOutlined style={{ fontSize: 16 }} />}
             style={{ flexShrink: 0, width: 28, height: 28 }}
           />
@@ -590,6 +599,7 @@ export function ElementHeader({
         {lensOptions && lensOptions.length > 0 && (
           <ElementLensSelector
             options={lensOptions}
+            wrap={selectedTreeElement.concept === 'malfunction'}
             value={lensValue ?? lensOptions[0].key}
             onChange={(v) => onLensChange?.(v)}
           />

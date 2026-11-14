@@ -32,6 +32,7 @@ import { arxmlImporterDescriptor } from '@riacore/importer-arxml';
 import { snImporterDescriptor } from '@riacore/importer-sn';
 import { sysmlV2ImporterDescriptor } from '@riacore/importer-sysml-v2';
 import { sysmlTextualImporterDescriptor } from '@riacore/importer-sysml-v2-textual';
+import { cgraphImporterDescriptor, CGRAPH_SOURCE_TYPE } from '@riacore/importer-cgraph';
 
 export interface IImporterRegistry {
   resolve(configPath: string): ImporterDescriptor | null;
@@ -56,6 +57,11 @@ const ARXML_ELEMENT_KEYS = new Set([
   'swc_behavior', 'bsw_modules', 'connectors', 'communication', 'system', 'ecuc',
 ]);
 
+const CGRAPH_ELEMENT_KEYS = new Set([
+  'call_graph', 'data_access', 'types', 'parameters', 'registration', 'asm_sites',
+  'indirect_calls', 'value_analysis',
+]);
+
 const SYSML_ELEMENT_KEYS = new Set([
   'structure',
   'behavior',
@@ -66,6 +72,25 @@ const SYSML_ELEMENT_KEYS = new Set([
   'actions',
   'literals',
 ]);
+
+/**
+ * CGraph configs are the least ambiguous of the set: the name is distinctive and
+ * the source type is explicit, so this detector is checked first. It never looks
+ * at `files.include` — the importer reads fixed collection filenames out of
+ * `scan_result_dir` rather than globbing.
+ */
+function isCgraphConfig(configPath: string, raw: RawConfig & Record<string, unknown>): boolean {
+  if (basename(configPath).toLowerCase().includes('cgraph')) return true;
+  if (raw.sourceType === CGRAPH_SOURCE_TYPE) return true;
+  if (typeof raw.format === 'string' && raw.format.toLowerCase().includes('cgraph')) return true;
+  // scan_result_dir alone is not decisive — ImportConfigData carries the field
+  // for every source type — so require a CGraph element group alongside it.
+  if (typeof raw['scan_result_dir'] === 'string' && raw.elements && typeof raw.elements === 'object') {
+    const keys = Object.keys(raw.elements);
+    if (keys.some((k) => CGRAPH_ELEMENT_KEYS.has(k))) return true;
+  }
+  return false;
+}
 
 function isArxmlConfig(configPath: string, raw: RawConfig): boolean {
   // 1. Filename contains "arxml"
@@ -138,12 +163,14 @@ const BUILT_IN_IMPORTERS: ImporterDescriptor[] = [
   snImporterDescriptor,
   sysmlV2ImporterDescriptor,
   sysmlTextualImporterDescriptor,
+  cgraphImporterDescriptor,
 ];
 
 export function createImporterRegistry(): IImporterRegistry {
   return {
     resolve(configPath: string): ImporterDescriptor | null {
       const rawFromFilenameOnly: RawConfig = {};
+      if (isCgraphConfig(configPath, rawFromFilenameOnly as RawConfig & Record<string, unknown>)) return cgraphImporterDescriptor;
       if (isArxmlConfig(configPath, rawFromFilenameOnly)) return arxmlImporterDescriptor;
       if (isSysmlTextualConfig(configPath, rawFromFilenameOnly)) return sysmlTextualImporterDescriptor;
       if (isSysmlConfig(configPath, rawFromFilenameOnly)) return sysmlV2ImporterDescriptor;
@@ -153,6 +180,7 @@ export function createImporterRegistry(): IImporterRegistry {
       try {
         const source = readFileSync(configPath, 'utf-8');
         const raw = parseYaml(source) as RawConfig;
+        if (isCgraphConfig(configPath, raw as RawConfig & Record<string, unknown>)) return cgraphImporterDescriptor;
         if (isArxmlConfig(configPath, raw)) return arxmlImporterDescriptor;
         if (isSphinxNeedsConfig(configPath, raw as RawConfig & Record<string, unknown>)) return snImporterDescriptor;
         if (isSysmlTextualConfig(configPath, raw)) return sysmlTextualImporterDescriptor;

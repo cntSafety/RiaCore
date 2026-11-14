@@ -55,6 +55,8 @@ export {
   normalizeStoredPath,
 } from './config-paths.js';
 
+export { packagedAssetPath, importerAssetPath } from './runtime-assets.js';
+
 // ---------------------------------------------------------------------------
 // IImportWriteService — the key contract importers use to write to the DB
 // ---------------------------------------------------------------------------

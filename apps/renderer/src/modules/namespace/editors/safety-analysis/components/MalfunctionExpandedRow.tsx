@@ -27,7 +27,7 @@ import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { DeleteWithPreview } from './DeleteWithPreview';
 import { api } from '../../../../../api/riacore';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAsilOptionGroups } from '../config/asilColors';
+import { AsilSelect } from './AsilSelect';
 import { AsilTag } from './AsilTag';
 import { useTagsForElement } from '../../../../../hooks/useTags';
 import { useTags } from '../../../../../hooks/useTags';
@@ -397,7 +397,6 @@ function EditableNoteTag({ note, namespace, fmNodeId, onDelete }: { note: Concep
 function EditableRequirementTag({ req, namespace, fmNodeId }: { req: ConceptInstanceData; namespace: string; fmNodeId: number }) {
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
-  const asilOptions = useAsilOptionGroups(profile.asilGroups);
   const attrs = req.attributes ?? {};
   const reqId = String(attrs.req_id ?? '');
   const reqName = String(attrs.req_name ?? attrs.has_name ?? '');
@@ -426,8 +425,8 @@ function EditableRequirementTag({ req, namespace, fmNodeId }: { req: ConceptInst
   const renderField = (key: string, value: string, width: number, placeholder: string) => {
     if (editField === key) {
       if (key === 'req_asil') {
-        return <Select size="small" defaultValue={value || undefined} onChange={(v) => save(key, v ?? '')} onBlur={() => setEditField(null)}
-          options={asilOptions} loading={profile.isLoading} disabled={!!profile.error} allowClear placeholder="ASIL" style={{ width: 110, fontSize: 11 }} autoFocus open />;
+        return <AsilSelect size="small" value={value} onChange={(v) => save(key, v ?? '')} onBlur={() => setEditField(null)}
+          loading={profile.isLoading} disabled={!!profile.error} style={{ width: 110, fontSize: 11 }} autoFocus open />;
       }
       return (
         <Input size="small" defaultValue={value} style={{ width, fontSize: 11 }} autoFocus placeholder={placeholder}
@@ -797,9 +796,8 @@ function InlineAddTag({ fmNodeId, namespace }: { fmNodeId: number; namespace: st
   const handleSelect = async (value: number | string) => {
     try {
       if (typeof value === 'string') {
-        // Create new tag then link
-        const created = await createTag.mutateAsync({ namespace, name: value });
-        await linkTag.mutateAsync({ elementNodeId: fmNodeId, tagNodeId: created.node_id });
+        // Create and attach in one backend transaction
+        await createTag.mutateAsync({ namespace, name: value, targetNodeId: fmNodeId });
       } else {
         await linkTag.mutateAsync({ elementNodeId: fmNodeId, tagNodeId: value });
       }

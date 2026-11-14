@@ -24,7 +24,7 @@
  * the extracted model to Import Write Service bulk operations.
  */
 
-import * as path from 'node:path';
+import { importerAssetPath } from '@riacore/importer-sdk';
 import type { ImporterDescriptor } from '@riacore/importer-sdk';
 import { createArxmlRuntime } from './arxml-runtime.js';
 
@@ -33,26 +33,14 @@ import { createArxmlRuntime } from './arxml-runtime.js';
  * The metamodel lives in importer-data/metamodel/ relative to the package root.
  * Works from both `src/` (dev) and `dist/` (compiled) locations.
  */
-const metamodelPath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'metamodel',
-  'sw-arxml.linkml.yaml',
-);
+const metamodelPath = importerAssetPath('@riacore/importer-arxml', 'importer-data/metamodel/sw-arxml.linkml.yaml', __dirname);
 
 /**
  * Resolve the absolute path to the bundled config template file.
  * The template lives in importer-data/config-template/ relative to the package root.
  * Works from both `src/` (dev) and `dist/` (compiled) locations.
  */
-const configTemplatePath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'config-template',
-  'arxml-import-config.yaml',
-);
+const configTemplatePath = importerAssetPath('@riacore/importer-arxml', 'importer-data/config-template/arxml-import-config.yaml', __dirname);
 
 /**
  * ARXML importer descriptor — metadata + factory for the orchestration layer.

@@ -19,9 +19,17 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import lbug, { type Database, type Connection, type LbugValue } from '@ladybugdb/core';
-import type { DbStatus } from '@riacore/app-contracts';
+import type { DbEngineInfo, DbStatus } from '@riacore/app-contracts';
 import { createDbLock } from './db-lock.js';
+import {
+  type GraphConnection as Connection,
+  type GraphDatabase as Database,
+  type GraphEngineBinding,
+  type GraphRow,
+  GraphEngineProcessSwitchError,
+  isWriteStatement,
+} from './graph-engine.js';
+import { selectGraphEngine } from './graph-engine-select.js';
 import {
   DB_SCHEMA_VERSION_NODE_ID,
   DB_SCHEMA_VERSION_TABLE,
@@ -145,6 +153,12 @@ export interface DbModuleOptions {
   closeLockTimeoutMs?: number;
   /** Override {@link MAX_CONCURRENT_READS}. Intended for tests. */
   maxConcurrentReads?: number;
+  /**
+   * Buffer pool size in bytes, passed to every engine that opens the database
+   * (both in dual mode). Default: each engine's own default. Intended for
+   * tests that must turn a memory regression into an allocation error.
+   */
+  bufferManagerSize?: number;
 }
 
 /**
@@ -180,6 +194,10 @@ function createSemaphore(limit: number) {
 export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions): IDbModule {
   const closeLockTimeoutMs = options?.closeLockTimeoutMs ?? CLOSE_LOCK_TIMEOUT_MS;
   let database: Database | null = null;
+  // The binding `database` was opened with: ladybug, RiaGraph, or the dual
+  // ladybug+RiaGraph binding, per the workspace's graph-engine.json.
+  let engine: GraphEngineBinding | null = null;
+  let engineInfo: DbEngineInfo | null = null;
   let currentPath: string | null = null;
   let currentStatus: DbStatus = { state: 'closed' };
   let generation = 0; // Generation counter, bumped on every open() success and close()
@@ -238,13 +256,9 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
     })();
   }
 
-  function isWriteStatement(statement: string): boolean {
-    return /\b(CREATE|MERGE|DELETE|SET|DROP|ALTER|CHECKPOINT|BEGIN|COMMIT|ROLLBACK|DETACH)\b/i.test(statement);
-  }
-
-  async function readDbSchemaVersion(db: Database): Promise<string | undefined> {
-    const conn = new lbug.Connection(db);
-    let result: { getAll(): Promise<Record<string, LbugValue>[]>; close?: () => Promise<void> | void } | null = null;
+  async function readDbSchemaVersion(db: Database, binding: GraphEngineBinding): Promise<string | undefined> {
+    const conn = new binding.Connection(db);
+    let result: { getAll(): Promise<GraphRow[]>; close?: () => Promise<void> | void } | null = null;
     try {
       const raw = await conn.query(
         `MATCH (sv:${DB_SCHEMA_VERSION_TABLE}) WHERE sv.id = '${DB_SCHEMA_VERSION_NODE_ID}' RETURN sv.schema_version AS schema_version`
@@ -287,18 +301,35 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
             fs.mkdirSync(dbDir, { recursive: true });
           }
 
-          database = new lbug.Database(dbPath);
+          // Which engine (and so which physical file) is decided per workspace;
+          // without a graph-engine.json this is ladybug at `dbPath`, as always.
+          const selected = selectGraphEngine(dbPath, logger);
+          const [master, ...shadows] = selected.engines;
+          engineInfo = {
+            master,
+            shadows,
+            version: selected.binding.version,
+            ...(selected.configSource ? { config: selected.configSource } : {}),
+          };
+          logger?.info?.('DB graph engine selected', { dbPath, ...engineInfo });
+          await selected.prepare();
+          database = options?.bufferManagerSize === undefined
+            ? new selected.binding.Database(selected.databasePath)
+            : new selected.binding.Database(selected.databasePath, options.bufferManagerSize);
+          engine = selected.binding;
           currentPath = dbPath;
+          // Multi-engine databases finish their set-up here (e.g. seeding a shadow from the master).
+          await database.afterOpen?.();
 
           logger?.info?.('DB schema initialization started', { dbPath });
-          await initializeSchema(database);
+          await initializeSchema(database, engine);
           // Seed the schema version record for new databases and for existing
           // databases that predate version tracking. ensureDbSchemaVersionSeed
           // is idempotent — it does nothing when the record already exists.
-          await ensureDbSchemaVersionSeed(database);
+          await ensureDbSchemaVersionSeed(database, engine);
           logger?.info?.('DB schema initialization completed', { dbPath });
 
-          const dbSchemaVersion = await readDbSchemaVersion(database);
+          const dbSchemaVersion = await readDbSchemaVersion(database, engine);
           const schemaMismatch = dbSchemaVersion !== SCHEMA_VERSION;
           const warning = schemaMismatch
             ? `DB schema version mismatch: db=${dbSchemaVersion ?? 'missing'}, expected=${SCHEMA_VERSION}`
@@ -315,13 +346,27 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
             readOnly: schemaMismatch,
             schemaVersion: dbSchemaVersion,
             warning,
+            ...(engineInfo ? { engine: engineInfo } : {}),
           };
           generation += 1; // Req 5.1
           logger?.info?.('DB open completed', { dbPath });
           return currentStatus;
         } catch (err) {
+          // Release what the failed open already holds (a shadow's process among it).
+          const failed = database;
           database = null;
+          engine = null;
           currentPath = null;
+          engineInfo = null;
+          if (failed) {
+            try { await failed.close(); } catch { /* the open's own error is the one to report */ }
+          }
+          // Nothing was opened or changed: the caller has to use another process.
+          if (GraphEngineProcessSwitchError.is(err)) {
+            currentStatus = { state: 'closed' };
+            logger?.warn?.('DB open needs another process', { dbPath, error: err.message });
+            throw err;
+          }
           const message = err instanceof Error ? err.message : String(err);
           currentStatus = { state: 'error', path: dbPath, error: message };
           logger?.error?.('DB open failed', { dbPath, error: message });
@@ -358,6 +403,8 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
           { dbPath: closingPath, timeoutMs: closeLockTimeoutMs, ...lock.stats() },
         );
         database = null;
+        engine = null;
+        engineInfo = null;
         currentPath = null;
         currentStatus = { state: 'closed' };
         generation += 1; // Req 5.2 — must precede reset() so nothing newly
@@ -368,6 +415,8 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
       }
 
       database = null;
+      engine = null;
+      engineInfo = null;
       currentPath = null;
 
       logger?.info?.('DB close started', { dbPath: closingPath });
@@ -416,7 +465,7 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
               : undefined,
         );
       }
-      return new lbug.Connection(database);
+      return new engine!.Connection(database);
     },
 
     async runQuery(
@@ -436,11 +485,11 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
         assertGeneration(captured); // before acquiring the connection (Req 5.4)
         const conn = this.getConnection();
         const startedAt = Date.now();
-        let result: { getAll(): Promise<Record<string, LbugValue>[]>; close?: () => Promise<void> | void } | null = null;
+        let result: { getAll(): Promise<GraphRow[]>; close?: () => Promise<void> | void } | null = null;
         try {
           if (params && Object.keys(params).length > 0) {
             const stmt = await conn.prepare(statement);
-            const raw = await conn.execute(stmt, params as Record<string, LbugValue>);
+            const raw = await conn.execute(stmt, params);
             const queryResult = Array.isArray(raw) ? raw[0] : raw;
             result = queryResult;
             const rows = await queryResult.getAll();
@@ -546,11 +595,11 @@ export function createDbModule(logger?: AppCoreLogger, options?: DbModuleOptions
       return {
         async runQuery(statement: string, params?: Record<string, unknown>): Promise<Record<string, unknown>[]> {
           guard();
-          let result: { getAll(): Promise<Record<string, LbugValue>[]>; close?: () => Promise<void> | void } | null = null;
+          let result: { getAll(): Promise<GraphRow[]>; close?: () => Promise<void> | void } | null = null;
           try {
             if (params && Object.keys(params).length > 0) {
               const stmt = await conn.prepare(statement);
-              const raw = await conn.execute(stmt, params as Record<string, LbugValue>);
+              const raw = await conn.execute(stmt, params);
               const queryResult = Array.isArray(raw) ? raw[0] : raw;
               result = queryResult;
               return await queryResult.getAll();

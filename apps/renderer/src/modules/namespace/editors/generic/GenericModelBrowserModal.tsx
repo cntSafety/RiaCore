@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { Modal, Empty, Typography, Button, theme } from 'antd';
+import { Modal, Empty, Typography, Button, Select, Space, theme } from 'antd';
 import { TableOutlined } from '@ant-design/icons';
 import { useState, useCallback, useRef, useLayoutEffect } from 'react';
 import type { NamespaceContext } from '../../../../store/workspaceStore';
@@ -26,6 +26,7 @@ import { NamespaceTreePanel } from '../safety-analysis/components/NamespaceTreeP
 import type { NamespaceTreePanelHandle } from '../safety-analysis/components/NamespaceTreePanel';
 import { CenterPanel } from '../safety-analysis/components/CenterPanel';
 import type { SelectedTreeElement, ScopedTreeNavigator } from '../safety-analysis/types';
+import './model-browser.css';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -37,9 +38,19 @@ interface GenericModelBrowserModalProps {
   onClose: () => void;
   /** The specific imported namespace to browse. */
   namespace: string;
+  /** Adds selection controls around the same tree/search used by View. */
+  selection?: {
+    targetLabel: string;
+    namespaces: { value: string; label: string }[];
+    onNamespaceChange: (namespace: string) => void;
+    disabledReason: (element: SelectedTreeElement) => string | undefined;
+    onConfirm: (element: SelectedTreeElement) => void;
+    isLinked: (element: SelectedTreeElement) => boolean;
+    pending: boolean;
+  };
 }
 
-export function GenericModelBrowserModal({ open, onClose, namespace }: GenericModelBrowserModalProps) {
+export function GenericModelBrowserModal({ open, onClose, namespace, selection }: GenericModelBrowserModalProps) {
   const { token } = useToken();
   const [selected, setSelected] = useState<SelectedTreeElement | null>(null);
   const selectedRef = useRef(selected);
@@ -78,8 +89,8 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
     treePanelRef.current?.clearSelection();
   }, []);
 
-  const handleNavigateToNode = useCallback((nodeId: number, ns: string, concept: string) => {
-    void treePanelRef.current?.navigateToNode(nodeId, ns, concept);
+  const handleNavigateToNode = useCallback((nodeId: number, ns: string, concept: string, usageContext?: SelectedTreeElement) => {
+    void treePanelRef.current?.navigateToNode(nodeId, ns, concept, usageContext);
   }, []);
 
   const handleShowRelationshipInTree: ScopedTreeNavigator = useCallback(async (target) => {
@@ -88,27 +99,60 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
     return tree.navigateToNodeInScope(target);
   }, []);
 
+  const currentSelection = selected?.namespace === namespace ? selected : null;
+  const disabledReason = currentSelection ? selection?.disabledReason(currentSelection) : 'Select a requirement in the tree.';
+
   return (
     <Modal
       open={open}
-      onCancel={onClose}
-      footer={null}
+      onCancel={() => { if (!selection?.pending) onClose(); }}
+      closable={!selection?.pending}
+      keyboard={!selection?.pending}
+      footer={selection ? (
+        <div className="requirement-browser-footer">
+          <Text type="secondary" role="status">{disabledReason ?? `Selected: ${currentSelection?.name ?? currentSelection?.concept}`}</Text>
+          <Space>
+            <Button onClick={onClose} disabled={selection.pending}>Cancel</Button>
+            <Button type="primary" loading={selection.pending} disabled={!currentSelection || !!disabledReason} onClick={() => {
+              if (currentSelection && !selection.pending && !selection.disabledReason(currentSelection)) selection.onConfirm(currentSelection);
+            }}>Link selected requirement</Button>
+          </Space>
+        </div>
+      ) : null}
       width="90vw"
       style={{ top: 16, maxWidth: 1400 }}
       styles={{ body: { padding: 0 } }}
-      title={`Model Browser — ${namespace}`}
+      title={selection ? 'Link imported requirement' : `Model Browser — ${namespace}`}
       destroyOnHidden
     >
+      {selection && (
+        <div className="requirement-browser-toolbar">
+          <Text>Link to: <Text strong>{selection.targetLabel}</Text></Text>
+          <label className="requirement-browser-source">Imported source
+            <Select
+              aria-label="Imported source"
+              value={namespace || undefined}
+              options={selection.namespaces}
+              onChange={selection.onNamespaceChange}
+              disabled={selection.pending}
+              placeholder="No available imported sources"
+              style={{ minWidth: 200 }}
+            />
+          </label>
+        </div>
+      )}
       <div
+        className={selection ? 'requirement-browser-body' : undefined}
         style={{
           display: 'flex',
-          height: '80vh',
+          height: selection ? '68vh' : '80vh',
           overflow: 'hidden',
           borderTop: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
         {/* Left: NamespaceTreePanel in browse mode (filtered to this namespace) */}
         <div
+          className={selection ? 'requirement-browser-tree' : undefined}
           style={{
             width: 380,
             flexShrink: 0,
@@ -118,26 +162,32 @@ export function GenericModelBrowserModal({ open, onClose, namespace }: GenericMo
             overflow: 'hidden',
           }}
         >
-          <NamespaceTreePanel
+          {namespace ? <NamespaceTreePanel
+            key={selection ? namespace : undefined}
             ref={treePanelRef}
             onSelect={handleSelect}
             safetyNamespace=""
             browseNamespace={namespace}
-          />
+            selectionOnly={!!selection}
+            renderNodeSuffix={selection ? (element) => selection.isLinked(element)
+              ? <Text type="secondary" style={{ marginLeft: 8 }}>Linked</Text>
+              : null : undefined}
+          /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No available imported sources. Check Settings → Imported Requirement Linking." />}
         </div>
 
         {/* Right: CenterPanel — rich element details from the analysis view */}
-        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <CenterPanel
             onShowRelationshipInTree={handleShowRelationshipInTree}
             namespace={namespace}
-            selectedTreeElement={selected}
+            selectedTreeElement={selection ? currentSelection : selected}
             onElementDeleted={handleElementDeleted}
             onNavigateToNode={handleNavigateToNode}
             workspaceKey={workspaceKey}
             allowCreateTag={false}
             allowAddTag={false}
             allowEditNotes={false}
+            previewOnly={!!selection}
           />
         </div>
       </div>

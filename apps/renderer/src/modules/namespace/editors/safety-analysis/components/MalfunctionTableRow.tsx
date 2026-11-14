@@ -37,20 +37,19 @@
  * Requirements: 2.3, 2.4, 4.1, 4.2, 4.3, 4.4
  */
 
+import { AsilSelect } from './AsilSelect';
 import { useCallback, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
-import { App, Button, Dropdown, Input, Select, Tag, Tooltip, Typography, theme } from 'antd';
+import { App, Button, Dropdown, Input, Tag, Tooltip, Typography, theme } from 'antd';
 import { MoreOutlined, PlusOutlined, SnippetsOutlined, WarningOutlined } from '@ant-design/icons';
 
 import { useUpdateMalfunction } from '../hooks/useSafetyMutations';
-import { useAsilOptionGroups } from '../config/asilColors';
 import { AsilTag } from './AsilTag';
 import { getNodeDecoration } from '../config/nodeTypeConfig';
 import type { MalfunctionRow } from '../utils/malfunctionTableHelpers';
 import type { SelectedTreeElement } from '../types';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
 import { RowActionToolbar } from './RowActionToolbar';
-import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 
 // ---------------------------------------------------------------------------
 // Port concept detection
@@ -130,8 +129,6 @@ export function MalfunctionTableRow({
 }: MalfunctionTableRowProps) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const profile = useSafetyProfileMetadata();
-  const asilOptions = useAsilOptionGroups(profile.asilGroups);
 
   // ── Mutation hook ─────────────────────────────────────────────────────────
   const updateMalfunction = useUpdateMalfunction(namespace, workspaceKey, triggerAutoSave);
@@ -499,14 +496,11 @@ export function MalfunctionTableRow({
       {/* ── Column 4: ASIL ───────────────────────────────────────────────── */}
       <div style={cellStyle}>
         {row.isEmptyPort ? null : asilEditing ? (
-          <Select
+          <AsilSelect
             autoFocus
             open
             size="small"
             value={asilValue || undefined}
-            placeholder="ASIL"
-            options={asilOptions}
-            allowClear
             style={{ width: 78, fontSize: 12 }}
             onChange={(value: string | undefined) =>
               void handleAsilCommit(value ?? '')

@@ -306,6 +306,9 @@ export interface SysmlElementInfo {
   isReadonly?: boolean;
   isPortion?: boolean;
   isConjugated?: boolean;
+  /** Derived port typing facts; preserve the source's isConjugated separately. */
+  effectiveIsConjugated?: boolean;
+  resolvedPortDefinitionId?: string;
   mayTimeVary?: boolean;
   direction?: string;
   visibility?: string;

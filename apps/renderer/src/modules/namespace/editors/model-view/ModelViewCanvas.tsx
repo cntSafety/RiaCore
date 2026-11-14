@@ -93,9 +93,11 @@ import type { EdgeSection, ElkPoint } from '../safety-analysis/utils/elkLayout';
 import { useCommonModelPresentation } from '../../../../hooks/usePresentation';
 import { useModelView, type ModelExpansion } from '../../../../hooks/useModelView';
 import { ModelTileNode, TILE_WIDTH, tileHeight, type ModelTileNodeData } from './ModelTileNode';
+import type { TreeNodeNavigator } from '../safety-analysis/types';
 import {
   EDGE_ENDPOINT_STUB,
   anchorSide,
+  connectedPortSides,
   childrenByParent,
   computeModelLayout,
   isDelegation,
@@ -246,6 +248,14 @@ function sectionThrough(points: ElkPoint[]): EdgeSection {
     startPoint: simplified[0],
     bendPoints: simplified.slice(1, -1),
     endPoint: simplified[simplified.length - 1],
+  };
+}
+
+function reverseSection(section: EdgeSection): EdgeSection {
+  return {
+    startPoint: section.endPoint,
+    bendPoints: [...section.bendPoints].reverse(),
+    endPoint: section.startPoint,
   };
 }
 
@@ -445,6 +455,8 @@ export function routeSectionsAtPositions(
     if (!sourceTile || !targetTile || !sourcePosition || !targetPosition) continue;
     const sourcePortId = portIdFromHandle(edge.sourceHandle);
     const targetPortId = portIdFromHandle(edge.targetHandle);
+    const sourcePort = sourceTile.ports.find((p) => p.id === sourcePortId);
+    const targetPort = targetTile.ports.find((p) => p.id === targetPortId);
     // A delegation stays inside its frame, so both of its ends anchor on the
     // border their port faces instead of leaving right and arriving left.
     const delegation = isDelegation(edge, tileById);
@@ -452,14 +464,14 @@ export function routeSectionsAtPositions(
       sourcePosition,
       sourceTile,
       sourcePortId === undefined ? undefined : offsetsFor(sourceTile).get(sourcePortId),
-      anchorSide('source', sourceTile.ports.find((p) => p.id === sourcePortId)?.dir, delegation),
+      anchorSide('source', sourcePort?.dir, delegation),
       sizes.get(edge.source),
     );
     const target = portCoordinate(
       targetPosition,
       targetTile,
       targetPortId === undefined ? undefined : offsetsFor(targetTile).get(targetPortId),
-      anchorSide('target', targetTile.ports.find((p) => p.id === targetPortId)?.dir, delegation),
+      anchorSide('target', targetPort?.dir, delegation),
       sizes.get(edge.target),
     );
     // A frame's own port-to-port connection is routed here rather than by ELK.
@@ -483,6 +495,22 @@ export function routeSectionsAtPositions(
     // rows and ELK's route over the top is the readable one, so its baseline stands.
     const selfOnFrame = edge.source === edge.target && frames.has(edge.source);
     const section = selfOnFrame ? undefined : sections[edge.id];
+    // A binding can name the child input before the frame input (HDR powerIn),
+    // or the frame output before the child output. Both endpoint runs then face
+    // opposite to the peer router's east-departure/west-arrival convention.
+    // Route in that convention and restore the original edge order afterwards:
+    // this preserves ELK's lanes, handle identity and directed-edge markers.
+    // Peer routes, self-connections and forward delegations retain their path.
+    const reverseDelegation = sourcePort?.dir === targetPort?.dir && (
+      (sourceTile.parentId === targetTile.id && sourcePort?.dir === 'in')
+      || (targetTile.parentId === sourceTile.id && sourcePort?.dir === 'out')
+    );
+    if (reverseDelegation) {
+      routed[edge.id] = reverseSection(section
+        ? offsetSection(reverseSection(section), target, source)
+        : orthogonalSection(target, source));
+      continue;
+    }
     routed[edge.id] = section
       ? offsetSection(section, source, target)
       : orthogonalSection(source, target);
@@ -496,7 +524,7 @@ export interface ModelViewCanvasProps {
   workspaceKey: string | null;
   /** The authored safety namespace (where malfunctions live). */
   safetyNamespace?: string;
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
+  onNavigateToNode?: TreeNodeNavigator;
   onNavigateToReference?: (
     refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string,
   ) => void;
@@ -619,11 +647,12 @@ function ModelViewCanvasInner({
    */
   const resolvedGraph = useMemo<ModelGraph | undefined>(() => {
     if (!graph) return undefined;
+    const portSides = connectedPortSides(graph);
     return {
       ...graph,
       tiles: graph.tiles.map((tile) => ({
         ...tile,
-        ports: resolvePortOrder(tile, elkPortOrder[tile.id]),
+        ports: resolvePortOrder(tile, elkPortOrder[tile.id], portSides[tile.id]),
       })),
     };
   }, [graph, elkPortOrder]);
@@ -665,6 +694,7 @@ function ModelViewCanvasInner({
     setNodes((current) => {
       const positions = new Map(current.map((node) => [node.id, node.position]));
       const nestedIn = childrenByParent(resolvedGraph.tiles);
+      const portSides = connectedPortSides(resolvedGraph);
       const built = resolvedGraph.tiles.map((tile) => {
         const isFrame = nestedIn.has(tile.id);
         const size = isFrame ? sizes.current[tile.id] : undefined;
@@ -682,7 +712,10 @@ function ModelViewCanvasInner({
           data: {
             tile,
             isFrame,
-            portOffsets: isFrame ? elkPortOffsets[tile.id] : undefined,
+            portSides: portSides[tile.id],
+            portOffsets: isFrame ? Object.fromEntries(portRowOffsets(
+              tile, size?.height ?? tileHeight(tile), elkPortOffsets[tile.id],
+            )) : undefined,
             presentation,
             safetyNamespace,
             onExpand: handleExpand,
@@ -735,7 +768,11 @@ function ModelViewCanvasInner({
         strokeWidth: edge.kind === 'ownership' ? 2 : asilPalette.weight(edge.maxAsil),
         strokeDasharray: edge.dashed ? '6 4' : edge.kind === 'ownership' ? '2 3' : undefined,
       } satisfies RoutedModelEdgeData,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+      // Connection endpoint order is for routing, not declared flow direction.
+      // This includes symmetric SysML bindings as well as ordinary connectors.
+      markerEnd: edge.kind === 'connection'
+        ? undefined
+        : { type: MarkerType.ArrowClosed, width: 12, height: 12 },
       // Per-edge, because the canvas turns selection off globally for the tiles.
       // Without it React Flow leaves the interaction stroke click-through and the
       // route cannot be picked out at all.
@@ -1238,8 +1275,8 @@ function Legend() {
       ))}
       {/*
         A hollow pin is a port whose direction the model does not fix — see
-        `isBidirectionalPort`. It sits in the input column because a row has to pick
-        one, so the fill is what tells it apart from a plain input.
+        `isBidirectionalPort`. Its border follows its connections; the hollow fill
+        distinguishes it from a declared input or output.
       */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{
@@ -1260,6 +1297,10 @@ function Legend() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <WarningOutlined style={{ fontSize: 11, color: asilPalette.icon('QM') }} />
         <span style={caption}>malfunction (ASIL coloured)</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <WarningOutlined style={{ fontSize: 11, color: token.colorError }} />
+        <span style={caption}>ASIL mismatch (producer below consumer)</span>
       </div>
       {/* A flow is the one link whose arrow means something — see `isFlowLink`. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

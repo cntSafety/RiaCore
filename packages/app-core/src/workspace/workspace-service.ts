@@ -19,6 +19,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { recoverAtomicPublication } from '../persistor/atomic-publication.js';
 import type { Result, WorkspaceConfig, WorkspaceInfo, WorkspaceStatus, DbStatus } from '@riacore/app-contracts';
 import { WorkspaceConfigSchema } from '@riacore/app-contracts';
 import type { LoadProgressPushEvent } from '@riacore/app-contracts';
@@ -40,6 +41,7 @@ import { createLayoutService } from '../namespaces/layout-service.js';
 import { SCHEMA_VERSION } from '../db/schema.js';
 import { describeIncompatibleSchema, MIN_READABLE_SCHEMA_VERSION } from '../db/schema-compat.js';
 import { detectUnreplayableWal, walPathFor } from '../db/wal-recovery.js';
+import { assertGraphEngineUsableInProcess, graphDbExists, graphDbUntrusted, primaryDbPath, removeGraphDbFiles } from '../db/graph-engine.js';
 import { runAllCleanups } from '../infra/cleanup-service.js';
 import { DEFAULT_CHECKS } from './default-checks.js';
 import { createBuiltInMetamodelRegistry } from '../profiles/builtin-metamodel-registry.js';
@@ -415,11 +417,8 @@ export function createWorkspaceService(
 
     // delete Db_Directory recursively, then Db_Wal when present.
     try {
-      await fs.promises.rm(dbPath, { recursive: true, force: true });
-      const walPath = `${dbPath}.wal`;
-      if (fs.existsSync(walPath)) {
-        await fs.promises.rm(walPath, { force: true });
-      }
+      // Every file of the configured graph engine(s): db + db.wal for ladybug.
+      await removeGraphDbFiles(dbPath);
     } catch (cleanupErr) {
       logger?.warn?.('performFreshLoad: failed to remove stale DB files', {
         workingDir,
@@ -462,11 +461,8 @@ export function createWorkspaceService(
       logger?.error?.('performFreshLoad: load failed, cleaning up partial DB', { workingDir, error: errMsg });
       await dbModule.close();
       try {
-        await fs.promises.rm(dbPath, { recursive: true, force: true });
-        const walPath = `${dbPath}.wal`;
-        if (fs.existsSync(walPath)) {
-          await fs.promises.rm(walPath, { force: true });
-        }
+        // Every file of the configured graph engine(s): db + db.wal for ladybug.
+        await removeGraphDbFiles(dbPath);
       } catch (cleanupErr) {
         logger?.warn?.('performFreshLoad: failed to clean up partial DB after load failure', {
           workingDir,
@@ -711,6 +707,11 @@ export function createWorkspaceService(
       // closures so a switch-during-load ends on the new workspace. This
       // runs before the same-directory fast path inside `if (state.isOpen)`; a same-dir
       // re-open during a load simply lets the load settle, then the fast path returns.
+      // A workspace on the other native graph engine than the one this process
+      // has loaded cannot be opened here (GraphEngineProcessSwitchError). Fail
+      // before anything is closed: the desktop worker restarts and repeats this.
+      assertGraphEngineUsableInProcess(path.join(config.workingDir, 'db'));
+
       if (currentLoad) {
         epoch += 1;
         await withTimeout(currentLoad, LOAD_TIMEOUT_MS);
@@ -727,7 +728,7 @@ export function createWorkspaceService(
         // file-level corruption is detected even while the workspace is open.
         // If the DB file has been deleted externally, fall through to full
         // lifecycle detection so the workspace recovers (Case B: load from ria-data).
-        if (state.config?.workingDir === config.workingDir && state.dbPath && fs.existsSync(state.dbPath)) {
+        if (state.config?.workingDir === config.workingDir && state.dbPath && graphDbExists(state.dbPath)) {
           if (!config.forceRecheck) {
             logger?.debug?.('Workspace already open with same directory — skipping re-open', { workingDir: config.workingDir });
             // No data moved, so the existing snapshot baseline is still the
@@ -896,18 +897,39 @@ export function createWorkspaceService(
         logger?.info?.('Closing previous workspace before re-open or switching', {
           previousWorkingDir: state.config?.workingDir ?? null,
           nextWorkingDir: config.workingDir,
-          dbMissing: state.dbPath ? !fs.existsSync(state.dbPath) : false,
+          dbMissing: state.dbPath ? !graphDbExists(state.dbPath) : false,
         });
         await dbModule.close();
         resetState();
       }
 
+      recoverAtomicPublication(config.workingDir);
       const dbPath = path.join(config.workingDir, 'db');
 
       // Step 3: Probe filesystem state
-      const dbExists = fs.existsSync(dbPath);
+      let dbExists = graphDbExists(dbPath);
       const classification = await classifyRiaData(config.workingDir);
       const riaDataValid = riaDataIsReadable(classification);
+
+      // The master's file was last the shadow of another engine in a session
+      // that crashed or diverged: its data may differ from the workspace's.
+      // Rebuild from ria-data when there is a snapshot; otherwise it is all
+      // there is, and it is opened as it is.
+      if (dbExists && graphDbUntrusted(dbPath)) {
+        if (riaDataValid) {
+          logger?.warn?.('Database file was an untrusted shadow of another graph engine; rebuilding it from ria-data', {
+            workingDir: config.workingDir,
+            dbPath: primaryDbPath(dbPath),
+          });
+          await removeGraphDbFiles(dbPath);
+          dbExists = false;
+        } else {
+          logger?.warn?.('Database file was an untrusted shadow of another graph engine and there is no ria-data snapshot; opening it as it is', {
+            workingDir: config.workingDir,
+            dbPath: primaryDbPath(dbPath),
+          });
+        }
+      }
 
       logger?.info?.('Workspace lifecycle detection', {
         workingDir: config.workingDir, dbExists, riaDataValid, riaData: classification.kind,
@@ -924,7 +946,7 @@ export function createWorkspaceService(
       // path, and leaving the old WAL there invites a replay against a database
       // it has nothing to do with. Remove it before either case opens.
       if (!dbExists) {
-        const orphanedWal = walPathFor(dbPath);
+        const orphanedWal = walPathFor(primaryDbPath(dbPath));
         if (fs.existsSync(orphanedWal)) {
           logger?.warn?.('Removing orphaned write-ahead log left without a database file', {
             workingDir: config.workingDir,
@@ -1143,11 +1165,8 @@ export function createWorkspaceService(
           logger?.error?.('Case B: load failed, cleaning up DB', { workingDir: config.workingDir, error: errMsg });
           await dbModule.close();
           try {
-            await fs.promises.rm(dbPath, { recursive: true, force: true });
-            const walPath = `${dbPath}.wal`;
-            if (fs.existsSync(walPath)) {
-              await fs.promises.rm(walPath, { force: true });
-            }
+            // Every file of the configured graph engine(s): db + db.wal for ladybug.
+            await removeGraphDbFiles(dbPath);
           } catch (cleanupErr) {
             logger?.warn?.('Case B: failed to clean up DB after load failure', { error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
           }
@@ -1189,14 +1208,14 @@ export function createWorkspaceService(
           logger?.error?.('Case C: unreplayable write-ahead log and no ria-data snapshot to rebuild from', {
             workingDir: config.workingDir,
             dbPath,
-            walPath: walPathFor(dbPath),
+            walPath: walPathFor(primaryDbPath(dbPath)),
             probeExitCode: unreplayableWal.code,
             probeSignal: unreplayableWal.signal,
           });
           return {
             ok: false,
             error:
-              `The previous session did not shut down cleanly and the write-ahead log at '${walPathFor(dbPath)}' cannot be replayed. ` +
+              `The previous session did not shut down cleanly and the write-ahead log at '${walPathFor(primaryDbPath(dbPath))}' cannot be replayed. ` +
               `This workspace has no ria-data snapshot to rebuild from, so nothing has been deleted. ` +
               `Deleting the write-ahead log file will let the database open again, discarding any changes made after the last checkpoint.`,
           };
@@ -1294,7 +1313,7 @@ export function createWorkspaceService(
         logger?.warn?.('Case D: unreplayable write-ahead log — rebuilding from ria-data snapshot', {
           workingDir: config.workingDir,
           dbPath,
-          walPath: walPathFor(dbPath),
+          walPath: walPathFor(primaryDbPath(dbPath)),
           probeExitCode: unreplayableWal.code,
           probeSignal: unreplayableWal.signal,
         });
@@ -1532,9 +1551,11 @@ export function createWorkspaceService(
 
       const dbPath = path.join(config.workingDir, 'db');
       const riaDataDir = path.join(config.workingDir, 'ria-data');
+      // As in open(): before anything is written.
+      assertGraphEngineUsableInProcess(dbPath);
 
       // Step 3: Check for existing workspace data
-      const dbExists = fs.existsSync(dbPath);
+      const dbExists = graphDbExists(dbPath);
       // Anything other than `absent_empty` counts as existing data here —
       // including an unusable manifest. `create` must not be the way a user
       // discovers that their snapshot is unreadable, and it certainly must not
@@ -1667,7 +1688,7 @@ export function createWorkspaceService(
       // We do NOT close the handle here to avoid races with concurrent
       // dispatch calls (same reason db.probe never closed it).
       let liveDbStatus = dbModule.getStatus();
-      if (liveDbStatus.state === 'open' && state.dbPath && !fs.existsSync(state.dbPath)) {
+      if (liveDbStatus.state === 'open' && state.dbPath && !graphDbExists(state.dbPath)) {
         liveDbStatus = { state: 'closed' };
       }
 

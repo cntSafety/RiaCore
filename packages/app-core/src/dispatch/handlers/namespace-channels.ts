@@ -127,6 +127,45 @@ function paginateTreeChildren<T>(children: readonly T[], offset: number, limit?:
 /** An ordered tree sibling, before the page slice is applied. */
 interface TreeSiblingRow extends TreeChildSortKey {
   attrs: Record<string, unknown>;
+  isReference?: boolean;
+}
+
+/** Read-only declaration projection. Both importers expose direct typing through
+ * has_type/has_definition. Do not infer inheritance or overrides from names. */
+async function loadDefinitionMembers(
+  db: IDbModule, namespace: string, usageIds: number[], containmentRels: readonly string[],
+  hiddenConcepts: ReadonlySet<string>, showAll?: boolean,
+): Promise<Map<number, TreeSiblingRow[]>> {
+  const result = new Map<number, TreeSiblingRow[]>();
+  if (!usageIds.length || !containmentRels.length) return result;
+  const rows = await db.runQuery(
+    `MATCH (typing:RIA_UNIV_RelationshipInstance)
+     WHERE typing.namespace = $namespace AND typing.source_node_id IN $usageIds
+       AND typing.relationship IN ['has_type', 'has_definition']
+     MATCH (definition:RIA_UNIV_ConceptInstance {node_id: typing.target_node_id})
+     WHERE definition.namespace = $namespace
+     MATCH (ownership:RIA_UNIV_RelationshipInstance)
+     WHERE ownership.source_node_id = definition.node_id AND ownership.relationship IN $containmentRels
+     MATCH (member:RIA_UNIV_ConceptInstance {node_id: ownership.target_node_id})
+     WHERE member.namespace = $namespace
+     RETURN DISTINCT typing.source_node_id AS usage_id, definition.concept AS definition_concept,
+       member.node_id AS node_id, member.concept AS concept, member.attributes AS attributes`,
+    { namespace, usageIds, containmentRels: [...containmentRels] },
+  );
+  for (const row of rows) {
+    if (!String(row.definition_concept).endsWith('_definition')) continue;
+    const concept = String(row.concept);
+    if (!showAll && hiddenConcepts.has(concept)) continue;
+    const attrs = JSON.parse(String(row.attributes || '{}')) as Record<string, unknown>;
+    const usageId = Number(row.usage_id);
+    const members = result.get(usageId) ?? [];
+    const nodeId = Number(row.node_id);
+    if (!members.some(member => member.node_id === nodeId)) {
+      members.push({ node_id: nodeId, concept, name: extractNodeName(attrs, concept), attrs, isReference: true });
+    }
+    result.set(usageId, members);
+  }
+  return result;
 }
 
 /**
@@ -148,6 +187,8 @@ async function loadOrderedTreeSiblings(
     containmentRels: readonly string[];
     hiddenConcepts: ReadonlySet<string>;
     showAll?: boolean;
+    metamodel?: string;
+    includeDefinitionMembers?: boolean;
   },
 ): Promise<{ rows: TreeSiblingRow[]; totalCount: number }> {
   const { containmentRels, hiddenConcepts, showAll } = opts;
@@ -222,7 +263,7 @@ async function loadOrderedTreeSiblings(
   }
 
   const parentRows = await dbModule.runQuery(
-    `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $parentNodeId}) RETURN ci.node_id`,
+    `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $parentNodeId}) RETURN ci.node_id, ci.concept AS concept`,
     { parentNodeId },
   );
   if (parentRows.length === 0) throw new Error(`Node ${parentNodeId} not found`);
@@ -254,7 +295,14 @@ async function loadOrderedTreeSiblings(
       )
     : [];
 
-  return { rows: toOrderedRows(dataRows), totalCount: childIds.length };
+  const ownRows = toOrderedRows(dataRows);
+  if (opts.includeDefinitionMembers && opts.metamodel?.startsWith('SysMLv2') && String(parentRows[0]?.concept).endsWith('_usage')) {
+    const members = await loadDefinitionMembers(dbModule, namespace, [parentNodeId], containmentRels, hiddenConcepts, showAll);
+    const ownIds = new Set(childIds);
+    ownRows.push(...(members.get(parentNodeId) ?? []).filter(row => !ownIds.has(row.node_id)));
+    ownRows.sort(compareTreeChildrenByConceptThenName);
+  }
+  return { rows: ownRows, totalCount: ownRows.length };
 }
 
 /**
@@ -329,7 +377,7 @@ export function registerNamespaceChannels(
 
   // ── namespaces.getChildren ───────────────────────────────────────────────────
   registry.register('namespaces.getChildren', async (payload, deps, ctx) => {
-    const { namespace, parentNodeId, offset, limit, showAll, scopeNamespace } = payload;
+    const { namespace, parentNodeId, offset, limit, showAll, scopeNamespace, includeDefinitionMembers } = payload;
     // When browsing an imported structural namespace in the context of a specific
     // authored analysis, `scopeNamespace` is that analysis. Cross-namespace
     // authored artifacts (occurs_at malfunctions, notes, tags) are then filtered
@@ -371,7 +419,7 @@ export function registerNamespaceChannels(
       deps.dbModule,
       namespace,
       parentNodeId,
-      { containmentRels, hiddenConcepts, showAll },
+      { containmentRels, hiddenConcepts, showAll, metamodel, includeDefinitionMembers },
     );
     const pageRows = paginateTreeChildren(sortedRows, effectiveOffset, effectiveLimit);
 
@@ -396,7 +444,12 @@ export function registerNamespaceChannels(
 
     const relFilter = containmentRels.map(r => `'${e(r)}'`).join(', ');
 
-    const children = await Promise.all(pageRows.map(async ({ node_id: nodeId, concept, name, attrs }) => {
+    const definitionMembers = includeDefinitionMembers && metamodel.startsWith('SysMLv2')
+      ? await loadDefinitionMembers(deps.dbModule, namespace,
+        pageRows.filter(row => row.concept.endsWith('_usage')).map(row => row.node_id),
+        containmentRels, hiddenConcepts, showAll)
+      : new Map<number, TreeSiblingRow[]>();
+    const children = await Promise.all(pageRows.map(async ({ node_id: nodeId, concept, name, attrs, isReference }) => {
       const asil = concept === 'malfunction' ? String(attrs.malfunction_asil ?? '') : '';
       const [childCountRows, crossNsCountRows] = await Promise.all([
         // Does this child have its own (visible) containment children?
@@ -426,8 +479,9 @@ export function registerNamespaceChannels(
         node_id: nodeId,
         concept,
         name,
-        hasChildren: Number(childCountRows[0]?.cnt ?? 0) > 0 || Number(crossNsCountRows[0]?.cnt ?? 0) > 0,
+        hasChildren: Number(childCountRows[0]?.cnt ?? 0) > 0 || Number(crossNsCountRows[0]?.cnt ?? 0) > 0 || (definitionMembers.get(nodeId)?.length ?? 0) > 0,
         asil,
+        ...(isReference ? { isReference: true } : {}),
       };
     }));
 
@@ -525,7 +579,7 @@ export function registerNamespaceChannels(
   // `namespaces.getChildren` pages over, so an index identifies the page the
   // element will actually be on.
   registry.register('namespaces.getNodeLocation', async (payload, deps, ctx) => {
-    const { namespace, nodeId, showAll } = payload;
+    const { namespace, nodeId, showAll, includeDefinitionMembers } = payload;
 
     const nsRows = await deps.dbModule.runQuery(
       `MATCH (ns:RIA_UNIV_Namespace {name: $namespace}) RETURN ns.metamodel AS metamodel`,
@@ -548,7 +602,7 @@ export function registerNamespaceChannels(
         deps.dbModule,
         namespace,
         parentNodeId,
-        { containmentRels, hiddenConcepts, showAll },
+        { containmentRels, hiddenConcepts, showAll, metamodel, includeDefinitionMembers },
       );
       const childIndex = rows.findIndex(row => row.node_id === wantedId);
       if (childIndex === -1) {
@@ -712,6 +766,7 @@ export function registerNamespaceChannels(
           `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $nodeId})-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(target:RIA_UNIV_ConceptInstance)
            WHERE target.namespace <> ci.namespace
            RETURN target.node_id AS targetId, target.namespace AS targetNamespace, target.metamodel AS targetMetamodel
+           ORDER BY targetId
            LIMIT 1`,
           { nodeId },
         );
@@ -747,6 +802,7 @@ export function registerNamespaceChannels(
               `MATCH (parent:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(ci:RIA_UNIV_ConceptInstance {node_id: $nodeId})
                WHERE r.relationship = $rel
                RETURN parent.node_id AS parentId, parent.namespace AS parentNamespace, parent.metamodel AS parentMetamodel
+               ORDER BY parentId
                LIMIT 1`,
               { nodeId, rel: intraRel },
             );
@@ -759,6 +815,7 @@ export function registerNamespaceChannels(
                   `MATCH (parent:RIA_UNIV_ConceptInstance {node_id: $parentId})-[r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(target:RIA_UNIV_ConceptInstance)
                    WHERE target.namespace <> parent.namespace
                    RETURN target.node_id AS targetId, target.namespace AS targetNamespace, target.metamodel AS targetMetamodel
+                   ORDER BY targetId
                    LIMIT 1`,
                   { parentId },
                 );

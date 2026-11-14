@@ -1,0 +1,49 @@
+.requirement-browser-toolbar,
+.requirement-browser-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.requirement-browser-toolbar {
+  padding: 12px 0;
+}
+
+.requirement-browser-toolbar > :first-child,
+.requirement-browser-footer > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requirement-browser-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.requirement-browser-body > .requirement-browser-tree {
+  width: 36% !important;
+  min-width: 260px;
+  max-width: 380px;
+}
+
+@media (max-width: 760px) {
+  .requirement-browser-body {
+    flex-direction: column;
+  }
+
+  .requirement-browser-body > .requirement-browser-tree {
+    width: 100% !important;
+    max-width: none;
+    min-width: 0;
+    height: 40%;
+    border-right: 0 !important;
+  }
+
+  .requirement-browser-footer .ant-space {
+    flex-wrap: wrap;
+  }
+}

@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import lbug, { type Database } from '@ladybugdb/core';
+import { type GraphDatabase, type GraphEngineBinding, ladybugBinding } from './graph-engine.js';
 
 export type SchemaLayer = 'meta' | 'sourcemaster' | 'universe' | 'cross_namespace';
 
@@ -449,9 +449,11 @@ const DDL_STATEMENTS: string[] = [
  * Initialize the RIA graph schema in the given database.
  * Creates a connection, executes all DDL statements, then closes the connection.
  * All DDL uses CREATE ... IF NOT EXISTS for idempotency.
+ *
+ * `engine` is the binding `database` was opened with (see graph-engine.ts).
  */
-export async function initializeSchema(database: Database): Promise<void> {
-  const conn = new lbug.Connection(database);
+export async function initializeSchema(database: GraphDatabase, engine: GraphEngineBinding = ladybugBinding): Promise<void> {
+  const conn = new engine.Connection(database);
   try {
     for (const ddl of DDL_STATEMENTS) {
       const raw = await conn.query(ddl);
@@ -463,8 +465,8 @@ export async function initializeSchema(database: Database): Promise<void> {
   }
 }
 
-export async function ensureDbSchemaVersionSeed(database: Database): Promise<void> {
-  const conn = new lbug.Connection(database);
+export async function ensureDbSchemaVersionSeed(database: GraphDatabase, engine: GraphEngineBinding = ladybugBinding): Promise<void> {
+  const conn = new engine.Connection(database);
   try {
     const raw = await conn.query(
       `MATCH (sv:${DB_SCHEMA_VERSION_TABLE}) WHERE sv.id = '${DB_SCHEMA_VERSION_NODE_ID}' RETURN sv.id AS id`

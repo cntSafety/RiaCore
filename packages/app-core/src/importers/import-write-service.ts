@@ -39,7 +39,8 @@ import type {
   ProfileReviewMetadata,
 } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
-import type { Connection } from '@ladybugdb/core';
+import type { GraphConnection as Connection } from '../db/graph-engine.js';
+import { createInstanceRelEdges } from '../persistor/persistor-helpers.js';
 import { buildMetamodelProfileMetadata } from './profile-metadata.js';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,19 @@ import { buildMetamodelProfileMetadata } from './profile-metadata.js';
 /** Escape single quotes for inline Cypher string literals. */
 function e(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
+ * Bulk-write progress for a human watching a long import.
+ *
+ * Deliberately stderr, not stdout: the CLI reserves stdout for a command's
+ * JSON result, and a large import emits one of these per chunk — enough to
+ * corrupt `riacore import` output. Same reasoning as the CLI's stderr-bound
+ * import logger factory. This is progress chatter, not diagnostics; anything
+ * worth reading after the run belongs in the import log.
+ */
+function writeProgress(line: string): void {
+  process.stderr.write(line);
 }
 
 interface SourceConfigMeta {
@@ -443,6 +457,84 @@ async function registerMetamodel(
     relTargetRows);
 }
 
+/**
+ * Remove a registered metamodel's definition so it can be written again.
+ *
+ * Needed because registration is CREATE-only: it has no upsert, so a schema
+ * that gained a concept, an attribute or a slot cannot reach an existing
+ * workspace while the old definition is still there. Nothing about this touches
+ * instance data — `RIA_UNIV_ConceptInstance` records its concept and metamodel
+ * as plain strings and has no edge into the meta layer — so the definition is
+ * rebuilt underneath unchanged content.
+ *
+ * The two namespace→metamodel bindings are the exception, and the reason this
+ * is not a bare DETACH DELETE: `RIA_META_DEFINEDBY` (authored namespace) and
+ * `RIA_META_CATEGORIZEDBY` (imported namespace, derived from per-pair
+ * connections) attach to the metamodel node, so deleting it drops them. They
+ * are snapshotted and re-created, the same way `replaceNamespace` restores the
+ * edges its own DETACH DELETE removes.
+ */
+async function unregisterMetamodel(
+  db: IDbModule,
+  metamodelName: string,
+): Promise<MetamodelBinding[]> {
+  const bindings: MetamodelBinding[] = [];
+  for (const edge of ['RIA_META_DEFINEDBY', 'RIA_META_CATEGORIZEDBY'] as const) {
+    const rows = await db.runQuery(
+      `MATCH (ns:RIA_UNIV_Namespace)-[:${edge}]->(mm:RIA_META_Metamodel)
+       WHERE mm.name = $name RETURN DISTINCT ns.name AS namespace`,
+      { name: metamodelName },
+    );
+    for (const row of rows) {
+      const namespace = String(row.namespace ?? '');
+      if (namespace) bindings.push({ namespace, edge });
+    }
+  }
+
+  // Attribute rows carry the metamodel name, so they are reachable without
+  // walking CONCEPT_ATTRIBUTE / REL_ATTRIBUTE. DETACH DELETE on each node
+  // takes the DEFINES_*, SUBTYPEOF, REL_SOURCE/TARGET and ATTRIBUTE edges with
+  // it, which is every meta edge the registration created.
+  for (const label of [
+    'RIA_META_NodeAttribute',
+    'RIA_META_EdgeAttribute',
+    'RIA_META_Relationship',
+    'RIA_META_Concept',
+  ]) {
+    await db.runQuery(
+      `MATCH (n:${label}) WHERE n.metamodel = $name DETACH DELETE n`,
+      { name: metamodelName },
+    );
+  }
+  await db.runQuery(
+    `MATCH (mm:RIA_META_Metamodel) WHERE mm.name = $name DETACH DELETE mm`,
+    { name: metamodelName },
+  );
+
+  return bindings;
+}
+
+/** A namespace→metamodel binding that outlives the definition it points at. */
+interface MetamodelBinding {
+  namespace: string;
+  edge: 'RIA_META_DEFINEDBY' | 'RIA_META_CATEGORIZEDBY';
+}
+
+async function restoreMetamodelBindings(
+  db: IDbModule,
+  metamodelName: string,
+  bindings: MetamodelBinding[],
+): Promise<void> {
+  for (const { namespace, edge } of bindings) {
+    await db.runQuery(
+      `MATCH (ns:RIA_UNIV_Namespace), (mm:RIA_META_Metamodel)
+       WHERE ns.name = '${e(namespace)}' AND mm.name = '${e(metamodelName)}'
+         AND NOT EXISTS { MATCH (ns)-[:${edge}]->(mm) }
+       CREATE (ns)-[:${edge}]->(mm)`,
+    );
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Namespace Replacement / Creation helpers
@@ -474,7 +566,7 @@ export async function replaceNamespace(db: IDbModule, namespace: string): Promis
   }
 
   const t0 = Date.now();
-  process.stdout.write(`  [delete] Replacing namespace '${namespace}'...\n`);
+  writeProgress(`  [delete] Replacing namespace '${namespace}'...\n`);
 
   // Dependency-ordered deletion:
   const steps: [string, string][] = [
@@ -495,16 +587,16 @@ export async function replaceNamespace(db: IDbModule, namespace: string): Promis
     const [label, cypher] = steps[i];
     const t1 = Date.now();
     await db.runQuery(cypher);
-    process.stdout.write(`  [delete] ${label} (${Date.now() - t1}ms)\n`);
+    writeProgress(`  [delete] ${label} (${Date.now() - t1}ms)\n`);
     if (checkpointAfter.has(i)) {
       const tc = Date.now();
       await db.checkpoint();
-      process.stdout.write(`  [delete] checkpoint (${Date.now() - tc}ms)\n`);
+      writeProgress(`  [delete] checkpoint (${Date.now() - tc}ms)\n`);
     }
   }
 
   await db.checkpoint();
-  process.stdout.write(`  [delete] done (${Date.now() - t0}ms total)\n`);
+  writeProgress(`  [delete] done (${Date.now() - t0}ms total)\n`);
 }
 
 export async function createOrReplaceNamespace(
@@ -749,8 +841,10 @@ async function upsertSource(
  */
 export interface IImportWriteServiceExt extends IImportWriteService {
   /**
-   * Register a metamodel from a parsed LinkML schema. Idempotent —
-   * skips registration if the metamodel already exists.
+   * Register a metamodel from a parsed LinkML schema.
+   *
+   * Idempotent for an unchanged schema, and version-aware for a changed one:
+   * a metamodel already registered at a different version is re-registered.
    */
   registerMetamodelFromSchema(
     schema: LinkMLSchema,
@@ -767,13 +861,37 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
       schema: LinkMLSchema,
       metamodelName: string,
     ): Promise<void> {
+      // Returns the rows rather than a count, so the stored version comes back
+      // in the same round trip that answers whether it is registered at all.
       const mmRows = await dbModule.runQuery(
-        `MATCH (m:RIA_META_Metamodel) WHERE m.name = $name RETURN count(m) AS cnt`,
+        `MATCH (m:RIA_META_Metamodel) WHERE m.name = $name RETURN m.version AS version`,
         { name: metamodelName },
       );
-      if (Number(mmRows[0]?.cnt ?? 0) > 0) {
-        return; // Already registered — idempotent (Req 1.2, 4.5)
+      const schemaVersion = schema.version ?? '1.0.0';
+
+      if (mmRows.length > 0) {
+        const storedVersion = String(mmRows[0]?.version ?? '');
+        if (storedVersion === schemaVersion) {
+          return; // Already registered at this version — idempotent (Req 1.2, 4.5)
+        }
+        // Registration is CREATE-only, so an existing definition is not
+        // updated in place — it is removed and written again. Without this a
+        // schema addition could never reach a workspace that had already
+        // imported once: the metamodel would keep the shape it was first
+        // registered with, and a slot added later would have no
+        // RIA_META_Relationship row and therefore no is_containment, so the
+        // edges would import and the tree would still show their targets as
+        // roots. Instance data is unaffected; see unregisterMetamodel.
+        writeProgress(
+          `  [metamodel] Re-registering '${metamodelName}': ` +
+          `${storedVersion || '(no version)'} → ${schemaVersion}\n`,
+        );
+        const bindings = await unregisterMetamodel(dbModule, metamodelName);
+        await registerMetamodel(dbModule, schema, metamodelName);
+        await restoreMetamodelBindings(dbModule, metamodelName, bindings);
+        return;
       }
+
       await registerMetamodel(dbModule, schema, metamodelName);
     },
 
@@ -899,10 +1017,10 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
           }
           totalInserted += chunk.length;
           const elapsed = Date.now() - t0;
-          process.stdout.write(`\r  [concepts] ${totalInserted}/${totalItems} (${batch.concept} +${chunk.length} in ${elapsed}ms)   `);
+          writeProgress(`\r  [concepts] ${totalInserted}/${totalItems} (${batch.concept} +${chunk.length} in ${elapsed}ms)   `);
         }
       }
-      process.stdout.write('\n');
+      writeProgress('\n');
       return nodeIdMap;
     },
 
@@ -930,16 +1048,12 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
         } catch { /* skip */ }
       }
 
-      // Sub-batch size for MATCH+CREATE edge step
-      // Use larger batches since we pre-filter by node_id IN list
-      const EDGE_BATCH_SIZE = 200;
-
       for (const batch of batches) {
         const resolved = batch.items.flatMap(item => {
           const src = stablePathMap.get(item.sourceStablePath);
           const tgt = stablePathMap.get(item.targetStablePath);
           if (src === undefined || tgt === undefined) return [];
-          return [{ src, tgt }];
+          return [{ src, tgt, attributes: item.attributes ?? {} }];
         });
 
         if (resolved.length === 0) continue;
@@ -948,51 +1062,67 @@ export function createImportWriteService(dbModule: IDbModule): IImportWriteServi
         for (let offset = 0; offset < resolved.length; offset += CHUNK_SIZE) {
           const chunk = resolved.slice(offset, offset + CHUNK_SIZE);
           const t0 = Date.now();
-          const listItems = chunk.map(r => `{src: ${r.src}, tgt: ${r.tgt}}`);
 
-          // Step 1: bulk-create RelationshipInstance nodes
+          // Step 1: bulk-create RelationshipInstance nodes.
+          //
+          // The rows travel as a `$rows` parameter rather than inlined into the
+          // statement text. Inlining made every chunk a fresh multi-KB statement
+          // to parse and plan, which dominated the write: measured at about
+          // 4.6ms per relationship on a real CGraph import, against roughly
+          // 95us per relationship for the parameterized path.
+          //
+          // Edge attributes travel through the same rows as concept attributes
+          // do. They were previously hard-coded to '{}', which silently dropped
+          // every value an importer put on a relationship — the SDK declares
+          // RelationshipBatch.items[].attributes, so callers reasonably assumed
+          // it was persisted.
           const createRows = await dbModule.runQuery(
-            `UNWIND [${listItems.join(', ')}] AS item
+            `UNWIND $rows AS item
              CREATE (ri:RIA_UNIV_RelationshipInstance {
-               namespace: '${e(session.namespace)}',
-               relationship: '${e(batch.relationship)}',
-               metamodel: '${e(session.metamodel)}',
+               namespace: $namespace,
+               relationship: $relationship,
+               metamodel: $metamodel,
                source_node_id: item.src,
                target_node_id: item.tgt,
-               attributes: '{}'
+               attributes: item.attributes
              })
-             RETURN ri.edge_id AS edge_id, item.src AS src, item.tgt AS tgt`,
+             RETURN ri.edge_id AS edge_id,
+                    ri.source_node_id AS src,
+                    ri.target_node_id AS tgt`,
+            {
+              rows: chunk.map(r => ({
+                src: r.src,
+                tgt: r.tgt,
+                attributes: JSON.stringify(r.attributes),
+              })),
+              namespace: session.namespace,
+              relationship: batch.relationship,
+              metamodel: session.metamodel,
+            },
           );
 
-          // Step 2: create INSTANCE_REL graph edges
-          // Match source and target nodes by node_id in a single combined MATCH
-          // (comma-joined patterns, one WHERE). Two separate MATCH...WHERE clauses
-          // after an UNWIND is a known @ladybugdb/core bug: the second clause's
-          // filter is evaluated once against the first UNWIND row and reused for
-          // every row, so every edge ends up wired to the first item's src/tgt.
-          for (let i = 0; i < createRows.length; i += EDGE_BATCH_SIZE) {
-            const edgeBatch = createRows.slice(i, i + EDGE_BATCH_SIZE);
-            const edgeItems = edgeBatch.map(r =>
-              `{edge_id: ${Number(r.edge_id)}, src: ${Number(r.src)}, tgt: ${Number(r.tgt)}}`,
-            );
-            await dbModule.runQuery(
-              `UNWIND [${edgeItems.join(', ')}] AS item
-               MATCH (s:RIA_UNIV_ConceptInstance), (t:RIA_UNIV_ConceptInstance)
-               WHERE s.node_id = item.src AND t.node_id = item.tgt
-               CREATE (s)-[:RIA_UNIV_INSTANCE_REL {
-                 edge_instance_id: item.edge_id,
-                 relationship: '${e(batch.relationship)}',
-                 metamodel: '${e(session.metamodel)}'
-               }]->(t)`,
-            );
-          }
+          // Step 2: create INSTANCE_REL graph edges through the shared helper,
+          // which owns the statement shape and its batching. This used to be a
+          // duplicated local copy of the same logic; see createInstanceRelEdges
+          // for why each endpoint is resolved in its own keyed MATCH and why
+          // that shape is RiaGraph-only.
+          await createInstanceRelEdges(
+            createRows.map(r => ({
+              source_node_id: Number(r.src),
+              target_node_id: Number(r.tgt),
+              edge_id: Number(r.edge_id),
+              relationship: batch.relationship,
+              metamodel: session.metamodel,
+            })),
+            dbModule,
+          );
 
           totalCreated += createRows.length;
           totalRelInserted += createRows.length;
-          process.stdout.write(`\r  [relationships] ${batch.relationship} +${totalRelInserted} (${Date.now() - t0}ms)   `);
+          writeProgress(`\r  [relationships] ${batch.relationship} +${totalRelInserted} (${Date.now() - t0}ms)   `);
         }
       }
-      process.stdout.write('\n');
+      writeProgress('\n');
       return totalCreated;
     },
 

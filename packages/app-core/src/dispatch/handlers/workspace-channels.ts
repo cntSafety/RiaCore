@@ -23,6 +23,7 @@ import { buildSnapshotDriftInfo } from '../../workspace/snapshot-baseline.js';
 import { buildSyncReport } from '../../workspace/sync-report.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { graphDbExists } from '../../db/graph-engine.js';
 
 // Default views for imported namespaces are seeded inside `workspaceService.open()`
 // itself, not here: the CLI opens workspaces directly and never reaches these
@@ -173,7 +174,7 @@ export function registerWorkspaceChannels(
     const workingDir = payload.workingDir;
     const dbPath = path.join(workingDir, 'db');
     const riaDataDir = path.join(workingDir, 'ria-data');
-    const hasDb = fs.existsSync(dbPath);
+    const hasDb = graphDbExists(dbPath);
     // Mirror the hasValidManifest logic from workspace-service: dir must exist
     // and contain a parseable manifest.json.
     let hasRiaData = false;

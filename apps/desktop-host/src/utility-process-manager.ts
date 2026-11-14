@@ -97,14 +97,23 @@ export class UtilityProcessManager {
   private shutdownPromise: Promise<void> | null = null;
   private isRestarting = false;
   private permanentlyFailed = false;
+  /** A worker replacement for a graph engine switch, while it runs. */
+  private plannedRestart: Promise<void> | null = null;
+  /** Workers stopped on purpose: their exit is not a crash. */
+  private readonly plannedExits = new WeakSet<ChildProcess>();
+  /** Waiting for the requests in flight to finish (whenIdle). */
+  private idleWaiters: Array<() => void> = [];
+  /** How long requests in flight may still take before a planned restart. */
+  private readonly engineSwitchDrainTimeout: number;
   private readonly logger = getAppLogger();
   private loadProgressListeners: Array<(event: LoadProgressPushEvent) => void> = [];
   private llmStreamListeners: Array<(event: LlmStreamEvent) => void> = [];
 
   private readonly appVersion: string;
 
-  constructor(opts?: { maxRetries?: number; shutdownTimeout?: number; startupTimeout?: number; stableUptime?: number; appVersion?: string }) {
+  constructor(opts?: { maxRetries?: number; shutdownTimeout?: number; startupTimeout?: number; stableUptime?: number; appVersion?: string; engineSwitchDrainTimeout?: number }) {
     this.maxRetries = opts?.maxRetries ?? 3;
+    this.engineSwitchDrainTimeout = opts?.engineSwitchDrainTimeout ?? 30_000;
     // How long the worker must stay up before its crash streak is forgiven.
     // Long enough that a tight crash loop (respawn takes ~1-2 s) accumulates
     // towards maxRetries, short enough that two unrelated crashes an hour apart
@@ -139,7 +148,10 @@ export class UtilityProcessManager {
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
         env: {
           ...process.env,
+          // Set before the child's eager imports resolve profiles/importer assets.
+          RIACORE_APP_ROOT: app.isPackaged ? path.resolve(__dirname, '..') : undefined,
           ...(getPackagedGitBinaryPath() ? { RIACORE_GIT_BINARY_PATH: getPackagedGitBinaryPath() } : {}),
+          ...(this.packagedRiaGraphModule() ? { RIACORE_RIAGRAPH_MODULE: this.packagedRiaGraphModule()! } : {}),
           RIACORE_APP_VERSION: this.appVersion,
         },
       });
@@ -254,6 +266,17 @@ export class UtilityProcessManager {
     }
   }
 
+  /**
+   * The RiaGraph binding a package ships (resources/vendor/riagraph-core/<platform>),
+   * for the worker to use whenever a workspace selects RiaGraph. A
+   * RIACORE_RIAGRAPH_MODULE the user set is left as it is.
+   */
+  private packagedRiaGraphModule(): string | null {
+    if (!app.isPackaged || process.env.RIACORE_RIAGRAPH_MODULE) return null;
+    const dir = path.join(process.resourcesPath, 'vendor', 'riagraph-core', `${process.platform}-${process.arch}`);
+    return fs.existsSync(path.join(dir, 'index.js')) ? dir : null;
+  }
+
   private resolveNodeExecPath(): string {
     if (!app.isPackaged) {
       return 'node';
@@ -306,10 +329,110 @@ export class UtilityProcessManager {
 
       if (data.ok) {
         pending.resolve(data.data);
+      } else if (data.restartWorker && pending.retries < 1) {
+        // The request changed nothing and needs a fresh worker (a workspace on
+        // the other graph engine): repeat it once the worker is replaced.
+        this.queue.push({
+          channel: pending.channel,
+          payload: pending.payload,
+          resolve: pending.resolve,
+          reject: pending.reject,
+          retries: pending.retries + 1,
+        });
+        this.restartForEngineSwitch(child, data.error);
       } else {
         pending.reject(new Error(data.error));
       }
+      if (this.pending.size === 0) this.notifyIdle();
     });
+  }
+
+  private notifyIdle(): void {
+    for (const resolve of this.idleWaiters.splice(0)) resolve();
+  }
+
+  /** Resolves once no request is in flight, or after `timeoutMs`. */
+  private whenIdle(timeoutMs: number): Promise<void> {
+    if (this.pending.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      this.idleWaiters.push(() => { clearTimeout(timer); resolve(); });
+    });
+  }
+
+  /**
+   * Replace the worker on purpose: a workspace runs on the other native graph
+   * engine than the one the worker has loaded, and ladybug and RiaGraph never
+   * share a process. New requests queue meanwhile; requests in flight get
+   * `engineSwitchDrainTimeout` to finish; the worker then shuts down as it
+   * does when the app quits (Auto-Save flushed, workspace closed), and the
+   * queue — the request that asked for this first — goes to its successor.
+   * Not a crash: the crash streak is untouched.
+   */
+  private restartForEngineSwitch(child: ChildProcess, reason: string): void {
+    if (this.isShuttingDown || this.plannedRestart || this.child !== child) return;
+    this.isRestarting = true;
+    this.plannedExits.add(child);
+    this.logger.info('Restarting the worker process to switch the graph engine', { reason });
+    this.plannedRestart = (async () => {
+      await this.whenIdle(this.engineSwitchDrainTimeout);
+      await this.terminateChild(child);
+      this.clearStableReset();
+      if (this.child === child) this.child = null;
+      // Whatever did not finish in time went down with the old worker.
+      this.settlePendingAfterExit('engine-switch');
+      if (this.isShuttingDown) return;
+      await this.start();
+      if (this.isShuttingDown) {
+        if (this.child) await this.terminateChild(this.child);
+        return;
+      }
+      this.isRestarting = false;
+      this.logger.info('Worker process restarted for the graph engine switch');
+      this.drainQueue();
+    })()
+      .catch((error: unknown) => {
+        this.isRestarting = false;
+        if (this.isShuttingDown) return;
+        this.permanentlyFailed = true;
+        this.logger.fatal('Worker process failed to restart for a graph engine switch', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        dialog.showErrorBox(
+          'Worker Process Error',
+          'The background service failed to restart. The application cannot process requests.',
+        );
+        this.rejectQueue();
+      })
+      .finally(() => {
+        this.plannedRestart = null;
+      });
+  }
+
+  /**
+   * After the worker went away with requests outstanding: queue the ones that
+   * may be repeated for the next worker, reject the rest.
+   */
+  private settlePendingAfterExit(cause: 'crash' | 'engine-switch'): void {
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id);
+
+      if (this.shouldRetryRequest(pending)) {
+        this.queue.push({
+          channel: pending.channel,
+          payload: pending.payload,
+          resolve: pending.resolve,
+          reject: pending.reject,
+          retries: pending.retries + 1,
+        });
+        continue;
+      }
+
+      pending.reject(cause === 'crash'
+        ? this.createCrashError(pending)
+        : new Error('The background worker was restarted to switch the graph engine before this request finished'));
+    }
+    this.notifyIdle();
   }
 
   private logWorkerEvent(data: Extract<WorkerMessage, { type: 'log' }>): void {
@@ -343,29 +466,15 @@ export class UtilityProcessManager {
       // accumulate into a streak.
       this.clearStableReset();
 
-      if (this.isShuttingDown) return;
+      // Shutting down, or replaced on purpose (restartForEngineSwitch).
+      if (this.isShuttingDown || this.plannedExits.has(child)) return;
 
       this.logger.error('Worker process exited unexpectedly', {
         code,
         signal: signal ?? 'none',
       });
 
-      for (const [id, pending] of this.pending) {
-        this.pending.delete(id);
-
-        if (this.shouldRetryRequest(pending)) {
-          this.queue.push({
-            channel: pending.channel,
-            payload: pending.payload,
-            resolve: pending.resolve,
-            reject: pending.reject,
-            retries: pending.retries + 1,
-          });
-          continue;
-        }
-
-        pending.reject(this.createCrashError(pending));
-      }
+      this.settlePendingAfterExit('crash');
 
       this.child = null;
       this.crashCount++;
@@ -557,12 +666,25 @@ export class UtilityProcessManager {
     for (const pending of this.pending.values()) pending.reject(new Error('Worker is shutting down'));
     this.pending.clear();
     this.rejectQueue();
-    if (!this.child) return Promise.resolve();
+    // Between the two workers of a planned restart: it stops the new one itself.
+    if (!this.child) return this.plannedRestart ?? Promise.resolve();
 
     const child = this.child;
     this.logger.info('Sending shutdown signal to worker process');
+    this.shutdownPromise = this.terminateChild(child).then(() => {
+      if (this.child === child) this.child = null;
+      this.logger.info('Worker process exited during shutdown');
+    });
+    return this.shutdownPromise;
+  }
 
-    this.shutdownPromise = new Promise<void>((resolve, reject) => {
+  /**
+   * Ask `child` to shut down (it flushes Auto-Save and closes the workspace),
+   * kill it if it does not exit within `shutdownTimeout`, and fail if even
+   * that never produces an exit.
+   */
+  private terminateChild(child: ChildProcess): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
@@ -574,11 +696,7 @@ export class UtilityProcessManager {
         clearTimeout(killTimer);
         child.off('exit', onExit);
         if (error) reject(error);
-        else {
-          if (this.child === child) this.child = null;
-          this.logger.info('Worker process exited during shutdown');
-          resolve();
-        }
+        else resolve();
       };
       const onExit = () => finish();
       const forceKill = () => {
@@ -615,6 +733,5 @@ export class UtilityProcessManager {
         forceKill();
       }
     });
-    return this.shutdownPromise;
   }
 }

@@ -23,7 +23,7 @@
  * Sphinx-Needs Source Importer — dynamically generates a metamodel from needs.json.
  */
 
-import * as path from 'node:path';
+import { importerAssetPath } from '@riacore/importer-sdk';
 import type { ImporterDescriptor } from '@riacore/importer-sdk';
 import { createSnRuntime } from './sn-runtime.js';
 import type { SnImportConfig } from './config-loader.js';
@@ -31,21 +31,9 @@ import { resolveNeedsFile } from './config-loader.js';
 import { parseNeedsFile } from './sn-parser.js';
 import { buildSchemaFromModel, computeDynamicMetamodelName } from './schema-generator.js';
 
-const metamodelPath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'metamodel',
-  'sphinx-needs-dynamic.linkml.yaml',
-);
+const metamodelPath = importerAssetPath('@riacore/importer-sn', 'importer-data/metamodel/sphinx-needs-dynamic.linkml.yaml', __dirname);
 
-const configTemplatePath = path.join(
-  __dirname,
-  '..',
-  'importer-data',
-  'config-template',
-  'sn-import-config.yaml',
-);
+const configTemplatePath = importerAssetPath('@riacore/importer-sn', 'importer-data/config-template/sn-import-config.yaml', __dirname);
 
 export const snImporterDescriptor: ImporterDescriptor = {
   name: 'sphinx_needs',

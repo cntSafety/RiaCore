@@ -49,6 +49,93 @@ export interface RelationshipData {
   };
 }
 
+/** One box in an aggregated relationship diagram: the selected container or one of its partners. */
+export interface AggregatedRelationshipContainer {
+  node_id: number;
+  namespace: string;
+  concept: string;
+  name: string;
+  /**
+   * The container this one is nested in, within this result — its immediate
+   * containment parent, which may be the `root`.
+   *
+   * Absent at `depth: 1`, where every partner is reported at one level and
+   * nothing nests. At a greater depth it is what turns the flat partner list
+   * into the containment forest the nested layout draws: a container with no
+   * `parentContainerId` is a top-level frame, and one with a parent is reported
+   * *inside* that frame. Every id named here is itself present in
+   * {@link AggregatedRelationshipsResult.containers} or is the root, so a
+   * consumer can always walk the chain to a top-level box.
+   */
+  parentContainerId?: number;
+}
+
+/**
+ * One aggregated, directed edge between two containers in an
+ * {@link AggregatedRelationshipsResult}: every underlying relationship of this
+ * type between a descendant of `sourceContainerId` and a descendant of
+ * `targetContainerId` is folded into this single count.
+ *
+ * Both endpoints always name the *deepest* container the requested depth
+ * allows, so a count is relative to the depth that produced it: the same ten
+ * calls reported as one edge at `depth: 1` are reported as several, summing to
+ * ten, at `depth: 2`.
+ */
+export interface AggregatedRelationshipEdge {
+  sourceContainerId: number;
+  targetContainerId: number;
+  relationship: string;
+  count: number;
+}
+
+/**
+ * A layered-architecture-style rollup of a container's (e.g. a C module/
+ * directory or file) relationships to its sibling containers, used by the
+ * "Architecture" lens. Every relationship whose endpoints both sit inside the
+ * selected container's own subtree is left out — those are shown by the tree
+ * itself — only edges that cross the subtree boundary are aggregated here,
+ * each rolled up to the partner's own container at the same tree level as the
+ * selected one.
+ *
+ * `depth` relaxes that last part, and only that part. The boundary, the
+ * internal-edge exclusion, and the set of underlying relationships are
+ * identical at every depth; what changes is how far back *down* the containment
+ * chain each endpoint is reported, which is what lets a consumer draw nested
+ * frames instead of one box per module.
+ */
+export interface AggregatedRelationshipsResult {
+  root: AggregatedRelationshipContainer;
+  /**
+   * Every container named by an edge, plus — above `depth: 1` — the containment
+   * ancestors needed to nest them, each carrying its `parentContainerId`.
+   * Excludes `root`, which is reported separately and is the implicit parent of
+   * any container whose `parentContainerId` is the root's `node_id`.
+   */
+  containers: AggregatedRelationshipContainer[];
+  edges: AggregatedRelationshipEdge[];
+  /**
+   * True when the descendant walk hit its safety cap before exhausting the
+   * subtree — the result reflects only the nodes visited, not the whole tree.
+   */
+  truncated: boolean;
+  /**
+   * The depth actually applied. 1 is the flat rollup; each further level
+   * reports both endpoints of every edge one containment step deeper, where
+   * such a step exists.
+   */
+  depth: number;
+  /**
+   * The depth that was asked for, after clamping to the channel's ceiling.
+   *
+   * Greater than `depth` when the deeper levels were too large to return — what
+   * a level costs depends on the selection, not on the number, so the request
+   * is honoured where it can be and reduced where it cannot. A consumer should
+   * say so rather than silently showing a shallower picture than the one asked
+   * for.
+   */
+  requestedDepth: number;
+}
+
 export interface MalfunctionData extends ConceptInstanceData {
   riskRating?: ConceptInstanceData | null;
   occursAtTarget?: { node_id: number; namespace: string; concept: string; name?: string } | null;
@@ -95,6 +182,8 @@ export interface TreeChildNode {
   name: string;
   hasChildren: boolean;
   asil: string; // "" for non-malfunction nodes
+  /** A displayed member of this usage's definition; node_id remains the declaration. */
+  isReference?: boolean;
 }
 
 /** A cross-namespace reference attached to a structural element. */
@@ -181,6 +270,8 @@ export interface SearchResult {
 }
 
 export interface CreateTagParams {
+  /** Create and attach to this existing element in one transaction. */
+  targetNodeId?: number;
   namespace: string;
   name: string;
   description?: string;

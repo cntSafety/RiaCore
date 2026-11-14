@@ -25,6 +25,7 @@
     "@vitest/ui": "^4.1.10",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
+    "esbuild": "0.28.1",
     "fast-check": "^4.9.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

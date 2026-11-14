@@ -296,10 +296,12 @@ async function enrichCrossNsLabels(
   const targetInfoMap = new Map<string, EndpointInfo>();
   for (const stableId of targetIds) {
     try {
+      // Not capped before the exact stable_path match below (elements that
+      // reference the id contain it too); ordered, so the match is engine-independent.
       const rows = await dbModule.runQuery(
         `MATCH (ci:RIA_UNIV_ConceptInstance) WHERE ci.attributes CONTAINS $stableId
-         RETURN ci.concept AS concept, ci.metamodel AS metamodel, ci.attributes AS attributes
-         LIMIT 5`,
+         RETURN ci.concept AS concept, ci.metamodel AS metamodel, ci.attributes AS attributes, ci.node_id AS nodeId
+         ORDER BY nodeId`,
         { stableId },
       );
       for (const row of rows) {

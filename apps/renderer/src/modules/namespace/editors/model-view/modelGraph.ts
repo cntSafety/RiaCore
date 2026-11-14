@@ -73,6 +73,8 @@ export interface ModelPort {
   malfunctions: DiagramMalfunctionRef[];
   maxAsil: string | null;
   warn: boolean;
+  /** Confirmed default-check explanation for this consumer declaration. */
+  asilMismatch?: string;
 }
 
 /** One node on the canvas. */
@@ -272,6 +274,7 @@ export function buildModelGraph(
   focusId: string,
   fallbackNamespace: string,
   malfunctionsByNodeId: Record<number, MalfunctionInfo[]>,
+  portCheckMessages: Readonly<Record<number, string>> = {},
 ): ModelGraph {
   const byId = new Map(result.representatives.map((rep) => [rep.id, rep]));
   const { targetsOf, sourcesOf } = indexRelationships(result.relationships);
@@ -344,6 +347,7 @@ export function buildModelGraph(
       malfunctions: toMalfunctionRefs(malfunctions),
       maxAsil: resolveMaxAsil(malfunctions),
       warn: malfunctions.length > 0,
+      ...(portCheckMessages[nodeId] ? { asilMismatch: portCheckMessages[nodeId] } : {}),
     };
     portRowById.set(rep.id, port);
 
@@ -366,9 +370,24 @@ export function buildModelGraph(
   const edges: ModelEdge[] = [];
   for (const rep of result.representatives) {
     if (rep.concept !== CONNECTION_CONCEPT) continue;
-    const sourcePortId = targetsOf('ConnectionSource', rep.id).find((id) => portRowById.has(id));
-    const targetPortId = targetsOf('ConnectionTarget', rep.id).find((id) => portRowById.has(id));
+    let sourcePortId = targetsOf('ConnectionSource', rep.id).find((id) => portRowById.has(id));
+    let targetPortId = targetsOf('ConnectionTarget', rep.id).find((id) => portRowById.has(id));
     if (sourcePortId === undefined || targetPortId === undefined) continue;
+    const connectorKind = attr(rep, 'kind');
+    // A boundary binding may name the internal input first. Its endpoint order
+    // is not signal direction: lay out an external input before its consumer
+    // (and an external output after its producer). Only normalize unambiguous
+    // same-direction bindings with exactly one standalone boundary port.
+    const sourceConcept = portRowById.get(sourcePortId)!.concept;
+    const targetConcept = portRowById.get(targetPortId)!.concept;
+    const sourceIsBoundary = tileOfPort.get(sourcePortId) === sourcePortId;
+    const targetIsBoundary = tileOfPort.get(targetPortId) === targetPortId;
+    if (isDelegationLink(connectorKind) && !isFlowLink(connectorKind)
+      && sourceConcept === targetConcept && sourceIsBoundary !== targetIsBoundary
+      && ((sourceConcept === 'InPort' && targetIsBoundary)
+        || (sourceConcept === 'OutPort' && sourceIsBoundary))) {
+      [sourcePortId, targetPortId] = [targetPortId, sourcePortId];
+    }
     const sourceTile = tileOfPort.get(sourcePortId);
     const targetTile = tileOfPort.get(targetPortId);
     if (sourceTile === undefined || targetTile === undefined) continue;
@@ -378,7 +397,6 @@ export function buildModelGraph(
     sourcePort.connected = true;
     targetPort.connected = true;
 
-    const connectorKind = attr(rep, 'kind');
     edges.push({
       // The id stays `conn-` prefixed for every connector kind: it keys the
       // ELK layout sections, and a flow is still a connection representative.

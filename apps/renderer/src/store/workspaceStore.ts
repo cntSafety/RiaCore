@@ -18,6 +18,10 @@
  *
  */
 import { create } from 'zustand';
+// Type-only, so this store keeps no runtime dependency on the editor module
+// (whose layout utilities pull in elkjs). The lens owns the valid value domains
+// and narrows the widened shape on read.
+import type { StoredAggregationView } from '../modules/namespace/editors/safety-analysis/utils/cgraphAggregationGraph.js';
 
 export interface PendingPropagationSource {
   nodeId: number;
@@ -142,6 +146,24 @@ interface WorkspaceStore {
    * survives workspace switches (not reset by resetWorkspaceState).
    */
   showAllTreeElements: boolean;
+  /**
+   * CGraph lens canvas settings — layout, containment depth, relationship
+   * filter. One value for the whole session, not one per element.
+   *
+   * The three controls describe how the reader wants to look at this kind of
+   * graph, not a property of the element they happen to have selected: a reader
+   * who hides call edges and moves to depth 3 means it for the walk they are
+   * on, so stepping to a neighbouring element has to keep showing that. The
+   * lens canvas remounts on every selection change (its ReactFlowProvider is
+   * keyed on the element), so the remount re-seeds from this value and that is
+   * the whole mechanism — there is no per-element state to diverge from it.
+   *
+   * Carries no node identity, so — like `elementLensView` — it survives
+   * `resetWorkspaceState()`. Null until the lens is first used, so the defaults
+   * stay the lens's own constants rather than being restated here. The lens
+   * widens the value types and narrows them on read; see `resolveAggregationView`.
+   */
+  cgraphView: StoredAggregationView | null;
 
   // ── Overview_Canvas Auto_Layout / Placement UI state ───────────────────────
   // Workspace-scoped UI state for the connection-diagram-layout-persistence
@@ -165,6 +187,8 @@ interface WorkspaceStore {
   setCopiedMalfunction: (data: CopiedMalfunctionData | null) => void;
   setElementLensView: (view: 'diagram' | 'propagation' | 'table' | 'notes' | 'details') => void;
   setShowAllTreeElements: (v: boolean) => void;
+  /** Remember the CGraph lens settings for the session, for every element. */
+  setCGraphView: (settings: StoredAggregationView) => void;
   /** Enter/leave the Auto_Layout_Active_State (true) or Deactivated (false). */
   setAutoLayoutActive: (active: boolean) => void;
   /** Enter Placement_Mode for a newly created Canvas_Element. */
@@ -189,6 +213,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   copiedMalfunction: null,
   elementLensView: 'diagram',
   showAllTreeElements: false,
+  cgraphView: null,
   autoLayoutActive: false,
   placement: null,
 
@@ -220,6 +245,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
 
   setShowAllTreeElements: (v) => set({ showAllTreeElements: v }),
 
+  setCGraphView: (settings) => set({ cgraphView: settings }),
+
   setAutoLayoutActive: (active) => set({ autoLayoutActive: active }),
 
   enterPlacement: (elementKind, elementKey) =>
@@ -232,6 +259,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
       activeNamespace: null, editorOverrides: {}, safetyTreeState: {}, navigationHistory: null,
       pendingPropagationSource: {}, pendingCheckAutoRun: {}, copiedMalfunction: null,
       autoLayoutActive: false, placement: null,
+      // `cgraphView` is deliberately NOT cleared: it names no element, so a
+      // content rebuild cannot make it stale.
       // Bumped here rather than at each call site: every workspace transition and
       // every node-ID-reassigning mutation already calls this function, so the
       // React-key identity stays correct with no new discipline to remember.

@@ -51,6 +51,8 @@ const UserCheckDefinitionSchema = z.object({
   description: z.string().default(''),
   severity: CheckSeveritySchema,
   query: z.string().min(1, 'query must be a non-empty string'),
+  evaluator: z.enum(['sysml-port-asil-consistency', 'sysml-port-asil-incomplete']).optional(),
+  resultKind: z.literal('coverage').optional(),
   attributes: z.array(AttributeEntrySchema),
   category: z.string().default(''),
   /**
@@ -188,6 +190,7 @@ export function filterApplicableChecks(
     )
     .map(c => ({
       id: c.id,
+      ...(c.resultKind ? { resultKind: c.resultKind } : {}),
       name: c.name,
       description: c.description,
       severity: c.severity,

@@ -1,10 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Builds the RiaCore desktop application for Windows (MSI installer, x64).
+    Builds the RiaCore desktop application for Windows (MSI installer and portable ZIP, x64).
 .DESCRIPTION
     Installs dependencies, compiles all packages, and runs electron-builder to
-    produce a Windows installer.  Output lands in:
+    produce and validate the Windows app, then archives its portable ZIP.
+    Output lands in:
         apps/desktop-host/dist-electron/
 .EXAMPLE
     .\build-win.ps1
@@ -88,6 +89,27 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Build/package step failed" }
 
     $OutDir = Join-Path $RepoRoot "apps\desktop-host\dist-electron"
+    Step "Creating Windows portable ZIP"
+    $PortableRoot = Join-Path $OutDir 'win-unpacked'
+    if (-not (Test-Path (Join-Path $PortableRoot 'RiaCore.exe'))) {
+        throw 'Expected win-unpacked with RiaCore.exe after packaging.'
+    }
+    $version = (Get-Content (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json).version
+    $PortableArchive = Join-Path $OutDir "RiaCore-$version-win-x64-portable.zip"
+    # Check every resource, including Git/native libraries, with an 80-character
+    # extraction root plus its separator. Keep this compatible with PowerShell 5.1.
+    foreach ($file in Get-ChildItem -LiteralPath $PortableRoot -Recurse -File -Force) {
+        $relative = $file.FullName.Substring($PortableRoot.Length + 1)
+        if (($relative.Length + 81) -ge 260) {
+            throw "Portable ZIP exceeds the extraction path budget: $relative"
+        }
+    }
+    if (Test-Path $PortableArchive) { Remove-Item -LiteralPath $PortableArchive }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # Include hidden files, with RiaCore.exe directly at the archive root.
+    [IO.Compression.ZipFile]::CreateFromDirectory($PortableRoot, $PortableArchive, [IO.Compression.CompressionLevel]::Optimal, $false)
+    Write-Host "  Created $PortableArchive" -ForegroundColor DarkGray
+
     Step "Done - artifacts in: $OutDir"
     if (Test-Path $OutDir) {
         Get-ChildItem $OutDir -File | Select-Object Name, @{n='Size(MB)';e={[math]::Round($_.Length/1MB,1)}}

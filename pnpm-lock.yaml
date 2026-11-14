@@ -99,6 +99,9 @@ importers:
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       fast-check:
         specifier: ^4.9.0
         version: 4.9.0
@@ -196,6 +199,9 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(@vitest/ui@4.1.10)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
   packages/app-contracts:
     dependencies:
@@ -245,6 +251,9 @@ importers:
       '@riacore/importer-arxml':
         specifier: workspace:*
         version: link:../importers/arxml-core
+      '@riacore/importer-cgraph':
+        specifier: workspace:*
+        version: link:../importers/cgraph-core
       '@riacore/importer-sdk':
         specifier: workspace:*
         version: link:../importer-sdk
@@ -339,6 +348,28 @@ importers:
       fast-check:
         specifier: ^4.9.0
         version: 4.9.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(@vitest/ui@4.1.10)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/importers/cgraph-core:
+    dependencies:
+      '@riacore/app-contracts':
+        specifier: workspace:*
+        version: link:../../app-contracts
+      '@riacore/importer-sdk':
+        specifier: workspace:*
+        version: link:../../importer-sdk
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

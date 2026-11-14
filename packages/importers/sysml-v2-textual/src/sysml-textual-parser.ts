@@ -88,6 +88,8 @@ export interface SysmlTextualElementInfo {
   isReadonly?: boolean;
   isPortion?: boolean;
   isConjugated?: boolean;
+  /** Derived only when the port definition resolves; source syntax stays separate. */
+  effectiveIsConjugated?: boolean;
   /**
    * Text of a `doc` or `comment` annotation, mirroring the JSON importer's
    * `body` field on Documentation/Comment elements.
@@ -726,12 +728,18 @@ export function resolvePortDirections(elements: SysmlTextualElementInfo[]): void
   };
 
   for (const port of elements) {
+    if (port.concept !== 'port_usage') continue;
+    const type = index.resolveType(port);
+    port.effectiveIsConjugated = type?.concept === 'port_definition'
+      ? port.isConjugated === true
+      : undefined;
+
     // An explicit direction on the port itself is the author's word; never override it.
-    if (port.concept !== 'port_usage' || asFeatureDirection(port.direction)) continue;
+    if (asFeatureDirection(port.direction)) continue;
 
     // Features declared on the port body win over the ones it inherits, matching
     // how a redefinition shadows the definition it came from.
-    const direction = featureDirection(port) ?? featureDirection(index.resolveType(port));
+    const direction = featureDirection(port) ?? featureDirection(type);
     if (!direction) continue;
 
     port.direction = port.isConjugated ? conjugated(direction) : direction;

@@ -27,6 +27,40 @@ export {
   describeIncompatibleSchema,
 } from './db/schema-compat.js';
 export type { SchemaCompatibility, SchemaIncompatibilityReason } from './db/schema-compat.js';
+export {
+  GRAPH_ENGINE_CONFIG_FILE,
+  GRAPH_ENGINE_CONFIG_ENV,
+  RIAGRAPH_MODULE_ENV,
+  resolveGraphEngineConfig,
+  engineDbPath,
+  graphDbExists,
+  primaryDbPath,
+  graphDbFiles,
+  removeGraphDbFiles,
+  loadRiaGraph,
+  ladybugBinding,
+  DEFAULT_ENGINE_GENERATED_KEYS,
+  GraphEngineProcessSwitchError,
+  inProcessGraphEngine,
+  requiredInProcessEngine,
+  assertGraphEngineUsableInProcess,
+  graphDbUntrusted,
+} from './db/graph-engine.js';
+export type {
+  GraphEngineName,
+  GraphEngineMode,
+  GraphEngineConfig,
+  ResolvedEngineEntry,
+  GraphEngineBinding,
+  GraphDatabase,
+  GraphConnection,
+  GraphQueryResult,
+  InProcessGraphEngine,
+} from './db/graph-engine.js';
+export { selectGraphEngine } from './db/graph-engine-select.js';
+export type { SelectedGraphEngine } from './db/graph-engine-select.js';
+export { GraphEngineMismatchError, ShadowTimeoutError } from './db/graph-engine-dual.js';
+export { encodeValue, decodeValue, compareResults, digestRows, normalizeErrorMessage } from './db/graph-engine-compare.js';
 export { createWorkspaceService } from './workspace/workspace-service.js';
 export type { IWorkspaceService } from './workspace/workspace-service.js';
 export {
@@ -206,3 +240,8 @@ export {
   SYSML_OWNS_ELEMENT_DESCENDANTS_QUERY,
 } from './llm/context-collectors.js';
 export type { ContextElementRef, ContextCollectorDeps } from './llm/context-collectors.js';
+
+export { runSafetyRequest, validateSafetyOperations, resolveSafetyRefs, atomicSafetyChannels } from './safety/safety-request.js';
+export type { SafetyOperation, SafetyRequestResult } from './safety/safety-request.js';
+
+export { readSafetyRequestReceipt } from './safety/request-receipts.js';

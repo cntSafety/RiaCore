@@ -55,3 +55,12 @@ qualification/cli-test/python/--quiet
 
 # Playwright MCP browser automation output (snapshots, console/network logs)
 .playwright-mcp/
+
+# RiaGraph engine: the host-side RiaGraph clone (scripts/riagraph/build-riagraph.sh)
+# and the staged Node.js bindings (built, or fetched by fetch-riagraph.mjs).
+.riagraph/
+vendor/riagraph-core/
+packages/importers/*/test/workspace/db.riag
+packages/importers/*/test/workspace/db.riag.wal
+packages/importers/*/test/workspace/db.dual/
+packages/importers/*/test/workspace/db.dual.*/

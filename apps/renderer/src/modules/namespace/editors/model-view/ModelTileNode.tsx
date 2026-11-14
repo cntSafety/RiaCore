@@ -25,9 +25,9 @@
  * than nodes of their own, so a component and its interface stay one draggable
  * object.
  *
- * The icon and colour come from the concept presentation catalog, so no
- * source-metamodel concept name appears here — `CommonModel` is the whole
- * vocabulary. Its `color` values are antd theme tokens, which is what lets the
+ * The icon and colour come from the `CommonModel` presentation catalog.
+ * Source concepts are used only for contextual tree navigation. The catalog's
+ * `color` values are antd theme tokens, which is what lets the
  * tile resolve them through `theme.useToken()` instead of carrying a colour
  * table of its own.
  *
@@ -59,6 +59,7 @@ import {
 import type { ConceptPresentation } from '@riacore/app-contracts';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { PortPin } from '../safety-analysis/components/PortPin';
+import type { TreeNodeNavigator } from '../safety-analysis/types';
 import { PORT_CONCEPTS, isBidirectionalPort } from '../safety-analysis/components/diagramModel';
 import { useAsilPalette } from '../safety-analysis/config/asilColors';
 import {
@@ -149,11 +150,13 @@ export interface ModelTileNodeData extends Record<string, unknown> {
    * pin lands exactly where its connector was anchored.
    */
   portOffsets?: Record<string, number>;
+  /** Borders used by actual connection endpoints; direction is only a fallback. */
+  portSides?: Record<string, ('west' | 'east')[]>;
   presentation: ConceptPresentation[];
   /** The authored safety namespace, where malfunctions live. */
   safetyNamespace?: string;
   onExpand: (kind: 'contained' | 'connections', representativeId: string) => void;
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
+  onNavigateToNode?: TreeNodeNavigator;
   onNavigateToReference?: (
     refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string,
   ) => void;
@@ -164,7 +167,7 @@ function ModelTileNodeImpl({ data }: NodeProps) {
   const { token } = theme.useToken();
   const asilPalette = useAsilPalette();
   const {
-    tile, isFrame = false, portOffsets, presentation, safetyNamespace, onExpand,
+    tile, isFrame = false, portOffsets, portSides, presentation, safetyNamespace, onExpand,
     onNavigateToNode, onNavigateToReference, onShowDetails,
   } = data as ModelTileNodeData;
 
@@ -202,58 +205,74 @@ function ModelTileNodeImpl({ data }: NodeProps) {
    */
   const isPortStub = PORT_CONCEPTS.has(tile.concept);
 
-  const portRow = (port: ModelPort, placement: PortPlacement = 'inside') => (
-    <div
-      key={port.id}
-      style={{
-        position: 'relative',
-        height: PORT_ROW_HEIGHT,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: rowJustify(port.dir, placement),
-        padding: '0 4px',
-        // Outside the border the column itself is click-through, so each row
-        // takes its own events back — see `portColumn`.
-        pointerEvents: placement === 'inside' ? undefined : 'auto',
-        // An exposed but unconnected port is dimmed rather than hidden:
-        // "this component has a port nothing is wired to" is a finding,
-        // not noise.
-        opacity: port.connected ? 1 : 0.55,
-      }}
-    >
-      <Handle
-        type="target"
-        id={portTargetHandle(port.id)}
-        position={Position.Left}
-        style={HIDDEN_HANDLE}
-        isConnectable={false}
-      />
-      <PortPin
-        id={port.id}
-        name={port.name}
-        dir={port.dir}
-        bidirectional={isBidirectionalPort(port.concept)}
-        warn={port.warn}
-        asilColor={asilPalette.line(port.maxAsil)}
-        side={pinSide(port.dir, placement)}
-        refCb={() => { /* the SVG overlay this existed for is gone — React Flow routes edges */ }}
-        hovered={hoveredPortId}
-        onHover={setHoveredPortId}
-        portTarget={{ nodeId: port.nodeId, namespace: tile.namespace, concept: port.sourceConcept }}
-        malfunctions={port.malfunctions}
-        malfunctionNamespace={safetyNamespace}
-        onNavigateToNode={onNavigateToNode}
-        onNavigateToReference={onNavigateToReference}
-      />
-      <Handle
-        type="source"
-        id={portSourceHandle(port.id)}
-        position={Position.Right}
-        style={HIDDEN_HANDLE}
-        isConnectable={false}
-      />
-    </div>
-  );
+  const sidesFor = (port: ModelPort) => portSides?.[port.id] ?? [
+    (isPortStub ? port.dir === 'in' : port.dir === 'out') ? 'east' : 'west',
+  ];
+  const portRow = (port: ModelPort, placement: PortPlacement = 'inside') => {
+    const sides = sidesFor(port);
+    const outside = placement === 'outside-west' || placement === 'outside-east';
+    const pinSides: ('left' | 'right')[] = outside
+      ? [pinSide(port.dir, placement)]
+      : sides.length > 1 ? ['left', 'right'] : [sides[0] === 'east' ? 'right' : 'left'];
+    return (
+      <div
+        key={port.id}
+        style={{
+          position: 'relative',
+          height: PORT_ROW_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: outside ? rowJustify(port.dir, placement)
+            : pinSides.length > 1 ? 'space-between' : pinSides[0] === 'right' ? 'flex-end' : 'flex-start',
+          padding: '0 4px',
+          // Outside the border the column itself is click-through, so each row
+          // takes its own events back — see `portColumn`.
+          pointerEvents: placement === 'inside' ? undefined : 'auto',
+          // An exposed but unconnected port is dimmed rather than hidden:
+          // "this component has a port nothing is wired to" is a finding,
+          // not noise.
+          opacity: port.connected ? 1 : 0.55,
+        }}
+      >
+        <Handle
+          type="target"
+          id={portTargetHandle(port.id)}
+          position={Position.Left}
+          style={HIDDEN_HANDLE}
+          isConnectable={false}
+        />
+        {pinSides.map((side) => <PortPin
+          key={side}
+          id={port.id}
+          name={port.name}
+          dir={port.dir}
+          bidirectional={isBidirectionalPort(port.concept)}
+          warn={port.warn}
+          asilMismatch={port.asilMismatch}
+          asilColor={asilPalette.line(port.maxAsil)}
+          side={side}
+          refCb={() => { /* the SVG overlay this existed for is gone — React Flow routes edges */ }}
+          hovered={hoveredPortId}
+          onHover={setHoveredPortId}
+          portTarget={{ nodeId: port.nodeId, namespace: tile.namespace, concept: port.sourceConcept }}
+          portUsageContext={tile.sourceConcept === 'part_usage' && port.sourceConcept === 'port_usage'
+            ? { nodeId: tile.nodeId, namespace: tile.namespace, concept: tile.sourceConcept, name: tile.name }
+            : undefined}
+          malfunctions={port.malfunctions}
+          malfunctionNamespace={safetyNamespace}
+          onNavigateToNode={onNavigateToNode}
+          onNavigateToReference={onNavigateToReference}
+        />)}
+        <Handle
+          type="source"
+          id={portSourceHandle(port.id)}
+          position={Position.Right}
+          style={HIDDEN_HANDLE}
+          isConnectable={false}
+        />
+      </div>
+    );
+  };
 
   /**
    * One border's worth of a frame's own ports, vertically centred and drawn
@@ -287,7 +306,7 @@ function ModelTileNodeImpl({ data }: NodeProps) {
    * panning — would be a worse defect than the one being fixed.
    */
   function portColumn(side: 'west' | 'east') {
-    const ports = tile.ports.filter((port) => (side === 'west' ? port.dir === 'in' : port.dir === 'out'));
+    const ports = tile.ports.filter((port) => sidesFor(port).includes(side));
     if (ports.length === 0) return null;
     const placement: PortPlacement = side === 'west' ? 'outside-west' : 'outside-east';
     // ELK placed these ports and the routes were anchored at its offsets, so each

@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { packagedAssetPath } from '@riacore/importer-sdk';
 /**
  * IPC channel handlers for the LLM component review feature.
  *
@@ -499,6 +500,8 @@ async function loadReviewChecklist(
  */
 function resolveDefaultProfileRoot(): string {
   const envRoot = process.env.RIACORE_PROFILES_ROOT;
+  const packaged = packagedAssetPath('profiles', envRoot);
+  if (packaged) return packaged;
   if (envRoot) return envRoot;
 
   // __dirname is dist/dispatch/handlers/ in the compiled output.

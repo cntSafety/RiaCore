@@ -394,6 +394,7 @@ export function registerSafetyChannels(
        WHERE task.node_id = $nodeId AND r.relationship = 'has_safety_tasks' AND fm.concept = 'malfunction'
        RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
               fm.metamodel AS metamodel, fm.attributes AS attributes
+       ORDER BY node_id
        LIMIT 1`,
       { nodeId: payload.safetyTaskNodeId },
     );
@@ -414,6 +415,7 @@ export function registerSafetyChannels(
        WHERE rr.node_id = $nodeId AND r.relationship = 'has_risk_rating' AND fm.concept = 'malfunction'
        RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
               fm.metamodel AS metamodel, fm.attributes AS attributes
+       ORDER BY node_id
        LIMIT 1`,
       { nodeId: payload.riskRatingNodeId },
     );
@@ -435,6 +437,7 @@ export function registerSafetyChannels(
        WHERE ri.node_id = $nodeId AND r.relationship = 'has_review' AND fm.concept = 'malfunction'
        RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
               fm.metamodel AS metamodel, fm.attributes AS attributes
+       ORDER BY node_id
        LIMIT 1`,
       { nodeId: payload.reviewItemNodeId },
     );
@@ -457,6 +460,7 @@ export function registerSafetyChannels(
        WHERE parent.relationship = 'has_risk_rating' AND fm.concept = 'malfunction'
        RETURN fm.node_id AS node_id, fm.namespace AS namespace, fm.concept AS concept,
               fm.metamodel AS metamodel, fm.attributes AS attributes
+       ORDER BY node_id
        LIMIT 1`,
       { nodeId: payload.reviewItemNodeId },
     );
@@ -1051,6 +1055,13 @@ export function registerSafetyChannels(
   registry.register('safety.getRelationships', async (payload, deps, _ctx) => {
     if (!deps.instanceService) throw new Error('Instance service not configured');
     const result = await deps.instanceService.getRelationships(payload.nodeId);
+    if (!result.ok) throw new Error(result.error);
+    return result.data;
+  }, { requiresWorkspace: true, category: CATEGORY });
+
+  registry.register('safety.getAggregatedRelationships', async (payload, deps, _ctx) => {
+    if (!deps.instanceService) throw new Error('Instance service not configured');
+    const result = await deps.instanceService.getAggregatedRelationships(payload.nodeId, payload.depth);
     if (!result.ok) throw new Error(result.error);
     return result.data;
   }, { requiresWorkspace: true, category: CATEGORY });

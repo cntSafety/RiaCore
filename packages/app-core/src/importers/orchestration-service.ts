@@ -53,6 +53,12 @@ import {
   loadImportConfig as loadSysmlTextualImportConfig,
   resolveFiles as resolveSysmlTextualFiles,
 } from '@riacore/importer-sysml-v2-textual';
+import {
+  loadImportConfig as loadCgraphImportConfig,
+  readManifest as readCgraphManifest,
+  gateSchemaVersion as gateCgraphSchemaVersion,
+  CGRAPH_METAMODEL_NAME,
+} from '@riacore/importer-cgraph';
 import { resolveWorkspacePath, toWorkspaceRelative } from '@riacore/importer-sdk';
 import type { ImpactReport, CrossNsSnapshot, OrphanedEntry, OrphanedEntryWithContext, ListOrphanedEntriesParams } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
@@ -172,7 +178,20 @@ function preflightImportInputs(
     scan_result_dir?: string;
     files?: { include?: string[]; exclude?: string[] };
   },
+  workspaceRoot: string,
 ): void {
+  if (descriptorName === 'cgraph') {
+    // The CGraph input is `scan_result_dir`, not `project_dir`, so this is the
+    // one importer whose preflight cannot use the pre-resolved `scanDir`. The
+    // manifest read and the schema gate belong here rather than in the runtime:
+    // both can fail, and after this point `beginSession` replaces the namespace,
+    // which is not reversible.
+    const outputDir = resolveWorkspacePath(workspaceRoot, config.scan_result_dir, scanDir);
+    const manifest = readCgraphManifest(outputDir);
+    gateCgraphSchemaVersion(manifest);
+    return;
+  }
+
   if (descriptorName === 'arxml') {
     assertExistingDirectory(scanDir, 'Project directory');
     const selection = normalizeFileSelection(config.files, ['**/*.arxml']);
@@ -228,6 +247,10 @@ function loadConfigForDescriptor(
 
   if (descriptorName === 'sysml_v2_textual') {
     return loadSysmlTextualImportConfig(configPath);
+  }
+
+  if (descriptorName === 'cgraph') {
+    return loadCgraphImportConfig(configPath);
   }
 
   return loadArxmlImportConfig(configPath);
@@ -309,7 +332,7 @@ export function createImporterOrchestrationService(
       const sourceDir = resolveWorkspacePath(workspaceRoot, config.project_dir, workspaceRoot);
 
       try {
-        preflightImportInputs(descriptor.name, sourceDir, config);
+        preflightImportInputs(descriptor.name, sourceDir, config, workspaceRoot);
       } catch (err) {
         logger.error('Import preflight failed', { error: errorMessage(err) });
         logger.close();
@@ -333,6 +356,12 @@ export function createImporterOrchestrationService(
           ? 'SysMLv2'
           : descriptor.name === 'sysml_v2_textual'
             ? 'SysMLv2Textual'
+            : descriptor.name === 'cgraph'
+            // Carries the schema's major version, so a future CGraph 3.x
+            // registers as its own metamodel. Registration is idempotent by
+            // name and will not replace an existing entry, so without the
+            // version here a schema change could never take effect.
+            ? CGRAPH_METAMODEL_NAME
             : descriptor.name === 'sphinx_needs'
             ? computeDynamicMetamodelName(config.namespace)
             : descriptor.name;

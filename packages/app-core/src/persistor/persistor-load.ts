@@ -38,6 +38,7 @@ import {
   sqlVal,
   emitProgress,
   batchInsertNodes,
+  insertRelationshipInstances,
   createInstanceRelEdges,
   createCrossNsInstanceRelEdges,
   loadSharedNodeTable,
@@ -947,47 +948,10 @@ CREATE (:RIA_UNIV_ConceptInstance {
               );
               totalRelationshipsFailed += failCount;
             }
-            await batchInsertNodes(
-              `UNWIND $rows AS row
-CREATE (:RIA_UNIV_RelationshipInstance {
-  namespace:        row.namespace,
-  relationship:     row.relationship,
-  metamodel:        row.metamodel,
-  source_node_id:   row.source_node_id,
-  target_node_id:   row.target_node_id,
-  attributes:       row.attributes
-})`,
-              relRows,
-              dbModule,
-              tx
-            );
-            // Bulk-fetch all edge_ids for this relType in one query instead of issuing
-            // one query per relationship row (N+1 problem). edge_ids are assigned on
-            // CREATE, so we must read them back to wire up the graph-level INSTANCE_REL edges.
-            const allEdgeIdRowsTx = await (tx ?? dbModule).runQuery(
-              `MATCH (ri:RIA_UNIV_RelationshipInstance)
-               WHERE ri.namespace = '${e(namespace)}' AND ri.relationship = '${e(relType)}'
-               RETURN ri.source_node_id AS source_node_id, ri.target_node_id AS target_node_id, ri.edge_id AS edge_id`
-            );
-            const edgeIdMapTx = new Map<string, number>();
-            for (const r of allEdgeIdRowsTx) {
-              const key = `${r.source_node_id}:${r.target_node_id}`;
-              if (!edgeIdMapTx.has(key)) edgeIdMapTx.set(key, Number(r.edge_id));
-            }
-            const edgeRelRows: Array<{ source_node_id: number; target_node_id: number; edge_id: number; relationship: string; metamodel: string }> = [];
-            for (const relRow of relRows) {
-              const key = `${relRow.source_node_id}:${relRow.target_node_id}`;
-              const edgeId = edgeIdMapTx.get(key);
-              if (edgeId !== undefined) {
-                edgeRelRows.push({
-                  source_node_id: Number(relRow.source_node_id),
-                  target_node_id: Number(relRow.target_node_id),
-                  edge_id: edgeId,
-                  relationship: String(relRow.relationship ?? ''),
-                  metamodel: String(relRow.metamodel ?? ''),
-                });
-              }
-            }
+            // The insert returns each instance's assigned edge_id, so the
+            // graph-level INSTANCE_REL edges are wired without reading the
+            // RelationshipInstance table back (see insertRelationshipInstances).
+            const edgeRelRows = await insertRelationshipInstances(relRows, tx ?? dbModule);
             await createInstanceRelEdges(edgeRelRows, tx ?? dbModule);
             totalRecordsImported += relRows.length;
             logger.debug(`${namespace} relationships/${file} — ${relRows.length} records`, { namespace, relType, records: relRows.length });
@@ -1129,46 +1093,9 @@ CREATE (:RIA_UNIV_ConceptInstance {
             );
             totalRelationshipsFailed += failCount;
           }
-          await batchInsertNodes(
-            `UNWIND $rows AS row
-CREATE (:RIA_UNIV_RelationshipInstance {
-  namespace:        row.namespace,
-  relationship:     row.relationship,
-  metamodel:        row.metamodel,
-  source_node_id:   row.source_node_id,
-  target_node_id:   row.target_node_id,
-  attributes:       row.attributes
-})`,
-            relRows,
-            dbModule
-          );
-          // Bulk-fetch all edge_ids for this relType in one query instead of issuing
-          // one query per relationship row (N+1 problem). edge_ids are assigned on
-          // CREATE, so we must read them back to wire up the graph-level INSTANCE_REL edges.
-          const allEdgeIdRows = await dbModule.runQuery(
-            `MATCH (ri:RIA_UNIV_RelationshipInstance)
-             WHERE ri.namespace = '${e(namespace)}' AND ri.relationship = '${e(relType)}'
-             RETURN ri.source_node_id AS source_node_id, ri.target_node_id AS target_node_id, ri.edge_id AS edge_id`
-          );
-          const edgeIdMap = new Map<string, number>();
-          for (const r of allEdgeIdRows) {
-            const key = `${r.source_node_id}:${r.target_node_id}`;
-            if (!edgeIdMap.has(key)) edgeIdMap.set(key, Number(r.edge_id));
-          }
-          const edgeRelRows: Array<{ source_node_id: number; target_node_id: number; edge_id: number; relationship: string; metamodel: string }> = [];
-          for (const relRow of relRows) {
-            const key = `${relRow.source_node_id}:${relRow.target_node_id}`;
-            const edgeId = edgeIdMap.get(key);
-            if (edgeId !== undefined) {
-              edgeRelRows.push({
-                source_node_id: Number(relRow.source_node_id),
-                target_node_id: Number(relRow.target_node_id),
-                edge_id: edgeId,
-                relationship: String(relRow.relationship ?? ''),
-                metamodel: String(relRow.metamodel ?? ''),
-              });
-            }
-          }
+          // See the transactional twin above: the insert returns the assigned
+          // edge_ids, so no read-back scan of RelationshipInstance is needed.
+          const edgeRelRows = await insertRelationshipInstances(relRows, dbModule);
           await createInstanceRelEdges(edgeRelRows, dbModule);
           totalRecordsImported += relRows.length;
           logger.debug(`${namespace} relationships/${file} — ${relRows.length} records`, { namespace, relType, records: relRows.length });

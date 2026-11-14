@@ -17,8 +17,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { AsilSelect } from './AsilSelect';
 import { Alert, App, Button, Card, Dropdown, Empty, Input, Popconfirm, Segmented, Select, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
+import './malfunction-editor.css';
 import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, DisconnectOutlined, FileTextOutlined, MoreOutlined, PlusOutlined, WarningOutlined, TagOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConceptInstanceData, ReviewItemData, PropagationMalfunctionData } from '@riacore/app-contracts';
@@ -72,15 +74,13 @@ import {
   useUpdateSafetyTask,
   usePasteMalfunction,
 } from '../hooks/useSafetyMutations';
-import { useAsilPalette, useAsilOptionGroups } from '../config/asilColors';
 import { AsilTag } from './AsilTag';
-import type { AsilSelectEntry } from '../config/asilColors';
 import { canHostCrossNSSafetyElements } from '../config/conceptHosting';
 import { DeleteWithPreview } from './DeleteWithPreview';
 import { TagChip } from './TagChip';
 import { ImportedRequirementPicker } from './ImportedRequirementPicker';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
-import type { SelectedTreeElement, ScopedTreeNavigator } from '../types';
+import type { SelectedTreeElement, ScopedTreeNavigator, TreeNodeNavigator } from '../types';
 import { useTagsForImportedElement, useTags } from '../../../../../hooks/useTags';
 import { ReviewInstructionsModal } from './ReviewInstructionsModal';
 import { useTagMutations } from '../../../../../hooks/useTagMutations';
@@ -100,6 +100,8 @@ import {
 import { FunctionalInsufficiencySection, TriggeringConditionSection } from './SotifSections';
 import { useSafetyMetamodel } from '../hooks/safetyMetamodelContext';
 import { useIsDiagramConcept } from '../../../../../hooks/useModelView';
+import { useNamespaces } from '../../../../../hooks/useNamespaces';
+import { usesCGraphAggregationModel } from '../utils/cgraphAggregationGraph';
 import { ElementHeader } from './ElementHeader';
 import {
   ELEMENT_TABS,
@@ -110,6 +112,7 @@ import {
 } from '../config/elementTabs';
 import { PropertyRow } from './PropertyRow';
 import { ElementRelationships } from './ElementRelationships';
+import { ElementDetails } from './ElementDetails';
 import { SectionHeader } from './SectionHeader';
 import { ActionPriorityTag } from './ActionPriorityTag';
 import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
@@ -161,7 +164,7 @@ interface CenterPanelProps {
   onElementDeleted?: (nodeId: number) => void;
   addNoteRequested?: boolean;
   onAddNoteHandled?: () => void;
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
+  onNavigateToNode?: TreeNodeNavigator;
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
   /**
    * On-demand "Show Reference in Tree" for the selected element. Unlike
@@ -195,6 +198,8 @@ interface CenterPanelProps {
   allowAddTag?: boolean;
   /** Imported browsing has no authored analysis to own or edit safety notes. */
   allowEditNotes?: boolean;
+  /** Selection dialogs reuse Details without changing lenses or exposing edits. */
+  previewOnly?: boolean;
 }
 
 // SOTIF profile tab list: adds Functional Insufficiencies + Triggering
@@ -210,85 +215,6 @@ const SOTIF_MALFUNCTION_TABS: TabDefinition[] = [
   { key: 'requirements',              label: 'Requirements' },
   { key: 'review',                    label: 'Review' },
 ];
-
-const DETAIL_PRIORITY_KEYS = [
-  'title',
-  'id',
-  'type',
-  'type_name',
-  'docname',
-  'section_name',
-  'status',
-  'lineno',
-  'doctype',
-  'tags',
-  'sections',
-  'implements',
-  'satisfies',
-  'refines',
-  'verifies',
-] as const;
-
-interface DetailItem {
-  key: string;
-  label: string;
-  value: string;
-  isMultiline: boolean;
-}
-
-function toDetailLabel(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (m) => m.toUpperCase());
-}
-
-function formatDetailValue(value: unknown): { text: string; isMultiline: boolean } | null {
-  if (value === null || value === undefined) return null;
-
-  if (Array.isArray(value)) {
-    const cleaned = value
-      .map((v) => String(v).trim())
-      .filter((v) => v.length > 0);
-    if (cleaned.length === 0) return null;
-    return { text: cleaned.join(', '), isMultiline: cleaned.length > 5 };
-  }
-
-  if (typeof value === 'object') {
-    const keys = Object.keys(value as Record<string, unknown>);
-    if (keys.length === 0) return null;
-    return { text: JSON.stringify(value), isMultiline: true };
-  }
-
-  const text = String(value).trim();
-  if (!text) return null;
-  return { text, isMultiline: text.includes('\n') || text.length > 140 };
-}
-
-function collectDetailItems(attributes: Record<string, unknown>): DetailItem[] {
-  const result: DetailItem[] = [];
-  const seen = new Set<string>();
-
-  for (const key of DETAIL_PRIORITY_KEYS) {
-    const formatted = formatDetailValue(attributes[key]);
-    if (!formatted) continue;
-    result.push({ key, label: toDetailLabel(key), value: formatted.text, isMultiline: formatted.isMultiline });
-    seen.add(key);
-  }
-
-  for (const [key, raw] of Object.entries(attributes)) {
-    // 'content' gets its own dedicated block above the attribute list, so skip
-    // it here to avoid showing it twice. Everything else — including identity
-    // fields like stable_path/uuid/short_name that are also surfaced in the
-    // header's identity popover — belongs here: this tab's whole purpose is to
-    // show the node's stored attributes, so it must never omit real data.
-    if (seen.has(key) || key === 'content') continue;
-    const formatted = formatDetailValue(raw);
-    if (!formatted) continue;
-    result.push({ key, label: toDetailLabel(key), value: formatted.text, isMultiline: formatted.isMultiline });
-  }
-
-  return result;
-}
 
 /** Auto-save feedback: returns markSaved() and a boolean that stays true for 1.5 s. */
 function useSavedFeedback() {
@@ -636,11 +562,10 @@ function InlineNoteCard({
   );
 }
 
-export function CenterPanel({ namespace, selectedTreeElement, onShowRelationshipInTree, onRenameSelectedTreeElement, onElementDeleted, addNoteRequested, onAddNoteHandled, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, onTreeMutation, workspaceKey, triggerAutoSave, onStartPropagation, onEndPropagation, allowCreateTag = true, allowAddTag = true, allowEditNotes = true }: CenterPanelProps) {
+export function CenterPanel({ namespace, selectedTreeElement, onShowRelationshipInTree, onRenameSelectedTreeElement, onElementDeleted, addNoteRequested, onAddNoteHandled, onNavigateToNode, onNavigateToReference, onShowReferenceInTree, onTreeMutation, workspaceKey, triggerAutoSave, onStartPropagation, onEndPropagation, allowCreateTag = true, allowAddTag = true, allowEditNotes = true, previewOnly = false }: CenterPanelProps) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const qc = useQueryClient();
-  const profile = useSafetyProfileMetadata();
 
   // ── Lens toggle state — persisted in Zustand as a session-level UI preference ──
   const lensValue = useWorkspaceStore((s) => s.elementLensView);
@@ -657,6 +582,16 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
     selectedTreeElement?.nodeId,
     workspaceKey,
   );
+
+  // CGraph concepts have no CommonModel mapping, so `isDiagramConcept` reads
+  // false for all of them — they offer the Model lens through a separate,
+  // metamodel-specific relationship diagram instead (see
+  // `PortConnectorDiagram`'s CGraph route), which needs only a metamodel check,
+  // not a view evaluation.
+  const lensNamespaces = useNamespaces(!!workspaceKey, workspaceKey);
+  const selectedMetamodel = lensNamespaces.data?.find((item) => item.name === selectedTreeElement?.namespace)?.metamodel;
+  const isCGraphAggregationConcept = usesCGraphAggregationModel(selectedMetamodel);
+  const offersDiagramLens = isDiagramConcept || isCGraphAggregationConcept;
 
   const isRiskRating = selectedTreeElement?.concept === 'risk_rating';
   const isReviewItem = selectedTreeElement?.concept === 'review_item';
@@ -745,13 +680,12 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
 
   const handleCreateAndAddTag = useCallback(async (name: string) => {
     if (!selectedTreeElement) return;
-    const created = await createTag.mutateAsync({ namespace, name });
-    await linkTagCrossNs.mutateAsync({ tagNodeId: created.node_id, importedElementNodeId: selectedTreeElement.nodeId });
+    await createTag.mutateAsync({ namespace, name, targetNodeId: selectedTreeElement.nodeId });
     qc.invalidateQueries({ queryKey: ['tagsForImportedElement'] });
     qc.invalidateQueries({ queryKey: ['tags'] });
     if (workspaceKey) qc.invalidateQueries({ queryKey: treeChildrenQueryKey(workspaceKey, selectedTreeElement.namespace, selectedTreeElement.nodeId) });
     triggerAutoSave?.();
-  }, [selectedTreeElement, namespace, createTag, linkTagCrossNs, qc, workspaceKey, triggerAutoSave]);
+  }, [selectedTreeElement, namespace, createTag, qc, workspaceKey, triggerAutoSave]);
 
   // ── Queries for display name derivation ───────────────────────────
   // Malfunction query — only enabled for malfunction elements
@@ -831,10 +765,13 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
   // every element.
   const elementTabDisabledKeys = useMemo(() => {
     const keys = new Set<string>();
-    if (!isDiagramConcept) { keys.add('diagram'); keys.add('propagation'); keys.add('table'); }
+    if (!offersDiagramLens) keys.add('diagram');
+    // Propagation and the malfunction table are CommonModel-only lenses; the
+    // CGraph aggregation diagram does not offer an equivalent.
+    if (!isDiagramConcept) { keys.add('propagation'); keys.add('table'); }
     if (!canHostCrossNSSafetyElements(selectedTreeElement?.concept ?? '')) keys.add('notes');
     return keys;
-  }, [isDiagramConcept, selectedTreeElement?.concept]);
+  }, [isDiagramConcept, offersDiagramLens, selectedTreeElement?.concept]);
 
   const elementTabsWithCounts = useMemo((): TabDefinition[] => {
     return ELEMENT_TABS.map((tab) => ({ ...tab, disabled: elementTabDisabledKeys.has(tab.key) }));
@@ -866,8 +803,6 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
     const asilValue = String(failureMode.attributes?.malfunction_asil ?? '');
     setFmAsil(asilValue || undefined);
   }, [fmQuery.data]);
-
-  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
 
   const saveFmField = useCallback(async (updates: Record<string, string>) => {
     if (!fmQuery.data) return;
@@ -1034,8 +969,40 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
     }
   }, [copiedMalfunction, selectedTreeElement, isHostElement, pasteMalfunctionMutation, namespace, onTreeMutation]);
 
+  if (previewOnly) {
+    return (
+      <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto', padding: 16, background: token.colorBgLayout }}>
+        {!selectedTreeElement ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Select a requirement in the tree to preview it before linking." />
+        ) : (
+          <>
+            <Typography.Title level={5} style={{ marginTop: 0, overflowWrap: 'anywhere' }}>{displayName}</Typography.Title>
+            <Typography.Paragraph type="secondary">{selectedTreeElement.namespace} · {selectedTreeElement.concept}</Typography.Paragraph>
+            {instanceQuery.isError ? (
+              <Alert type="error" showIcon title="Could not load this element" action={<Button onClick={() => void instanceQuery.refetch()}>Retry</Button>} />
+            ) : !isMalfunction && (
+              <ElementTabContent
+                activeTab="details"
+                onShowRelationshipInTree={onShowRelationshipInTree}
+                namespace={namespace}
+                selectedTreeElement={selectedTreeElement}
+                instanceQuery={instanceQuery}
+                notesQuery={notesForElementQuery}
+                workspaceKey={workspaceKey}
+                onAddNote={handleElementAddNote}
+                allowEditNotes={false}
+                onUpdateNote={handleElementUpdateNote}
+                onDeleteNote={handleElementDeleteNote}
+              />
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div style={{ flex: 1, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', background: token.colorBgLayout, minWidth: 480 }}>
+    <div className={isMalfunction ? 'malfunction-editor' : undefined} style={{ flex: 1, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', background: token.colorBgLayout, minWidth: isMalfunction ? 0 : 480 }}>
       {/* ── ElementHeader — fixed, non-scrolling ─────────────────────── */}
       {selectedTreeElement && (
         <div style={{ flexShrink: 0 }}>
@@ -1107,7 +1074,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
 
       {/* ── Content area — scrollable ────────────────────────────────── */}
       <div style={
-        (isMalfunction && activeTab === 'propagation') || (isDiagramConcept && (lensValue === 'diagram' || lensValue === 'propagation' || lensValue === 'table'))
+        (isMalfunction && activeTab === 'propagation') || (offersDiagramLens && lensValue === 'diagram') || (isDiagramConcept && (lensValue === 'propagation' || lensValue === 'table'))
           ? { flex: 1, display: 'flex', minHeight: 0, background: token.colorBgLayout }
           : { flex: 1, overflow: 'auto', background: token.colorBgLayout, padding: 16 }
       }>
@@ -1117,7 +1084,7 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
             description="Select an element in the model tree. Right-click supported elements to add a malfunction."
             style={{ marginTop: 96 }}
           />
-        ) : isDiagramConcept && lensValue === 'diagram' ? (
+        ) : offersDiagramLens && lensValue === 'diagram' ? (
           <PortConnectorDiagram
             selectedTreeElement={selectedTreeElement}
             workspaceKey={workspaceKey ?? null}
@@ -1174,7 +1141,6 @@ export function CenterPanel({ namespace, selectedTreeElement, onShowRelationship
             setFmDescription={setFmDescription}
             fmAsil={fmAsil}
             setFmAsil={setFmAsil}
-            asilOptions={asilOptions}
             saveFmField={saveFmField}
             fmHeaderSaved={fmHeaderSaved}
             taskGhostRef={taskGhostRef}
@@ -1276,7 +1242,6 @@ function MalfunctionTabContent({
   setFmDescription,
   fmAsil,
   setFmAsil,
-  asilOptions,
   saveFmField,
   fmHeaderSaved,
   taskGhostRef,
@@ -1305,7 +1270,6 @@ function MalfunctionTabContent({
   setFmDescription: (v: string) => void;
   fmAsil: string | undefined;
   setFmAsil: (v: string | undefined) => void;
-  asilOptions: AsilSelectEntry[];
   saveFmField: (updates: Record<string, string>) => Promise<void>;
   fmHeaderSaved: boolean;
   taskGhostRef: React.RefObject<InputRef | null>;
@@ -1319,9 +1283,6 @@ function MalfunctionTabContent({
   onDeleteNote: (nodeId: number) => Promise<void>;
   triggerAutoSave?: () => void;
 }) {
-  // Before the early returns below, so the hook order is stable across the
-  // loading, not-found and loaded renders.
-  const asilPalette = useAsilPalette();
 
   if (fmQuery.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
@@ -1340,65 +1301,50 @@ function MalfunctionTabContent({
   switch (activeTab) {
     case 'overview':
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Description — save-on-blur */}
-          <div>
-            <Typography.Text strong>Description</Typography.Text>
-            <Input.TextArea
-              rows={4}
-              value={fmDescription}
-              onChange={(event) => setFmDescription(event.target.value)}
-              placeholder="Describe the malfunction"
-              style={{ marginTop: 6, fontSize: 13 }}
-              onBlur={() => saveFmField({ malfunction_description: fmDescription.trim() })}
-            />
-          </div>
-
-          {/* ASIL — save-on-change */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Typography.Text strong style={{ flexShrink: 0 }}>ASIL</Typography.Text>
-            <div style={{
-              // `line` rather than `icon`: an unset ASIL has no colour here and
-              // the accent stays transparent, instead of borrowing the QM grey.
-              borderLeft: `3px solid ${asilPalette.line(fmAsil) ?? 'transparent'}`,
-              borderRadius: 2,
-              transition: 'border-color 0.2s',
-            }}>
-              <Select
-                allowClear
-                size="small"
-                value={fmAsil}
-                onChange={(value) => { setFmAsil(value); saveFmField({ malfunction_asil: value ?? '' }); }}
-                options={asilOptions}
-                placeholder="—"
-                style={{ width: 110 }}
-                optionRender={(option) => (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{
-                      width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                      background: (option.data as any).color ?? asilPalette.icon(''),
-                    }} />
-                    {option.label}
-                  </div>
-                )}
+        <Card className="malfunction-section" size="small" styles={{ body: { padding: 14 } }}>
+          <div className="malfunction-stack">
+            {/* Description — save-on-blur */}
+            <div>
+              <Typography.Text type="secondary" className="malfunction-field-label">Description</Typography.Text>
+              <Input.TextArea
+                autoSize={{ minRows: 4 }}
+                aria-label="Malfunction description"
+                value={fmDescription}
+                onChange={(event) => setFmDescription(event.target.value)}
+                placeholder="Describe the malfunction"
+                style={{ marginTop: 6, fontSize: 13 }}
+                onBlur={() => saveFmField({ malfunction_description: fmDescription.trim() })}
               />
             </div>
-          </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', minHeight: 22 }}>
-            <SavedBadge visible={fmHeaderSaved} />
-          </div>
+            {/* ASIL — save-on-change */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Typography.Text type="secondary" className="malfunction-field-label">ASIL</Typography.Text>
+              <div>
+                <AsilSelect
+                  size="small"
+                  value={fmAsil}
+                  onChange={(value) => { setFmAsil(value); saveFmField({ malfunction_asil: value ?? '' }); }}
+                  style={{ width: 110 }}
+                />
+              </div>
+            </div>
 
-          {/* Notes — inline at bottom of overview */}
-          <InlineNotesSection
-            notes={notesQuery.data ?? []}
-            loading={notesQuery.isLoading}
-            onAddNote={onAddNote}
-            editable={allowEditNotes}
-            onUpdateNote={onUpdateNote}
-            onDeleteNote={onDeleteNote}
-          />
-        </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', minHeight: 22 }}>
+              <SavedBadge visible={fmHeaderSaved} />
+            </div>
+
+            {/* Notes — inline at bottom of overview */}
+            <InlineNotesSection
+              notes={notesQuery.data ?? []}
+              loading={notesQuery.isLoading}
+              onAddNote={onAddNote}
+              editable={allowEditNotes}
+              onUpdateNote={onUpdateNote}
+              onDeleteNote={onDeleteNote}
+            />
+          </div>
+        </Card>
       );
 
     case 'functional-insufficiencies':
@@ -1518,84 +1464,21 @@ function ElementTabContent({
 
   const instance = instanceQuery.data;
   const attributes = (instance?.attributes ?? {}) as Record<string, unknown>;
-  const contentText = typeof attributes.content === 'string' ? attributes.content.trim() : '';
-  const detailItems = collectDetailItems(attributes);
-  const stablePath = typeof attributes.stable_path === 'string' ? attributes.stable_path : undefined;
-  const uuid = typeof attributes.uuid === 'string' ? attributes.uuid : undefined;
-  const shortName = typeof attributes.short_name === 'string' ? attributes.short_name : undefined;
-
   switch (activeTab) {
     case 'details':
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <ElementRelationships
-            key={`${selectedTreeElement.namespace}:${selectedTreeElement.nodeId}`}
-            nodeId={selectedTreeElement.nodeId}
-            workspaceKey={workspaceKey ?? null}
-            onShowInTree={onShowRelationshipInTree}
-          />
-          {(contentText || detailItems.length > 0) ? (
-            <div style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16 }}>
-              <SectionHeader title="Element Details" count={(contentText ? 1 : 0) + detailItems.length} />
-              {contentText ? (
-                <div style={{ marginBottom: 14 }}>
-                  <Typography.Text strong style={{ fontSize: 12 }}>Content</Typography.Text>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      padding: 12,
-                      borderRadius: 6,
-                      background: token.colorFillQuaternary,
-                      whiteSpace: 'pre-wrap',
-                      lineHeight: 1.6,
-                      fontSize: 13,
-                    }}
-                  >
-                    {contentText}
-                  </div>
-                </div>
-              ) : null}
-
-              {detailItems.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                  {detailItems.map((item) => (
-                    <div
-                      key={item.key}
-                      style={{
-                        display: 'flex',
-                        gap: 12,
-                        padding: '8px 0',
-                        borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                        alignItems: item.isMultiline ? 'flex-start' : 'baseline',
-                      }}
-                    >
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 11, width: 100, flexShrink: 0 }}
-                      >
-                        {item.label}
-                      </Typography.Text>
-                      <Typography.Text
-                        style={{
-                          fontSize: 12,
-                          whiteSpace: item.isMultiline ? 'pre-wrap' : 'normal',
-                          wordBreak: 'break-word',
-                          flex: 1,
-                          minWidth: 0,
-                        }}
-                      >
-                        {item.value}
-                      </Typography.Text>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No details stored for this element" style={{ marginTop: 48 }} />
-          )}
-        </div>
-      );
+      return <ElementDetails
+        key={`${workspaceKey}:${selectedTreeElement.namespace}:${selectedTreeElement.nodeId}`}
+        attributes={attributes}
+        concept={selectedTreeElement.concept}
+        namespace={selectedTreeElement.namespace}
+        heading={selectedTreeElement.name}
+        relationships={<ElementRelationships
+          key={`${selectedTreeElement.namespace}:${selectedTreeElement.nodeId}`}
+          nodeId={selectedTreeElement.nodeId}
+          workspaceKey={workspaceKey ?? null}
+          onShowInTree={onShowRelationshipInTree}
+        />}
+      />;
 
     case 'notes':
       return (
@@ -1676,9 +1559,6 @@ function ElementWorkspace({ namespace, selectedTreeElement, addNoteRequested, on
 
   const instance = instanceQuery.data;
   const attributes = (instance?.attributes ?? {}) as Record<string, unknown>;
-  const contentText = typeof attributes.content === 'string' ? attributes.content.trim() : '';
-  const detailItems = useMemo(() => collectDetailItems(attributes), [attributes]);
-
   if (instanceQuery.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
   }
@@ -1836,8 +1716,7 @@ function ElementWorkspace({ namespace, selectedTreeElement, addNoteRequested, on
                         e.preventDefault();
                         e.stopPropagation();
                         try {
-                          const created = await createTag.mutateAsync({ namespace, name: input });
-                          await linkTagCrossNs.mutateAsync({ tagNodeId: created.node_id, importedElementNodeId: selectedTreeElement.nodeId });
+                          await createTag.mutateAsync({ namespace, name: input, targetNodeId: selectedTreeElement.nodeId });
                           qc.invalidateQueries({ queryKey: ['tagsForImportedElement'] });
                           qc.invalidateQueries({ queryKey: ['tags'] });
                           if (workspaceKey) qc.invalidateQueries({ queryKey: treeChildrenQueryKey(workspaceKey, selectedTreeElement.namespace, selectedTreeElement.nodeId) });
@@ -1867,65 +1746,13 @@ function ElementWorkspace({ namespace, selectedTreeElement, addNoteRequested, on
         </div>
       )}
 
-      {/* ── Element Details ─────────────────────────────────────────────── */}
-      {(contentText || detailItems.length > 0) && (
-      <div style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16, marginBottom: 16 }}>
-        <SectionHeader title="Element Details" count={(contentText ? 1 : 0) + detailItems.length} />
-        {contentText ? (
-          <div style={{ marginBottom: 14 }}>
-            <Typography.Text strong style={{ fontSize: 12 }}>Content</Typography.Text>
-            <div
-              style={{
-                marginTop: 6,
-                padding: 12,
-                borderRadius: 6,
-                background: token.colorFillQuaternary,
-                whiteSpace: 'pre-wrap',
-                lineHeight: 1.6,
-                fontSize: 13,
-              }}
-            >
-              {contentText}
-            </div>
-          </div>
-        ) : null}
-
-        {detailItems.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-            {detailItems.map((item) => (
-              <div
-                key={item.key}
-                style={{
-                  display: 'flex',
-                  gap: 12,
-                  padding: '8px 0',
-                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                  alignItems: item.isMultiline ? 'flex-start' : 'baseline',
-                }}
-              >
-                <Typography.Text
-                  type="secondary"
-                  style={{ fontSize: 11, width: 100, flexShrink: 0 }}
-                >
-                  {item.label}
-                </Typography.Text>
-                <Typography.Text
-                  style={{
-                    fontSize: 12,
-                    whiteSpace: item.isMultiline ? 'pre-wrap' : 'normal',
-                    wordBreak: 'break-word',
-                    flex: 1,
-                    minWidth: 0,
-                  }}
-                >
-                  {item.value}
-                </Typography.Text>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      )}
+      <ElementDetails
+        key={`${selectedTreeElement.namespace}:${selectedTreeElement.nodeId}`}
+        attributes={attributes}
+        concept={selectedTreeElement.concept}
+        namespace={selectedTreeElement.namespace}
+        heading={title}
+      />
 
       {/* ── Safety Notes ────────────────────────────────────────────────── */}
       <div style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16, marginBottom: 16 }}>
@@ -1985,7 +1812,6 @@ function MalfunctionWorkspace({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
-  const asilPalette = useAsilPalette();
   const fmQuery = useMalfunction(selectedTreeElement.nodeId);
   const riskRatingQuery = useRiskRating(selectedTreeElement.nodeId);
   const tasksQuery = useSafetyTasks(selectedTreeElement.nodeId);
@@ -2012,8 +1838,6 @@ function MalfunctionWorkspace({
     const asilValue = String(failureMode.attributes?.malfunction_asil ?? '');
     setAsil(asilValue || undefined);
   }, [fmQuery.data]);
-
-  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
 
   if (fmQuery.isLoading || profile.isLoading) {
     return <div style={{ padding: 24, textAlign: 'center' }}><Spin size="small" /></div>;
@@ -2111,28 +1935,12 @@ function MalfunctionWorkspace({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Typography.Text strong style={{ flexShrink: 0 }}>ASIL</Typography.Text>
-              <div style={{
-                borderLeft: `3px solid ${asilPalette.line(asil) ?? 'transparent'}`,
-                borderRadius: 2,
-                transition: 'border-color 0.2s',
-              }}>
-                <Select
-                  allowClear
+              <div>
+                <AsilSelect
                   size="small"
                   value={asil}
                   onChange={(value) => { setAsil(value); saveField({ malfunction_asil: value ?? '' }); }}
-                  options={asilOptions}
-                  placeholder="—"
                   style={{ width: 110 }}
-                  optionRender={(option) => (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{
-                        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                        background: (option.data as any).color ?? asilPalette.icon(''),
-                      }} />
-                      {option.label}
-                    </div>
-                  )}
                 />
               </div>
             </div>
@@ -3150,7 +2958,6 @@ function GhostInputRow({
   );
 }
 
-
 function TaskEditorCard({ namespace, fmNodeId, task, workspaceKey, triggerAutoSave }: { namespace: string; fmNodeId: number; task: ConceptInstanceData; workspaceKey?: string | null; triggerAutoSave?: () => void }) {
   const { message } = App.useApp();
   const updateTask = useUpdateSafetyTask(namespace, workspaceKey ?? null, triggerAutoSave);
@@ -3266,8 +3073,6 @@ function TaskEditorCard({ namespace, fmNodeId, task, workspaceKey, triggerAutoSa
 
 function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey, triggerAutoSave }: { namespace: string; fmNodeId: number; requirement: ConceptInstanceData; workspaceKey?: string | null; triggerAutoSave?: () => void }) {
   const { message } = App.useApp();
-  const profile = useSafetyProfileMetadata();
-  const asilPalette = useAsilPalette();
   const updateRequirement = useUpdateRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
   const unlinkRequirement = useUnlinkRequirementFromFm(namespace, triggerAutoSave);
   const deleteRequirement = useDeleteRequirement(namespace, workspaceKey ?? null, triggerAutoSave);
@@ -3296,8 +3101,6 @@ function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey,
     }
   }, [updateRequirement, requirement.node_id, markSaved]);
 
-  const asilOptions: AsilSelectEntry[] = useAsilOptionGroups(profile.asilGroups);
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
@@ -3325,27 +3128,12 @@ function RequirementEditorCard({ namespace, fmNodeId, requirement, workspaceKey,
           <Typography.Text strong>ASIL</Typography.Text>
           <div style={{
             marginTop: 6,
-            borderLeft: `3px solid ${asilPalette.line(asil) ?? 'transparent'}`,
-            borderRadius: 2,
-            transition: 'border-color 0.2s',
           }}>
-            <Select
-              allowClear
+            <AsilSelect
               size="small"
               value={asil}
               onChange={(v) => { setAsil(v); saveField({ req_asil: v ?? '' }); }}
-              options={asilOptions}
-              placeholder="—"
               style={{ width: 110 }}
-              optionRender={(option) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{
-                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                    background: (option.data as any).color ?? asilPalette.icon(''),
-                  }} />
-                  {option.label}
-                </div>
-              )}
             />
           </div>
         </div>

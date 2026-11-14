@@ -35,6 +35,7 @@
  * safety, MONITORING_ANALYSIS = monitoring, SOTIF_ANALYSIS = SOTIF).
  */
 import type { UserCheckDefinition } from '@riacore/app-contracts';
+import { SYSML_PORT_ASIL_CHECKS } from '../checks/sysml-port-asil-queries.js';
 
 export const DEFAULT_CHECKS: UserCheckDefinition[] = [
   {
@@ -238,7 +239,7 @@ export const DEFAULT_CHECKS: UserCheckDefinition[] = [
   },
   {
     "id": "sa-rport-asil-below-partner-pport",
-    "name": "R-Port ASIL lower than partner P-Port",
+    "name": "P-Port ASIL lower than connected R-Port",
     "description": "An R-Port has a malfunction with ASIL > QM, but the connected P-Port (via assembly connector) has no malfunction or its highest ASIL is lower than the R-Port's highest ASIL. The provider must cover at least the same ASIL level as the consumer.",
     "severity": "Warning",
     "query": "MATCH (fm_r:RIA_UNIV_ConceptInstance)-[oa_r:RIA_UNIV_CROSSNS_INSTANCE_REL]->(rport:RIA_UNIV_ConceptInstance) WHERE fm_r.namespace = $namespace AND fm_r.concept = 'malfunction' AND oa_r.relationship = 'occurs_at' AND rport.concept = 'r_port' WITH rport, max(CASE WHEN fm_r.attributes CONTAINS 'malfunction_asil\\\":\\\"D' THEN 4 WHEN fm_r.attributes CONTAINS 'malfunction_asil\\\":\\\"C' THEN 3 WHEN fm_r.attributes CONTAINS 'malfunction_asil\\\":\\\"B' THEN 2 WHEN fm_r.attributes CONTAINS 'malfunction_asil\\\":\\\"A' THEN 1 ELSE 0 END) AS rportMaxAsilRank WHERE rportMaxAsilRank > 0 MATCH (rq:RIA_UNIV_RelationshipInstance) WHERE rq.relationship = 'requester_port' AND rq.target_node_id = rport.node_id MATCH (conn:RIA_UNIV_ConceptInstance) WHERE conn.node_id = rq.source_node_id AND conn.concept = 'assembly_connector' MATCH (pv:RIA_UNIV_RelationshipInstance) WHERE pv.relationship = 'provider_port' AND pv.source_node_id = conn.node_id MATCH (pport:RIA_UNIV_ConceptInstance) WHERE pport.node_id = pv.target_node_id OPTIONAL MATCH (fm_p:RIA_UNIV_ConceptInstance)-[oa_p:RIA_UNIV_CROSSNS_INSTANCE_REL]->(pport) WHERE fm_p.namespace = $namespace AND fm_p.concept = 'malfunction' AND oa_p.relationship = 'occurs_at' WITH rport, rportMaxAsilRank, pport, max(CASE WHEN fm_p IS NULL THEN -1 WHEN fm_p.attributes CONTAINS 'malfunction_asil\\\":\\\"D' THEN 4 WHEN fm_p.attributes CONTAINS 'malfunction_asil\\\":\\\"C' THEN 3 WHEN fm_p.attributes CONTAINS 'malfunction_asil\\\":\\\"B' THEN 2 WHEN fm_p.attributes CONTAINS 'malfunction_asil\\\":\\\"A' THEN 1 ELSE 0 END) AS pportMaxAsilRank WHERE pportMaxAsilRank < rportMaxAsilRank RETURN rport.node_id AS violation",
@@ -253,6 +254,7 @@ export const DEFAULT_CHECKS: UserCheckDefinition[] = [
     ],
     "active": true
   },
+  ...SYSML_PORT_ASIL_CHECKS,
   {
     "id": "sa-severity-asil-mismatch-fm",
     "name": "Risk rating severity inconsistent with malfunction ASIL",

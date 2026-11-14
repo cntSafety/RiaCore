@@ -108,17 +108,56 @@ function validateDatabase(nodeBinary, appDir, platform) {
       console.log('Database native module loaded and query passed');
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `;
-  try {
-    const result = execFileSync(nodeBinary, ['-e', script, path.join(appDir, 'node_modules', '@ladybugdb', 'core')], {
-      cwd: appDir, env, encoding: 'utf8', timeout: 60_000,
-    });
-    console.log(`[RiaCore]   ${result.trim()}`);
-  } catch (error) {
-    fail(`bundled Node cannot use the packaged database: ${error.stderr?.toString() || error.message}`);
+  // Each engine in a process of its own, as RiaCore runs them: ladybug and
+  // RiaGraph never share one (graph-engine.ts).
+  const engines = [{ name: 'ladybug', dir: path.join(appDir, 'node_modules', '@ladybugdb', 'core') }];
+  const riagraphDir = packagedRiaGraphDir(path.dirname(appDir), platform);
+  if (fs.existsSync(riagraphDir) || process.env.RIACORE_PACKAGE_WITHOUT_RIAGRAPH !== '1') {
+    engines.push({ name: 'RiaGraph', dir: riagraphDir });
+    validateRiaGraphBuild(riagraphDir);
+  } else {
+    console.warn('[RiaCore]   WARNING: package built without RiaGraph (RIACORE_PACKAGE_WITHOUT_RIAGRAPH=1)');
   }
+  for (const engine of engines) {
+    if (!fs.existsSync(path.join(engine.dir, 'package.json'))) fail(`${engine.name} is not packaged at ${engine.dir}`);
+    try {
+      const result = execFileSync(nodeBinary, ['-e', script, engine.dir], {
+        cwd: appDir, env, encoding: 'utf8', timeout: 60_000,
+      });
+      console.log(`[RiaCore]   ${engine.name}: ${result.trim()}`);
+    } catch (error) {
+      fail(`bundled Node cannot use the packaged ${engine.name} database: ${error.stderr?.toString() || error.message}`);
+    }
+  }
+  // Shadow mode runs the second engine through this host in a child process.
+  const shadowHost = path.join(appDir, 'node_modules', '@riacore', 'app-core', 'dist', 'db', 'graph-engine-shadow-host.js');
+  if (!fs.existsSync(shadowHost)) fail(`the graph engine shadow host is missing: ${shadowHost}`);
 }
 
-function main() {
+/** Where a package carries RiaGraph (electron-builder.yml extraResources). */
+function packagedRiaGraphDir(resourcesDir, platform) {
+  const target = { win: 'win32-x64', mac: 'darwin-arm64', linux: 'linux-x64' }[platform];
+  return path.join(resourcesDir, 'vendor', 'riagraph-core', target);
+}
+
+/** The packaged RiaGraph is the build riagraph.lock.json pins, for this platform. */
+function validateRiaGraphBuild(riagraphDir) {
+  const lock = JSON.parse(fs.readFileSync(path.join(desktopHostDir, 'riagraph.lock.json'), 'utf8'));
+  let info;
+  try {
+    info = JSON.parse(fs.readFileSync(path.join(riagraphDir, 'BUILD_INFO.json'), 'utf8'));
+  } catch {
+    fail(`RiaGraph has no BUILD_INFO.json in ${riagraphDir}`);
+  }
+  if (info.commit !== lock.commit) fail(`packaged RiaGraph is ${info.commit}, riagraph.lock.json pins ${lock.commit}`);
+  if (info.platform !== path.basename(riagraphDir)) fail(`packaged RiaGraph is built for ${info.platform}, not ${path.basename(riagraphDir)}`);
+  for (const file of ['LICENSE', 'OPENSSL-LICENSE.txt']) {
+    if (!fs.existsSync(path.join(riagraphDir, file))) fail(`packaged RiaGraph lacks ${file}`);
+  }
+  console.log(`[RiaCore]   RiaGraph ${info.version} (${String(info.commit).slice(0, 9)}, ${info.platform}, OpenSSL ${info.openssl}) matches the lock`);
+}
+
+async function main() {
   const platform = parsePlatform();
   const rootIndex = process.argv.indexOf('--package-root');
   if (rootIndex >= 0 && !process.argv[rootIndex + 1]) fail('--package-root requires a path');
@@ -199,4 +238,4 @@ function main() {
   console.log('[RiaCore]   No duplicate node_modules/dugite/git payload');
 }
 
-main();
+main().catch(error => { console.error(error); process.exitCode = 1; });

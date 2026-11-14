@@ -17,13 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { Modal, Form, Input, Select, Alert, Tag } from 'antd';
+import { AsilSelect } from './AsilSelect';
+import { Modal, Form, Input, Alert, Tag } from 'antd';
 import { WarningOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { useCreateMalfunction } from '../hooks/useSafetyMutations';
-import { ASIL_UNSET_LABEL, ASIL_UNSET_VALUE } from '../config/asilColors';
-import { AsilTag } from './AsilTag';
-import { useSafetyProfileMetadata } from '../hooks/useSafetyProfileMetadata';
 import type { SelectedTreeElement } from '../types';
 
 interface CreateMalfunctionModalProps {
@@ -42,7 +40,6 @@ interface CreateMalfunctionModalProps {
 export function CreateMalfunctionModal({ open, namespace, selectedTreeElement, onClose, onCreated, workspaceKey, occursAtNamespace, triggerAutoSave }: CreateMalfunctionModalProps) {
   const [form] = Form.useForm();
   const [error, setError] = useState<string | null>(null);
-  const profile = useSafetyProfileMetadata();
   const createFm = useCreateMalfunction(namespace, workspaceKey ?? null, occursAtNamespace, triggerAutoSave);
 
   const handleOk = async () => {
@@ -71,18 +68,6 @@ export function CreateMalfunctionModal({ open, namespace, selectedTreeElement, o
     setError(null);
     onClose();
   };
-
-  // Custom ASIL option rendering with color tags, plus an explicit "Not set".
-  const asilOptions = [
-    { label: ASIL_UNSET_LABEL, value: ASIL_UNSET_VALUE },
-    ...profile.asilGroups.map((group) => ({
-      label: group.label,
-      options: group.options.map((v) => ({
-        label: <AsilTag asil={v} />,
-        value: v,
-      })),
-    })),
-  ];
 
   return (
     <Modal
@@ -115,10 +100,7 @@ export function CreateMalfunctionModal({ open, namespace, selectedTreeElement, o
           />
         </Form.Item>
         <Form.Item name="asil" label="ASIL Classification">
-          <Select
-            allowClear
-            placeholder="Select ASIL level"
-            options={asilOptions}
+          <AsilSelect
           />
         </Form.Item>
       </Form>

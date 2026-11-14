@@ -21,8 +21,8 @@
  * Types for the user-defined check engine.
  *
  * Checks are loaded from {workingDir}/ria-data/checks.json.
- * Each check has a Cypher query that returns one integer column named
- * `violation` per row. Each row is one violation.
+ * Ordinary checks return one integer `violation` column per row. Built-in
+ * evaluated checks read graph facts and transform them into violation rows.
  *
  * The engine injects $namespace as a query parameter automatically.
  */
@@ -80,14 +80,19 @@ export interface UserCheckDefinition {
   /** Severity level displayed to the user. */
   severity: CheckSeverity;
   /**
-   * Cypher query. Must return exactly one integer column named `violation`
+   * Read-only Cypher query. Without an evaluator, returns one integer `violation`
    * (the primary node_id of each violation). Each row is one distinct
-   * violation. The parameter `$namespace` is automatically injected with
+   * violation. With an evaluator, returns its documented fact-row shape instead.
+   * The parameter `$namespace` is automatically injected with
    * the name of the selected namespace.
    *
    * The query must be read-only (no CREATE, MERGE, DELETE, SET, DROP, etc.).
    */
   query: string;
+  /** Optional built-in, read-only postprocessor for the query's fact rows. */
+  evaluator?: 'sysml-port-asil-consistency' | 'sysml-port-asil-incomplete';
+  /** Coverage findings are connections not assessed, rather than proven violations. */
+  resultKind?: 'coverage';
   /**
    * Ordered list of attribute entries to extract from the violation node's
    * `attributes` JSON blob and show as columns in the result table.
@@ -121,6 +126,7 @@ export interface UserCheckDefinition {
  */
 export interface ApplicableCheck {
   id: string;
+  resultKind?: 'coverage';
   name: string;
   description: string;
   severity: CheckSeverity;
@@ -130,11 +136,43 @@ export interface ApplicableCheck {
   metamodel: string[];
 }
 
+/** Source identity for inspection/navigation; labels never serve as identifiers. */
+export interface CheckElementReference {
+  nodeId: number;
+  namespace: string;
+  concept: string;
+  label: string;
+}
+
+export type CheckFindingCategory = 'mismatch' | 'analysis' | 'unsupported' | 'unresolved';
+
+export interface CheckFindingEndpoint {
+  /** Short usage-qualified label, plus the full contextual path for details. */
+  label: string;
+  path: string;
+  port?: CheckElementReference;
+  owner?: CheckElementReference;
+  asil?: string;
+  analysisStatus: 'known' | 'missing' | 'invalid' | 'unresolved';
+}
+
+export interface CheckFinding {
+  category: CheckFindingCategory;
+  code: string;
+  connection: CheckElementReference;
+  context?: CheckElementReference;
+  endpoints: CheckFindingEndpoint[];
+  message: string;
+  nextStep: string;
+}
+
 /**
  * One row in the check result table — a single violation node plus the
  * extracted attribute values for the columns configured in the check.
  */
 export interface CheckViolation {
+  /** Captured assessment evidence, retained across pages. Ordinary checks omit it. */
+  findings?: CheckFinding[];
   /** node_id of the primary violation node. */
   nodeId: number;
   /** Namespace the node belongs to. */
@@ -154,6 +192,8 @@ export interface CheckViolation {
  * violations plus a run-token for fetching subsequent pages.
  */
 export interface CheckRunSummary {
+  /** Distinct primary result rows per category across the entire run. */
+  findingCounts?: Partial<Record<CheckFindingCategory, number>>;
   /** Opaque server-side token for paginating this run's results. */
   runId: string;
   /** ID of the check that was run. */

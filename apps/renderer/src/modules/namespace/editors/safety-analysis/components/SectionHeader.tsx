@@ -21,10 +21,11 @@ import type { ReactNode } from 'react';
 import { Space, Tag, Typography, theme } from 'antd';
 
 /** Shared section title, count badge and optional action for element details. */
-export function SectionHeader({ title, count, action }: {
+export function SectionHeader({ title, count, action, fontSize = 13 }: {
   title: string;
   count?: number;
   action?: ReactNode;
+  fontSize?: number;
 }) {
   const { token } = theme.useToken();
   return (
@@ -40,7 +41,7 @@ export function SectionHeader({ title, count, action }: {
       }}
     >
       <Space size={8} align="center">
-        <Typography.Text strong style={{ fontSize: 13 }}>{title}</Typography.Text>
+        <Typography.Title level={5} style={{ fontSize, margin: 0 }}>{title}</Typography.Title>
         {count !== undefined && (
           <Tag style={{ fontSize: 11, lineHeight: '18px' }}>
             {count === 0 ? 'None' : `${count}`}

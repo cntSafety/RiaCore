@@ -26,4 +26,18 @@ export interface DbStatus {
   readOnly?: boolean;
   migrationNeeded?: boolean;
   warning?: string;
+  /** The graph engine(s) the open database runs on (state `open`). */
+  engine?: DbEngineInfo;
+}
+
+/** Graph engine of an open database, from the workspace's graph-engine.json. */
+export interface DbEngineInfo {
+  /** The master: its results are what the application sees. */
+  master: 'ladybug' | 'riagraph';
+  /** Engines running alongside the master for comparison (shadow mode); usually none. */
+  shadows: Array<'ladybug' | 'riagraph'>;
+  /** Engine version(s), e.g. `riagraph 0.22.0` or `ladybug 0.19.1 + riagraph 0.22.0`. */
+  version: string;
+  /** The graph-engine.json the selection came from; absent for the default engine. */
+  config?: string;
 }

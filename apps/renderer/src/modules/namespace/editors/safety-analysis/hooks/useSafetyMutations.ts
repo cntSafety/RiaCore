@@ -122,7 +122,7 @@ async function invalidateAllTreeChildrenForNamespace(
 // cache (which silently no-ops on a cold cache). It is robust because:
 //   1. It always invalidates ALL tree.children for the element's own namespace
 //      (covers the namespace root AND any expanded parent element subtree).
-//   2. If an explicit structural parent is known, it invalidates that key too.
+//   2. If an explicit structural parent is known, it invalidates that namespace too (including parent expandability).
 //   3. If the structural parent is NOT supplied, it resolves it on demand from
 //      the malfunction record (never depending on cache warmth).
 //
@@ -146,12 +146,20 @@ async function invalidateElementInTree(
   const tasks: Promise<void>[] = [
     // (1) Robust net: every loaded parent in the element's own namespace.
     invalidateAllTreeChildrenForNamespace(qc, workspaceKey, namespace),
+    // Imported branches scoped to this analysis display its notes/tags as well
+    // as malfunctions. Refresh their declaration and usage appearances together.
+    qc.invalidateQueries({ predicate: q => {
+      const key = q.queryKey;
+      if (key[0] !== 'tree.children' || key[1] !== workspaceKey || key[2] === namespace) return false;
+      const data = q.state.data as { references?: { sourceNamespace: string }[] } | undefined;
+      return key[5] === namespace || !!data?.references?.some(ref => ref.sourceNamespace === namespace);
+    } }),
   ];
 
   // (2) Explicit structural parent, if the caller already knows it.
   if (opts.structuralParent) {
     tasks.push(
-      invalidateTreeChildren(qc, workspaceKey, opts.structuralParent.namespace, opts.structuralParent.nodeId),
+      invalidateAllTreeChildrenForNamespace(qc, workspaceKey, opts.structuralParent.namespace),
     );
   } else if (opts.resolveOccursAtFor !== undefined) {
     // (3) Resolve occurs_at without depending on cache warmth.
@@ -172,7 +180,7 @@ async function invalidateElementInTree(
           }
         }
         if (target) {
-          await invalidateTreeChildren(qc, workspaceKey, target.namespace, target.node_id);
+          await invalidateAllTreeChildrenForNamespace(qc, workspaceKey, target.namespace);
         }
       })(),
     );

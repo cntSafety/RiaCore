@@ -29,8 +29,7 @@ export function useTagMutations() {
   // invalidate tree.children so NamespaceTreePanel re-syncs. We derive the
   // workspaceKey here (rather than threading it through every call site) so all
   // callers — TagsOverviewView, CenterPanel, MalfunctionExpandedRow — are fixed
-  // at once. Link/unlink are intentionally excluded: they associate an existing
-  // tag with an element but never add/remove a tree node.
+  // at once. Link/unlink also add/remove reference rows beneath imported elements.
   const wsState = useWorkspaceState();
   const workspaceKey = wsState.phase !== 'no_workspace' ? wsState.workingDir : null;
 
@@ -55,6 +54,10 @@ export function useTagMutations() {
     mutationFn: (params: CreateTagParams) => api.safety.createTag(params),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['tags', variables.namespace] });
+      if (variables.targetNodeId !== undefined) {
+        queryClient.invalidateQueries({ queryKey: ['tagsForElement'] });
+        queryClient.invalidateQueries({ queryKey: ['tagsForImportedElement'] });
+      }
       queryClient.invalidateQueries({ queryKey: ['tagsOverview.elements'] });
       invalidateTreeForTags();
     },
@@ -89,6 +92,7 @@ export function useTagMutations() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tagsForElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsOverview.elements'] });
+      invalidateTreeForTags();
     },
   });
 
@@ -98,6 +102,7 @@ export function useTagMutations() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tagsForElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsOverview.elements'] });
+      invalidateTreeForTags();
     },
   });
 
@@ -108,6 +113,7 @@ export function useTagMutations() {
       queryClient.invalidateQueries({ queryKey: ['tagsForElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsForImportedElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsOverview.elements'] });
+      invalidateTreeForTags();
     },
   });
 
@@ -118,6 +124,7 @@ export function useTagMutations() {
       queryClient.invalidateQueries({ queryKey: ['tagsForElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsForImportedElement'] });
       queryClient.invalidateQueries({ queryKey: ['tagsOverview.elements'] });
+      invalidateTreeForTags();
     },
   });
 

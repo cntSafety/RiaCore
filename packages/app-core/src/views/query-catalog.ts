@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { packagedAssetPath } from '@riacore/importer-sdk';
 /**
  * The view query catalog (docs/coreSpecs/RiaViews.md — "The Query Catalog").
  *
@@ -171,6 +172,8 @@ export const REPO_CATALOG_RELATIVE_PATH = path.join('ria-config', 'view-queries.
  */
 function resolveShippedQueriesRoot(): string {
   const envRoot = process.env.RIACORE_VIEW_QUERIES_ROOT;
+  const packaged = packagedAssetPath('node_modules/@riacore/app-core/queries', envRoot);
+  if (packaged) return packaged;
   const candidates = [
     envRoot,
     path.resolve(__dirname, '..', '..', 'queries'),
@@ -256,6 +259,8 @@ export function loadCatalog(workingDir: string): ViewQueryCatalog {
   const shippedPath = path.join(resolveShippedQueriesRoot(), 'view-queries.json');
   const repoPath = path.join(workingDir, REPO_CATALOG_RELATIVE_PATH);
 
+  // A missing shipped catalog is a broken package, not an empty workspace.
+  packagedAssetPath('node_modules/@riacore/app-core/queries', shippedPath);
   const shippedEntries = readCatalogFile(shippedPath, 'shipped');
   const repoEntries = readCatalogFile(repoPath, 'repository');
 

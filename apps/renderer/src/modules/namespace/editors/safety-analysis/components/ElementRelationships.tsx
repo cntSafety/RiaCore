@@ -19,7 +19,7 @@
  */
 import { Alert, Button, Space, Table, Tag, Typography, theme } from 'antd';
 import { createElement } from 'react';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ExportOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { RelationshipData } from '@riacore/app-contracts';
 import { useElementRelationships } from '../hooks/useElementRelationships';
 import { sortElementRelationships } from '../utils/elementRelationships';
@@ -52,18 +52,29 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
         homeTarget={target}
         // Always supply an in-place callback: never fall back to opening another analysis.
         onNavigate={() => { void showInTree(target); }}
-        wrapperStyle={{ maxWidth: '100%', paddingRight: 20 }}
+        hideKebab
+        wrapperStyle={{ maxWidth: '100%', width: '100%' }}
       >
-        <Space align="start" size={8}>
-          {createElement(decoration.icon, { style: { color: node.concept === 'malfunction' ? asilPalette.icon(node.asil) : decoration.color } } as Record<string, unknown>)}
-          <Space orientation="vertical" size={0}>
-            <Typography.Text>{node.name}</Typography.Text>
-            {node.identifier && node.identifier !== node.name && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{node.identifier}</Typography.Text>
-            )}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{node.concept}</Typography.Text>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, width: '100%', minWidth: 0 }}>
+          <Space align="start" size={8} style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+            {createElement(decoration.icon, { style: { color: node.concept === 'malfunction' ? asilPalette.icon(node.asil) : decoration.color } } as Record<string, unknown>)}
+            <Space orientation="vertical" size={0}>
+              <Typography.Text>{node.name}</Typography.Text>
+              {node.identifier && node.identifier !== node.name && (
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{node.identifier}</Typography.Text>
+              )}
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{node.concept}</Typography.Text>
+            </Space>
           </Space>
-        </Space>
+          <Button
+            type="text"
+            size="small"
+            icon={<ExportOutlined />}
+            aria-label={`Show ${node.name} in tree`}
+            onClick={() => { void showInTree(target); }}
+            style={{ flexShrink: 0 }}
+          >Show in tree</Button>
+        </div>
       </ShowInTreeTrigger>
     );
   };
@@ -72,6 +83,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
     <section aria-label="Relationships" style={{ borderLeft: `3px solid ${token.colorPrimary}`, paddingLeft: 16 }}>
       <SectionHeader
         title="Relationships"
+        fontSize={token.fontSize}
         count={relationships.data ? rows.length : undefined}
         action={
           <Button
@@ -85,7 +97,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
           >Refresh relationships</Button>
         }
       />
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+      <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 8 }}>
         Incoming links point to this element; outgoing links point to the related element.
       </Typography.Paragraph>
       {relationships.isError ? (
@@ -97,7 +109,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
         />
       ) : (
         <Table<RelationshipData>
-          size="small"
+          size="middle"
           dataSource={rows}
           rowKey={(row) => `${row.type}:${row.edge_id}:${row.direction}`}
           loading={relationships.isLoading}
@@ -105,7 +117,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
             pageSize: 10,
             hideOnSinglePage: true,
             showSizeChanger: false,
-            position: ['bottomRight'],
+            placement: ['bottomEnd'],
             showTotal: (total, range) => `${range[0]}–${range[1]} of ${total} relationships`,
           }}
           locale={{ emptyText: !relationships.available
@@ -124,7 +136,7 @@ export function ElementRelationships({ nodeId, workspaceKey, onShowInTree }: {
               title: 'Relationship',
               dataIndex: 'relationship',
               width: 180,
-              render: (value: string) => <span style={{ fontFamily: token.fontFamilyCode, fontSize: 12 }}>{value}</span>,
+              render: (value: string) => <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>{value}</span>,
             },
             {
               title: 'Related element',

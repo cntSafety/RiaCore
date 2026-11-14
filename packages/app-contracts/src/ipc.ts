@@ -24,7 +24,7 @@ import { PersistorStoreParams, PersistorLoadParams, PersistorRepairParams, Store
 import { ProvisionConfigParams, ImporterInfo } from './provisioning-types.js';
 import { ProfileInfo, CreateAuthoredNamespaceParams, CreatedNamespaceInfo, NamespaceInfo, NamespaceDeleteImpactPreview } from './profile-types.js';
 import { GraphQueryResult } from './graph-types.js';
-import { ConceptInstanceData, RelationshipData, MalfunctionData, PropagationMalfunctionData, CreateMalfunctionParams, CreateRiskRatingParams, ReviewItemData, TreeChildNode, GetChildrenResponse, TreeNodeLocation, DeleteImpactPreview, SearchResultNode, SearchResult, CreateTagParams, ScopedPropagationResult } from './safety-types.js';
+import { ConceptInstanceData, RelationshipData, AggregatedRelationshipsResult, MalfunctionData, PropagationMalfunctionData, CreateMalfunctionParams, CreateRiskRatingParams, ReviewItemData, TreeChildNode, GetChildrenResponse, TreeNodeLocation, DeleteImpactPreview, SearchResultNode, SearchResult, CreateTagParams, ScopedPropagationResult } from './safety-types.js';
 import { ApplicableCheck, CheckRunSummary, CheckPageResult, NamespaceCheckSummary } from './check-types.js';
 import { GetPortConnectorsInput, GetNamespacePortConnectorsInput, GetComponentPortConnectorsInput, PortConnectorResult, NamespacePortConnectorsResult, ComponentPortConnectorsResult } from './arxml-types.js';
 import type { ShowInTreePayload } from './show-in-tree.js';
@@ -296,6 +296,8 @@ export interface IpcChannelMap {
   'safety.previewDeleteImpact': { input: { nodeId: number }; output: DeleteImpactPreview };
   'safety.getInstance': { input: { nodeId: number }; output: ConceptInstanceData };
   'safety.getRelationships': { input: { nodeId: number }; output: RelationshipData[] };
+  /** `depth` defaults to 1 (the flat rollup); above that, endpoints are reported one containment level deeper per step. */
+  'safety.getAggregatedRelationships': { input: { nodeId: number; depth?: number }; output: AggregatedRelationshipsResult };
   'safety.getInstanceByUuid': { input: { uuid: string }; output: ConceptInstanceData };
 
   // --- User-defined checks ---
@@ -366,15 +368,18 @@ export interface IpcChannelMap {
   'safety.getSafetyData': { input: { namespace: string }; output: SafetyExportData };
 
   // --- Tree channel ---
-  'namespaces.getChildren': { input: { namespace: string; parentNodeId?: number; offset?: number; limit?: number; showAll?: boolean; scopeNamespace?: string }; output: GetChildrenResponse };
+  // includeDefinitionMembers opts into read-only SysML declaration references.
+  // Default callers retain physical containment; no model nodes are created.
+  'namespaces.getChildren': { input: { namespace: string; parentNodeId?: number; offset?: number; limit?: number; showAll?: boolean; scopeNamespace?: string; includeDefinitionMembers?: boolean }; output: GetChildrenResponse };
   'namespaces.getAncestorPath': { input: { namespace: string; nodeId: number }; output: number[] };
   /**
    * Locate a node in the tree's own page order: the containment chain plus each
    * level's child index, so a paginated tree can reveal an element by loading
    * only the pages that contain it. `showAll` must match the caller's tree
    * display setting, because hidden concepts change both index and totals.
+   * includeDefinitionMembers must likewise match the child-read projection.
    */
-  'namespaces.getNodeLocation': { input: { namespace: string; nodeId: number; showAll?: boolean }; output: TreeNodeLocation };
+  'namespaces.getNodeLocation': { input: { namespace: string; nodeId: number; showAll?: boolean; includeDefinitionMembers?: boolean }; output: TreeNodeLocation };
   'namespaces.search': { input: { query: string; offset?: number; limit?: number; exact?: boolean }; output: SearchResult };
 
   // --- Metamodel channels ---
@@ -804,6 +809,7 @@ export const IPC_CHANNELS: WorkerIpcChannel[] = [
   'safety.previewDeleteImpact',
   'safety.getInstance',
   'safety.getRelationships',
+  'safety.getAggregatedRelationships',
   'safety.getInstanceByUuid',
   'safety.createTag',
   'safety.getTag',

@@ -8,7 +8,7 @@ description: >-
   Type hierarchy follows the OMG SysML v2 and KerML specifications.
   Abstract classes (abstract: true) serve as hierarchy nodes only;
   concrete classes correspond to JSON @type values found in exports.
-version: 0.4.0
+version: 0.4.3
 
 classes:
   sysml_element:
@@ -156,6 +156,8 @@ classes:
   enumeration_definition:
     is_a: definition
     description: Enumeration type definition
+    rendering:
+      hidden: true
 
   item_definition:
     is_a: definition
@@ -366,6 +368,8 @@ classes:
   reference_usage:
     is_a: usage
     description: Non-owning reference to another element
+    rendering:
+      hidden: true
 
   metadata_usage:
     is_a: usage
@@ -378,6 +382,8 @@ classes:
   binding_connector_as_usage:
     is_a: connection_usage
     description: Binds two features to the same value (as a usage)
+    rendering:
+      hidden: true
 
   succession_as_usage:
     is_a: usage
@@ -403,6 +409,10 @@ classes:
   port_usage:
     is_a: occurrence_usage
     description: Interaction point on a part
+    attributes:
+      effective_is_conjugated:
+        range: boolean
+        description: Derived direction reversal relative to the resolved original port definition; absent when typing is unresolved. Read with has_type or has_definition, not the raw is_conjugated flag.
     rendering:
       icon: ApiOutlined
       color: '#52c41a'
@@ -427,6 +437,7 @@ classes:
     is_a: occurrence_usage
     description: Connection between ports or parts
     rendering:
+      hidden: true
       icon: ShareAltOutlined
       color: '#8c8c8c'
 

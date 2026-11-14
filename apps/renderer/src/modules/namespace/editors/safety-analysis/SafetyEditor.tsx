@@ -358,8 +358,8 @@ export function SafetyEditor({ ns }: SafetyEditorProps) {
   });
 
   const handleNavigateToNode = useCallback(
-    (nodeId: number, namespace: string, concept: string) => {
-      treePanelRef.current?.navigateToNode(nodeId, namespace, concept);
+    (nodeId: number, namespace: string, concept: string, usageContext?: SelectedTreeElement) => {
+      treePanelRef.current?.navigateToNode(nodeId, namespace, concept, usageContext);
     },
     [],
   );

@@ -56,12 +56,14 @@ export function treeChildrenQueryKey(
   parentNodeId?: number,
   showAll = false,
   scopeNamespace?: string,
+  includeDefinitionMembers = false,
 ): readonly unknown[] {
   // scopeNamespace is appended ONLY when provided so that invalidations built
   // without it (the 5-element key) remain a proper prefix of the scoped key and
   // therefore still match it. Appending an explicit `undefined` would break
   // that prefix match (undefined !== safetyNamespace at that position).
   const base = ['tree.children', workspaceKey, namespace, parentNodeId, showAll] as const;
+  if (includeDefinitionMembers) return [...base, scopeNamespace, 'definition-members'];
   return scopeNamespace !== undefined ? [...base, scopeNamespace] : base;
 }
 

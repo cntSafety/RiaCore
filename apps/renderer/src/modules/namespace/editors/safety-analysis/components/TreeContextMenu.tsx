@@ -255,6 +255,10 @@ export function TreeContextMenu({
     const isRiskRating = node.concept === 'risk_rating';
 
     if (isRiskRating) {
+      if (onShowReferenceInTree) {
+        items.push({ id: 'showReferenceInTree', label: `Show Reference in Tree ${formatShortcutHint(['CmdOrCtrl', 'Shift'], 'T')}` });
+        handlers.showReferenceInTree = onShowReferenceInTree;
+      }
       items.push({ id: 'deleteRiskRating', label: 'Delete' });
       handlers.deleteRiskRating = onDeleteRiskRating;
     }

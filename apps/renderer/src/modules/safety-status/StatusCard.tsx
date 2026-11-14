@@ -63,15 +63,18 @@ export function computeRiskMatrixBubbles(component: ComponentExportData): RiskMa
   const safetyImpactMFs = allMFs.filter(
     mf => mf.asil && mf.asil !== 'QM' && mf.riskRating !== null,
   );
-  const grouped = new Map<string, number>();
+  // Keyed without joining the two levels into one string and splitting it
+  // again, which mixed up levels that contain the separator.
+  const grouped = new Map<string, RiskMatrixBubble>();
   for (const mf of safetyImpactMFs) {
-    const key = `${mf.riskRating!.has_occurrence_level}|${mf.riskRating!.has_detection_level}`;
-    grouped.set(key, (grouped.get(key) ?? 0) + 1);
+    const occurrence = mf.riskRating!.has_occurrence_level;
+    const detection = mf.riskRating!.has_detection_level;
+    const key = JSON.stringify([occurrence, detection]);
+    const bubble = grouped.get(key);
+    if (bubble) bubble.count += 1;
+    else grouped.set(key, { occurrence, detection, count: 1 });
   }
-  return Array.from(grouped.entries()).map(([key, count]) => {
-    const [occurrence, detection] = key.split('|');
-    return { occurrence, detection, count };
-  });
+  return Array.from(grouped.values());
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

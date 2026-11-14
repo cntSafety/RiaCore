@@ -30,14 +30,16 @@ import { useNamespaces } from '../../../../../hooks/useNamespaces';
 import { useWorkspaceQueryEnabled } from '../../../../../hooks/useWorkspaceQueryEnabled';
 import { SphinxRelationshipDiagram } from './SphinxRelationshipDiagram';
 import { isSphinxNeedConcept, usesSphinxRelationshipModel } from '../utils/sphinxRelationshipGraph';
-import type { SelectedTreeElement, ScopedTreeNavigator } from '../types';
+import { CGraphAggregationDiagram } from './CGraphAggregationDiagram';
+import { mayUseCGraphAggregationModel, usesCGraphAggregationModel } from '../utils/cgraphAggregationGraph';
+import type { SelectedTreeElement, ScopedTreeNavigator, TreeNodeNavigator } from '../types';
 
 export interface PortConnectorDiagramProps {
   selectedTreeElement: SelectedTreeElement;
   workspaceKey: string | null;
   /** The authored safety namespace (where malfunctions live). */
   safetyNamespace?: string;
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
+  onNavigateToNode?: TreeNodeNavigator;
   /** Navigation callback for "Show Reference in Tree". */
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
   /** Called when the user selects "Show details" on an element tile. */
@@ -69,11 +71,12 @@ export function PortConnectorDiagram({
       onShowDetails={onShowDetails}
     />
   );
-  // Only candidate need concepts resolve metadata here. The SysML/ARXML path
-  // mounts exactly the existing canvas without another query or layout setting.
-  if (!isSphinxNeedConcept(selectedTreeElement.concept)) return model;
+  // Only candidate need/CGraph concepts resolve metadata here. The SysML/ARXML
+  // path mounts exactly the existing canvas without another query or layout
+  // setting.
+  if (!isSphinxNeedConcept(selectedTreeElement.concept) && !mayUseCGraphAggregationModel(selectedTreeElement.concept)) return model;
   return (
-    <SphinxNeedModelRoute
+    <MetamodelGatedModelRoute
       key={`${workspaceKey}:${selectedTreeElement.namespace}#${selectedTreeElement.nodeId}`}
       selectedTreeElement={selectedTreeElement}
       workspaceKey={workspaceKey}
@@ -84,7 +87,8 @@ export function PortConnectorDiagram({
   );
 }
 
-function SphinxNeedModelRoute({ fallback, ...props }: Pick<PortConnectorDiagramProps, 'selectedTreeElement' | 'workspaceKey' | 'onShowInTree' | 'onShowDetails'> & { fallback: ReactNode }) {
+/** Resolves the selected element's source metamodel, then routes to whichever lens that metamodel+concept pair uses. */
+function MetamodelGatedModelRoute({ fallback, ...props }: Pick<PortConnectorDiagramProps, 'selectedTreeElement' | 'workspaceKey' | 'onShowInTree' | 'onShowDetails'> & { fallback: ReactNode }) {
   const workspaceEnabled = useWorkspaceQueryEnabled();
   const enabled = workspaceEnabled && props.workspaceKey !== null;
   const namespaces = useNamespaces(enabled, props.workspaceKey);
@@ -92,7 +96,7 @@ function SphinxNeedModelRoute({ fallback, ...props }: Pick<PortConnectorDiagramP
   if (namespaces.isError) return <Alert type="error" title="Could not resolve the source namespace" action={<Button onClick={() => { void namespaces.refetch(); }}>Retry</Button>} />;
   if (namespaces.isPlaceholderData || namespaces.isPending) return <div style={{ margin: 'auto' }}><Spin /></div>;
   const metamodel = namespaces.data?.find(item => item.name === props.selectedTreeElement.namespace)?.metamodel;
-  return usesSphinxRelationshipModel(metamodel, props.selectedTreeElement.concept)
-    ? <SphinxRelationshipDiagram {...props} />
-    : fallback;
+  if (usesSphinxRelationshipModel(metamodel, props.selectedTreeElement.concept)) return <SphinxRelationshipDiagram {...props} />;
+  if (usesCGraphAggregationModel(metamodel)) return <CGraphAggregationDiagram {...props} />;
+  return fallback;
 }

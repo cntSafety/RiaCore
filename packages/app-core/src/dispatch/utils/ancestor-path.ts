@@ -56,6 +56,7 @@ export async function resolveAncestorPath(
       `MATCH (parent:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(child:RIA_UNIV_ConceptInstance {node_id: $currentId})
        WHERE r.relationship IN [${relFilter}]
        RETURN parent.node_id AS parentId
+       ORDER BY parentId
        LIMIT 1`,
       { currentId },
     );

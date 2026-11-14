@@ -17,11 +17,59 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import type { Result, RelationshipData } from '@riacore/app-contracts';
+import type {
+  Result, RelationshipData, AggregatedRelationshipsResult,
+  AggregatedRelationshipContainer, AggregatedRelationshipEdge,
+} from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
 import type { ImportLogger } from '../infra/logger.js';
 
-export type { RelationshipData } from '@riacore/app-contracts';
+export type { RelationshipData, AggregatedRelationshipsResult } from '@riacore/app-contracts';
+
+/** Safety caps for {@link createInstanceService}'s `getAggregatedRelationships`. */
+const AGGREGATION_MAX_SUBTREE_NODES = 20000;
+const AGGREGATION_MAX_ANCESTOR_HOPS = 64;
+/**
+ * Deepest level `getAggregatedRelationships` will report an endpoint at.
+ *
+ * 5 is where CGraph's chains stop saying anything new. Measured on a reference
+ * `CGraphV2` import, a driver component yields 87 containers at depth 5, 90 at
+ * 6 and 92 at 8: the chain has bottomed out at symbol level and the remaining
+ * levels reach parameters and types. Deep *directory* nesting is what consumes
+ * the budget — a component three `contains_component` levels down needs 5 to
+ * reach the function inside it, which is the case this ceiling is set for.
+ *
+ * A request above it is clamped rather than rejected, so a caller asking for
+ * "everything" gets the most this can give instead of an error. Raising it is
+ * safe for cost now that {@link AGGREGATION_MAX_CONTAINERS} bounds the result
+ * independently; the limit here is usefulness, not performance.
+ */
+const AGGREGATION_MAX_DEPTH = 5;
+
+/**
+ * Size budget the *applied* depth is reduced to fit — see
+ * {@link AggregatedRelationshipsResult.requestedDepth}.
+ *
+ * Depth alone cannot bound this result, because what a level costs depends
+ * entirely on the selection. Measured on the same import at the same depth 4,
+ * one driver component produces 71 containers and another 1017, and the
+ * difference is whether the subtree happens to contain a generated tree. So the
+ * depth is reduced per selection until the result is something a client can
+ * actually draw, rather than the ceiling being set low enough for the worst
+ * selection and useless for every other one.
+ *
+ * Both figures come from laying the payloads out: 192 containers with 837
+ * grouped edges settled in 1.2s, 780 with 1768 took 6.4s, and 1017 with 2606
+ * took 17s. The pair admits the first and excludes the other two. The edge
+ * figure is the larger of the two because grouped edges collapse further in the
+ * client, which draws one line per container pair rather than per relationship.
+ *
+ * Level 1 is always accepted whatever its size: it is what this channel
+ * returned before `depth` existed, and silently changing that result would be a
+ * regression for every existing caller.
+ */
+export const AGGREGATION_MAX_CONTAINERS = 500;
+export const AGGREGATION_MAX_EDGES = 1500;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,6 +141,21 @@ export interface IInstanceService {
 
   /** Query all relationships (intra + cross-NS) connected to a node. */
   getRelationships(nodeId: number): Promise<Result<RelationshipData[]>>;
+
+  /**
+   * Roll up a container's cross-boundary relationships (e.g. CGraph `calls`/
+   * `reads`/`writes`) to its sibling containers, for a layered-architecture
+   * style diagram. See {@link AggregatedRelationshipsResult}.
+   *
+   * `depth` (default 1, clamped to 1..{@link AGGREGATION_MAX_DEPTH}) reports
+   * each endpoint that many containment levels deeper, with the ancestors
+   * needed to nest it, so a consumer can draw "which file in `BSw` calls which
+   * file in `CDD_ADS_NEW`" rather than one edge between the two modules.
+   *
+   * The depth actually applied can be lower than the one asked for: see
+   * {@link AGGREGATION_MAX_CONTAINERS} and the result's `requestedDepth`.
+   */
+  getAggregatedRelationships(nodeId: number, depth?: number): Promise<Result<AggregatedRelationshipsResult>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,32 +319,32 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
     // getInstanceByUuid
     // -----------------------------------------------------------------------
     async getInstanceByUuid(uuid: string): Promise<Result<ConceptInstanceData>> {
+      if (typeof uuid !== 'string' || uuid.trim().length === 0) {
+        return { ok: false, error: 'UUID or stable path must be a non-empty string' };
+      }
       // Use CONTAINS for initial filtering, then exact-match in JS.
       // This works because stable_path and uuid are stored inside the JSON attributes string.
+      // Not capped: other elements quote the id too (references), and a cap before
+      // the exact match could drop the element itself. Reject ambiguous identities
+      // instead of selecting an arbitrary object from another namespace.
       const rows = await dbModule.runQuery(
         `MATCH (ci:RIA_UNIV_ConceptInstance)
          WHERE ci.attributes CONTAINS $uuid
          RETURN ci.node_id AS node_id, ci.namespace AS namespace, ci.concept AS concept,
                 ci.metamodel AS metamodel, ci.attributes AS attributes
-         LIMIT 10`,
+         ORDER BY node_id`,
         { uuid },
       );
 
-      for (const row of rows) {
-        const attrs = JSON.parse(String(row.attributes || '{}'));
-        if (attrs.stable_path === uuid || attrs.uuid === uuid) {
-          return {
-            ok: true,
-            data: {
-              node_id: Number(row.node_id),
-              namespace: String(row.namespace),
-              concept: String(row.concept),
-              metamodel: String(row.metamodel),
-              attributes: attrs,
-            },
-          };
-        }
+      const matches = rows.map(row => ({
+        node_id: Number(row.node_id), namespace: String(row.namespace),
+        concept: String(row.concept), metamodel: String(row.metamodel),
+        attributes: JSON.parse(String(row.attributes || '{}')) as Record<string, unknown>,
+      })).filter(node => node.attributes.stable_path === uuid || node.attributes.uuid === uuid);
+      if (matches.length > 1) {
+        return { ok: false, error: `Ambiguous UUID or stable path "${uuid}": found ${matches.length} nodes; resolve the target within its namespace` };
       }
+      if (matches.length === 1) return { ok: true, data: matches[0] };
 
       return { ok: false, error: `No node found with UUID "${uuid}"` };
     },
@@ -830,6 +893,328 @@ export function createInstanceService(dbModule: IDbModule, logger?: ImportLogger
       }
 
       return { ok: true, data: results };
+    },
+
+    // -----------------------------------------------------------------------
+    // getAggregatedRelationships
+    // -----------------------------------------------------------------------
+    async getAggregatedRelationships(nodeId: number, depth?: number): Promise<Result<AggregatedRelationshipsResult>> {
+      // A non-finite or fractional request is a caller bug, not a reason to
+      // fail a read: `Math.trunc(NaN)` is NaN and `Math.max` propagates it, so
+      // the default is applied before clamping rather than after.
+      const requested = Number.isFinite(depth) ? Math.trunc(depth as number) : 1;
+      const levels = Math.min(AGGREGATION_MAX_DEPTH, Math.max(1, requested));
+      const rootRows = await dbModule.runQuery(
+        `MATCH (ci:RIA_UNIV_ConceptInstance {node_id: $nodeId})
+         RETURN ci.node_id AS node_id, ci.namespace AS namespace, ci.concept AS concept, ci.attributes AS attributes`,
+        { nodeId },
+      );
+      if (rootRows.length === 0) {
+        return { ok: false, error: `ConceptInstance with node_id ${nodeId} not found` };
+      }
+      const rootAttrs = JSON.parse(String(rootRows[0].attributes || '{}'));
+      const root: AggregatedRelationshipContainer = {
+        node_id: nodeId,
+        namespace: String(rootRows[0].namespace),
+        concept: String(rootRows[0].concept),
+        ...relationshipNodeLabel(rootAttrs, String(rootRows[0].concept), nodeId),
+      };
+
+      // 1. Containment relationship names, global: who-contains-whom is a fixed
+      // per-metamodel property of the relationship, not of any particular edge.
+      const containmentRows = await dbModule.runQuery(
+        `MATCH (r:RIA_META_Relationship) WHERE r.is_containment = true RETURN r.name AS name`,
+      );
+      const containmentRels = [...new Set(containmentRows.map((row) => String(row.name)))];
+
+      // 2. Walk the subtree down from the root through containment edges, so
+      // every descendant's own relationships can be rolled up to the root.
+      const subtreeIds = new Set<number>([nodeId]);
+      let frontier = [nodeId];
+      let truncated = false;
+      while (frontier.length > 0 && containmentRels.length > 0) {
+        if (subtreeIds.size >= AGGREGATION_MAX_SUBTREE_NODES) { truncated = true; break; }
+        const childRows = await dbModule.runQuery(
+          `MATCH (ri:RIA_UNIV_RelationshipInstance)
+           WHERE ri.source_node_id IN $ids AND ri.relationship IN $containmentRels
+           RETURN DISTINCT ri.target_node_id AS node_id`,
+          { ids: frontier, containmentRels },
+        );
+        const next: number[] = [];
+        for (const row of childRows) {
+          const id = Number(row.node_id);
+          if (!subtreeIds.has(id)) { subtreeIds.add(id); next.push(id); }
+        }
+        frontier = next;
+      }
+
+      // 3. Every relationship crossing the subtree boundary, in either
+      // direction, excluding anything purely internal to the subtree.
+      //
+      // All three conditions are the engine's to apply, which is the point:
+      // both queries used to select everything touching the subtree and discard
+      // the internal and containment rows in JS. On a 30k-node subtree that
+      // marshalled 196,532 rows to keep 42,667 — and after grouping, to show
+      // 837. Measured on that selection: the outgoing query falls from 3.3s to
+      // 1.5s and the incoming from 2.4s to 1.0s. A narrower selection gains the
+      // same proportion (167ms to 69ms for an 811-node subtree).
+      //
+      // An empty `containmentRels` is safe here: `NOT x IN []` is true, so a
+      // metamodel declaring no containment filters nothing, which is correct.
+      //
+      // Both directions now read `RIA_UNIV_RelationshipInstance`. The incoming
+      // one used to traverse the `RIA_UNIV_INSTANCE_REL` graph edges instead,
+      // which made the two directions disagree about which table is
+      // authoritative — and that table is the derived one, rebuilt from these
+      // rows on load. Verified on the reference corpus: both return the same
+      // 88,487 incoming rows for this subtree.
+      //
+      // Intra-namespace only for now (CGraph, the first consumer, never
+      // crosses a namespace) — extend with the CROSSNS_INSTANCE_REL tables,
+      // mirrored the same way getRelationships does, if a cross-namespace
+      // caller needs this later.
+      const subtreeIdList = [...subtreeIds];
+      const outRows = await dbModule.runQuery(
+        `MATCH (ri:RIA_UNIV_RelationshipInstance)
+         WHERE ri.source_node_id IN $ids
+           AND NOT ri.relationship IN $containmentRels
+           AND NOT ri.target_node_id IN $ids
+         RETURN ri.source_node_id AS source, ri.target_node_id AS target, ri.relationship AS relationship`,
+        { ids: subtreeIdList, containmentRels },
+      );
+      const inRows = await dbModule.runQuery(
+        `MATCH (ri:RIA_UNIV_RelationshipInstance)
+         WHERE ri.target_node_id IN $ids
+           AND NOT ri.relationship IN $containmentRels
+           AND NOT ri.source_node_id IN $ids
+         RETURN ri.source_node_id AS source, ri.target_node_id AS target, ri.relationship AS relationship`,
+        { ids: subtreeIdList, containmentRels },
+      );
+      // Every row is boundary-crossing and non-containment by construction, so
+      // the only thing left to do is collapse parallel instances of the same
+      // (source, target, relationship) triple — the grouping below counts
+      // relationships, not stored edges.
+      const crossing: { source: number; target: number; relationship: string }[] = [];
+      const seenEdge = new Set<string>();
+      for (const row of [...outRows, ...inRows]) {
+        const source = Number(row.source);
+        const target = Number(row.target);
+        const relationship = String(row.relationship);
+        const key = `${source}:${target}:${relationship}`;
+        if (seenEdge.has(key)) continue;
+        seenEdge.add(key);
+        crossing.push({ source, target, relationship });
+      }
+
+      if (crossing.length === 0) {
+        return { ok: true, data: { root, containers: [], edges: [], truncated, depth: levels, requestedDepth: levels } };
+      }
+
+      // 4. Containment parents for every endpoint and everything above it, one
+      // query per *level* of the chain rather than one per node.
+      //
+      // This used to be a per-node `LIMIT 1` lookup behind a cache, awaited in
+      // sequence. It is the same number of table scans as nodes asked about, and
+      // the table holds every relationship in the namespace, so the cost grew
+      // with the corpus times the neighbourhood. Measured on a 264k-edge
+      // `CGraphV2` import at ~5-7ms per lookup: selecting `PowertrainManagement`
+      // spent 5.9s here across 955 lookups, and selecting `BSw` spent 178s
+      // across 31,795 — the rest of the read, including both boundary queries,
+      // was under 200ms. Batching the same work by level makes it 7-9 queries
+      // and 100-800ms, because a scan that resolves one id resolves ten thousand
+      // for the same effort.
+      //
+      // Deliberately seeded from the endpoints rather than loading the whole
+      // containment forest in a single query, which was the other candidate:
+      // the forest is 68,901 rows on that corpus and marshalling it costs 1.3s,
+      // more than the level-batched walk even for the widest selection.
+      const parents = new Map<number, number | null>();
+      if (containmentRels.length > 0) {
+        let wanted = [...new Set([...crossing.flatMap((edge) => [edge.source, edge.target]), nodeId])];
+        for (let hop = 0; hop < AGGREGATION_MAX_ANCESTOR_HOPS && wanted.length > 0; hop++) {
+          const parentRows = await dbModule.runQuery(
+            `MATCH (ri:RIA_UNIV_RelationshipInstance)
+             WHERE ri.target_node_id IN $ids AND ri.relationship IN $containmentRels
+             RETURN ri.target_node_id AS child, ri.source_node_id AS parent`,
+            { ids: wanted, containmentRels },
+          );
+          // Recorded before the rows are read, so an id the query returned
+          // nothing for is known to have no containment parent rather than
+          // being asked about again on the next level.
+          for (const id of wanted) if (!parents.has(id)) parents.set(id, null);
+          const next: number[] = [];
+          for (const row of parentRows) {
+            const child = Number(row.child);
+            const parent = Number(row.parent);
+            // First parent wins, which is what the old `LIMIT 1` did for an
+            // element with more than one containment parent.
+            if (parents.get(child) === null) parents.set(child, parent);
+            if (!parents.has(parent)) next.push(parent);
+          }
+          wanted = [...new Set(next)];
+        }
+      }
+      const parentOf = (id: number): number | null => parents.get(id) ?? null;
+      // The root's own containment parent: the "sibling level" every external
+      // partner gets rolled up to. It is in the closure above because `nodeId`
+      // seeds it.
+      const rootParentId = parentOf(nodeId);
+
+      // 5. Resolve each endpoint to its *containment path*: the chain of
+      // containers it is reportable under, outermost first.
+      //
+      // The outermost element is what the flat rollup has always used — for an
+      // external endpoint, the ancestor whose immediate containment parent is
+      // the same as the root's (both `null`, meaning top-level, included), i.e.
+      // a sibling of the root; for an internal one, the root itself. The rest
+      // of the chain is the part the previous implementation computed and threw
+      // away, and it is the only thing `depth` needs: level *n* terminates an
+      // edge at `path[n - 1]`, and the elements before it are the frames that
+      // have to be drawn around it.
+      //
+      // An endpoint whose chain never reaches the sibling level (e.g. an
+      // external symbol with no owning file) tops out at its own topmost
+      // ancestor instead, so its path is shorter and a deeper request simply
+      // has nothing further to descend to.
+
+      /**
+       * Containment path for one endpoint, outermost first.
+       *
+       * The two cases differ in where the walk stops, not in how it walks: an
+       * internal endpoint stops *at* the root, an external one stops at the
+       * node whose parent is the root's parent. Both are capped by
+       * `AGGREGATION_MAX_ANCESTOR_HOPS`, after which whatever was reached is
+       * treated as the outermost container — the same fallback the flat rollup
+       * used, and the reason a cycle in containment data cannot hang this.
+       */
+      const pathOf = (endpointId: number): number[] => {
+        const internal = subtreeIds.has(endpointId);
+        const upward = [endpointId];
+        for (let hop = 0; hop < AGGREGATION_MAX_ANCESTOR_HOPS; hop++) {
+          const current = upward[upward.length - 1];
+          if (internal && current === nodeId) break;
+          const parent = parentOf(current);
+          if (parent === null) break;
+          if (!internal && parent === rootParentId) break;
+          upward.push(parent);
+          if (internal && parent === nodeId) break;
+        }
+        // An internal endpoint is reportable under the root by definition —
+        // the subtree walk found it from there. Anchoring the path explicitly
+        // keeps that invariant even when the upward walk disagrees, which it
+        // can where an element has more than one containment parent and the
+        // first-parent-wins rule picks the other one. Without this, such an
+        // endpoint would be reported outside the root at `depth: 1`, which the
+        // flat rollup never did.
+        if (internal && upward[upward.length - 1] !== nodeId) upward.push(nodeId);
+        return upward.reverse();
+      };
+
+      // The paths themselves do not depend on `depth` — the walk goes all the
+      // way up either way — so this is computed once and every candidate depth
+      // is then just an index into it. That is what makes the size guard below
+      // affordable: trying a shallower level costs no further queries.
+      const pathCache = new Map<number, number[]>();
+      for (const endpointId of new Set(crossing.flatMap((edge) => [edge.source, edge.target]))) {
+        pathCache.set(endpointId, pathOf(endpointId));
+      }
+
+      /**
+       * What one candidate level produces: the containers it reaches, how they
+       * nest, and the grouped edges between them.
+       *
+       * Grouping lives here rather than in a later step because its size is
+       * half of what the budget is checked against, and the chosen level's
+       * groups are exactly what the result needs — so nothing is recomputed.
+       */
+      const resolveAtDepth = (candidate: number) => {
+        const parentById = new Map<number, number>();
+        const reachable = new Set<number>();
+        for (const path of pathCache.values()) {
+          const limit = Math.min(candidate, path.length);
+          for (let index = 0; index < limit; index++) {
+            reachable.add(path[index]);
+            if (index > 0) parentById.set(path[index], path[index - 1]);
+          }
+        }
+        // The root is reported separately, so it is not a partner — but it
+        // remains a legitimate `parentContainerId` for the boxes inside it.
+        reachable.delete(nodeId);
+
+        /** The box an endpoint's edge terminates at: the deepest container this level allows. */
+        const containerFor = (endpointId: number): number => {
+          const path = pathCache.get(endpointId)!;
+          return path[Math.min(candidate, path.length) - 1];
+        };
+        const groups = new Map<string, AggregatedRelationshipEdge>();
+        for (const edge of crossing) {
+          const sourceContainerId = containerFor(edge.source);
+          const targetContainerId = containerFor(edge.target);
+          // A partner whose own container resolves back to the root (e.g. the
+          // partner's "sibling" ancestor search bottomed out inside the root's
+          // own chain) collapses to a self-loop-free internal edge; skip it.
+          if (sourceContainerId === targetContainerId) continue;
+          const key = `${sourceContainerId}:${targetContainerId}:${edge.relationship}`;
+          const existing = groups.get(key);
+          if (existing) { existing.count += 1; } else {
+            groups.set(key, { sourceContainerId, targetContainerId, relationship: edge.relationship, count: 1 });
+          }
+        }
+        return { reachable, parentById, groups };
+      };
+
+      // 6. Settle on the deepest level that fits the budget, then fetch display
+      // data for the containers it reaches — the terminating boxes and the
+      // frames around them.
+      //
+      // Downwards from the request rather than upwards from 1, because the
+      // common case is that the request fits and costs one pass. The loop
+      // cannot run past level 1, which is accepted unconditionally.
+      let depthApplied = levels;
+      let resolved = resolveAtDepth(depthApplied);
+      while (
+        depthApplied > 1
+        && (resolved.reachable.size > AGGREGATION_MAX_CONTAINERS || resolved.groups.size > AGGREGATION_MAX_EDGES)
+      ) {
+        depthApplied -= 1;
+        resolved = resolveAtDepth(depthApplied);
+      }
+      const { reachable, parentById, groups } = resolved;
+      const containerIds = [...reachable];
+      const containerAttrRows = containerIds.length > 0
+        ? await dbModule.runQuery(
+            `MATCH (ci:RIA_UNIV_ConceptInstance) WHERE ci.node_id IN $ids
+             RETURN ci.node_id AS node_id, ci.namespace AS namespace, ci.concept AS concept, ci.attributes AS attributes`,
+            { ids: containerIds },
+          )
+        : [];
+      const containers: AggregatedRelationshipContainer[] = containerAttrRows.map((row) => {
+        const attrs = JSON.parse(String(row.attributes || '{}'));
+        const concept = String(row.concept);
+        const containerId = Number(row.node_id);
+        const parentContainerId = parentById.get(containerId);
+        return {
+          node_id: containerId,
+          namespace: String(row.namespace),
+          concept,
+          ...relationshipNodeLabel(attrs, concept, containerId),
+          // Omitted rather than set to `undefined` so a `depth: 1` payload is
+          // byte-identical to what this returned before the parameter existed.
+          ...(parentContainerId !== undefined ? { parentContainerId } : {}),
+        };
+      });
+
+      return {
+        ok: true,
+        data: {
+          root,
+          containers,
+          edges: [...groups.values()],
+          truncated,
+          depth: depthApplied,
+          requestedDepth: levels,
+        },
+      };
     },
   };
 }

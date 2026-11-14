@@ -4,6 +4,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { stageReleaseLicenses } = require('./license-bundle.cjs');
 const { validateRendererPackage } = require('./renderer-package.cjs');
+const { bundleWorker } = require('./bundle-worker.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const desktopHostDir = path.resolve(__dirname, '..');
@@ -14,6 +15,7 @@ const releaseDir = path.join(desktopHostDir, '.release');
 const appDir = path.join(releaseDir, 'app');
 const sidecarDir = path.join(releaseDir, 'sidecar');
 const portableGitDir = path.join(releaseDir, 'git');
+const riagraphStageDir = path.join(releaseDir, 'riagraph');
 const sourceIconPath = path.join(desktopHostDir, 'logo', 'icon_1024.png');
 const buildIconsDir = path.join(desktopHostDir, 'build', 'icons');
 
@@ -28,6 +30,7 @@ const workspacePackages = [
   { name: '@riacore/importer-arxml', dir: path.join(repoRoot, 'packages', 'importers', 'arxml-core') },
   { name: '@riacore/importer-sn', dir: path.join(repoRoot, 'packages', 'importers', 'sn-core') },
   { name: '@riacore/importer-sysml-v2', dir: path.join(repoRoot, 'packages', 'importers', 'sysml-v2-core') },
+  { name: '@riacore/importer-cgraph', dir: path.join(repoRoot, 'packages', 'importers', 'cgraph-core') },
   // Workspace packages, so they must be staged as dist/ + package.json like their
   // siblings. Left off this list they were classified as *external* deps and copied
   // wholesale, which dragged their pnpm node_modules junction farms into the package.
@@ -401,7 +404,6 @@ function writeAppPackageJson(topLevel) {
     );
     dependencies[name] = packageJson.version;
   }
-
   const packagedAppPackageJson = {
     name: desktopPackageJson.name,
     version: rootPackageJson.version,
@@ -603,6 +605,51 @@ function assertPackagedPathLengths() {
   }
 }
 
+/** The platform-arch the package targets (see copySidecarNode and electron-builder.yml). */
+function targetPlatform() {
+  return process.platform === 'darwin' ? 'darwin-arm64' : `${process.platform}-x64`;
+}
+
+/**
+ * RiaGraph, the graph engine a workspace can select instead of (or next to)
+ * ladybug in its graph-engine.json. The binding pinned in
+ * apps/desktop-host/riagraph.lock.json and staged in vendor/riagraph-core by
+ * scripts/fetch-riagraph.mjs is staged in .release/riagraph/<platform> and
+ * ships as resources/vendor/riagraph-core/<platform> (electron-builder.yml),
+ * which the desktop host names to the worker. A package without it cannot open such a
+ * workspace, so it is required; RIACORE_PACKAGE_WITHOUT_RIAGRAPH=1 builds a
+ * local package without it anyway.
+ */
+function copyRiaGraphBinding() {
+  const platform = targetPlatform();
+  // electron-builder's extraResources entry needs the directory even when empty.
+  fs.mkdirSync(riagraphStageDir, { recursive: true });
+  const source = path.join(repoRoot, 'vendor', 'riagraph-core', platform);
+  const lock = JSON.parse(fs.readFileSync(path.join(desktopHostDir, 'riagraph.lock.json'), 'utf8'));
+  let problem = null;
+  if (!fs.existsSync(path.join(source, 'riagjs.node'))) {
+    problem = 'it is not staged';
+  } else {
+    const info = JSON.parse(fs.readFileSync(path.join(source, 'BUILD_INFO.json'), 'utf8'));
+    if (info.commit !== lock.commit) problem = `the staged build is ${info.commit}, the lock pins ${lock.commit}`;
+    else if (info.platform !== platform) problem = `the staged build is for ${info.platform}`;
+  }
+  if (problem) {
+    const message = `RiaGraph ${lock.version} for ${platform}: ${problem} in vendor/riagraph-core/${platform}. ` +
+      `Run: node apps/desktop-host/scripts/fetch-riagraph.mjs --platform ${platform}`;
+    if (process.env.RIACORE_PACKAGE_WITHOUT_RIAGRAPH === '1') {
+      console.warn(`[RiaCore] WARNING: packaging without RiaGraph (RIACORE_PACKAGE_WITHOUT_RIAGRAPH=1). ${message}`);
+      return;
+    }
+    throw new Error(message);
+  }
+  // Not under app/node_modules: electron-builder collects those from the pnpm
+  // workspace, which has no RiaGraph. extraResources copies it as it is, to
+  // resources/vendor/riagraph-core/<platform>, where app-core looks for it.
+  copyDir(source, path.join(riagraphStageDir, platform));
+  console.log(`[RiaCore] Staged RiaGraph ${lock.version} (${lock.commit.slice(0, 9)}) for ${platform}`);
+}
+
 function removeDevOnlyArtifacts() {
   const devOnlyFiles = [
     path.join(appDir, 'dist', 'web-dev-server.js'),
@@ -644,12 +691,14 @@ function main() {
   fs.mkdirSync(sidecarDir, { recursive: true });
 
   copyDir(desktopDistDir, path.join(appDir, 'dist'));
+  bundleWorker(appDir);
   copyDir(rendererDistDir, path.join(appDir, 'renderer'));
   validateRendererPackage(appDir);
   removeDevOnlyArtifacts();
 
   workspacePackages.forEach(copyWorkspacePackage);
   copyExternalDeps(topLevel, nested);
+  copyRiaGraphBinding();
   copyProfileAssets();
   copyAboutIcon();
   writeAppPackageJson(topLevel);

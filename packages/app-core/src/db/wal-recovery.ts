@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { packagedAssetPath } from '@riacore/importer-sdk';
 /**
  * Crash-safe probing of a database whose write-ahead log was left behind by an
  * unclean shutdown.
@@ -59,6 +60,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { WAL_PROBE_ERROR_PREFIX } from './wal-probe-protocol.js';
+import { walProbeTarget } from './graph-engine.js';
 
 /** Hard cap on the probe child. A replay that hangs is as unusable as one that aborts. */
 const PROBE_TIMEOUT_MS = 60_000;
@@ -111,6 +113,8 @@ function resolveProbeChildScript(): string | null {
   const override = process.env.RIACORE_WAL_PROBE_SCRIPT;
   if (override && fs.existsSync(override)) return override;
 
+  const packaged = packagedAssetPath('node_modules/@riacore/app-core/dist/db/wal-probe-child.js');
+  if (packaged) return packaged;
   const candidate = path.join(__dirname, 'wal-probe-child.js');
   return fs.existsSync(candidate) ? candidate : null;
 }
@@ -122,8 +126,10 @@ function resolveProbeChildScript(): string | null {
  * Never rejects. Every failure mode is expressed as a `WalProbeResult` so the
  * caller can branch on it directly.
  */
-export async function probeDbOpen(dbPath: string): Promise<WalProbeResult> {
-  const script = resolveProbeChildScript();
+export async function probeDbOpen(dbPath: string, engineArgs: string[] = []): Promise<WalProbeResult> {
+  let script: string | null;
+  try { script = resolveProbeChildScript(); }
+  catch (error) { return { outcome: 'unavailable', reason: String(error) }; }
   if (!script) {
     return { outcome: 'unavailable', reason: 'WAL probe child script not found next to the compiled db module' };
   }
@@ -139,7 +145,7 @@ export async function probeDbOpen(dbPath: string): Promise<WalProbeResult> {
 
     // `process.execPath` is the Node runtime already hosting the worker, so the
     // child has the same ABI and resolves the same native binding.
-    const child = spawn(process.execPath, [script, dbPath], {
+    const child = spawn(process.execPath, [script, dbPath, ...engineArgs], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -195,14 +201,16 @@ export async function detectUnreplayableWal(
   dbPath: string,
   logger?: { info?: (m: string, c?: Record<string, unknown>) => void; warn?: (m: string, c?: Record<string, unknown>) => void },
 ): Promise<Extract<WalProbeResult, { outcome: 'fatal' }> | null> {
-  if (!hasPendingWal(dbPath)) return null;
+  // The primary engine's own file and binding (ladybug: `dbPath` itself, no extra args).
+  const target = walProbeTarget(dbPath);
+  if (!hasPendingWal(target.dbPath)) return null;
 
   logger?.info?.('Pending write-ahead log found — probing replay in a child process before opening in-process', {
     dbPath,
-    walPath: walPathFor(dbPath),
+    walPath: walPathFor(target.dbPath),
   });
 
-  const probe = await probeDbOpen(dbPath);
+  const probe = await probeDbOpen(target.dbPath, target.args);
 
   switch (probe.outcome) {
     case 'ok':
@@ -223,7 +231,7 @@ export async function detectUnreplayableWal(
     case 'fatal':
       logger?.warn?.('WAL replay aborted the probe process — the write-ahead log cannot be replayed safely', {
         dbPath,
-        walPath: walPathFor(dbPath),
+        walPath: walPathFor(target.dbPath),
         exitCode: probe.code,
         signal: probe.signal,
       });

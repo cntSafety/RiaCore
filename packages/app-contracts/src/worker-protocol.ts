@@ -64,6 +64,13 @@ export interface WorkerErrorResponse {
   id: string;
   ok: false;
   error: string;
+  /**
+   * The request needs a new worker process and changed nothing: the workspace
+   * runs on the other native graph engine than the one this worker has
+   * loaded, and the two never share a process. The manager restarts the
+   * worker and sends the request again.
+   */
+  restartWorker?: boolean;
 }
 
 /** Fatal initialization error */

@@ -174,15 +174,132 @@ export async function batchInsertNodes(
   }
 }
 
-export const EDGE_BATCH_SIZE = 200;
+/**
+ * Rows per edge-creation statement.
+ *
+ * The row list travels as a `$rows` parameter, not as inlined Cypher text, so
+ * the statement itself has a fixed size and batch size no longer trades off
+ * against statement length. It only bounds peak memory per statement.
+ *
+ * Was 200 while the list was inlined: each batch then produced a multi-KB
+ * statement that had to be parsed and planned from scratch, which cost about
+ * 245us per edge on its own — more than the insert itself (measured at 20k
+ * nodes: 331us/edge inlined vs 24us/edge parameterized).
+ */
+export const EDGE_BATCH_SIZE = 2000;
+
+/**
+ * Build the UNWIND edge-creation statement for a relationship table.
+ *
+ * Two points to the shape, both measured (20k concept instances, 20k edges):
+ *
+ *  - The rows travel as `$rows`. Inlining them as Cypher text made every batch
+ *    a fresh statement to parse and plan: 331us/edge, independent of data size.
+ *
+ *  - Each endpoint gets its OWN `MATCH` with the key inside the node pattern,
+ *    which RiaGraph resolves as a primary-key lookup: 24us/edge, flat from 2k
+ *    to 70k concept instances. The comma-joined alternative
+ *    (`MATCH (src:T), (tgt:T) WHERE src.node_id = ... AND tgt.node_id = ...`)
+ *    is planned as a join whose cost grows with namespace size — 27us/edge at
+ *    2k instances but 95us/edge at 20k — which is what made loading a large
+ *    namespace from ria-data take minutes.
+ *
+ * NOTE — ladybug: the two-MATCH shape is correct on RiaGraph (the default and
+ * only shipped engine) but NOT on the `ladybug` fallback, whose planner
+ * evaluates the second MATCH once against the first UNWIND row and reuses that
+ * binding for every row, wiring every edge in the batch to the first row's
+ * target. Verified directly: 50 distinct pairs in one batch produced 50 edges
+ * all sharing the first row's target. ladybug needs the comma-joined form and
+ * pays the scan cost for it; it is on its way out, so this takes the fast path
+ * unconditionally rather than branching per engine.
+ */
+function buildEdgeCreateQuery(relTable: string, extraCols: readonly string[] = []): string {
+  const relTableDef = CANONICAL_REL_TABLES.find(t => t.name === relTable);
+  if (!relTableDef) throw new Error(`Canonical relationship table not found: ${relTable}`);
+  const cols = relTableDef.columns ?? [];
+  const known = new Set(['edge_instance_id', 'relationship', 'metamodel', ...extraCols]);
+  const propParts = cols
+    .map(col => `${col.name}: ${known.has(col.name) ? `item.${col.name}` : 'null'}`)
+    .join(', ');
+  return `UNWIND $rows AS item
+     MATCH (src:RIA_UNIV_ConceptInstance {node_id: item.src})
+     MATCH (tgt:RIA_UNIV_ConceptInstance {node_id: item.tgt})
+     CREATE (src)-[:${relTable} { ${propParts} }]->(tgt)`;
+}
+
+/** A relationship instance after insertion, ready to be wired as a graph edge. */
+export interface InsertedRelationshipInstance {
+  source_node_id: number;
+  target_node_id: number;
+  edge_id: number;
+  relationship: string;
+  metamodel: string;
+}
+
+/**
+ * Insert `RIA_UNIV_RelationshipInstance` rows and return them with the
+ * `edge_id` the engine assigned, ready for {@link createInstanceRelEdges}.
+ *
+ * `edge_id` is a SERIAL, so it only exists after the CREATE. This returns it
+ * from the same statement rather than reading it back afterwards. The previous
+ * approach re-queried
+ *   `MATCH (ri:RIA_UNIV_RelationshipInstance)
+ *    WHERE ri.namespace = ... AND ri.relationship = ...`
+ * once per relationship file. Neither column is the table's key (`edge_id`
+ * is), so each of those was a full scan of a table that grows as the load
+ * proceeds — quadratic in the number of relationship files.
+ *
+ * It also dropped edges. The scan's results were keyed by
+ * `source_node_id:target_node_id` in a first-wins map, so two relationship
+ * instances between the SAME pair of nodes — legitimate when a metamodel
+ * allows parallel edges of one relationship type, or when a source genuinely
+ * repeats a pair — collapsed to one entry and every instance after the first
+ * silently got no `RIA_UNIV_INSTANCE_REL` edge. Returning the ids from the
+ * CREATE gives one row per created instance, so parallel edges survive.
+ */
+export async function insertRelationshipInstances(
+  relRows: Record<string, unknown>[],
+  runner: IDbModule | DbTransaction,
+  batchSize = LOAD_BATCH_SIZE,
+): Promise<InsertedRelationshipInstance[]> {
+  const query = `UNWIND $rows AS row
+CREATE (ri:RIA_UNIV_RelationshipInstance {
+  namespace:        row.namespace,
+  relationship:     row.relationship,
+  metamodel:        row.metamodel,
+  source_node_id:   row.source_node_id,
+  target_node_id:   row.target_node_id,
+  attributes:       row.attributes
+})
+RETURN ri.edge_id AS edge_id,
+       ri.source_node_id AS source_node_id,
+       ri.target_node_id AS target_node_id,
+       ri.relationship AS relationship,
+       ri.metamodel AS metamodel`;
+
+  const inserted: InsertedRelationshipInstance[] = [];
+  for (let i = 0; i < relRows.length; i += batchSize) {
+    const returned = await runner.runQuery(query, { rows: relRows.slice(i, i + batchSize) });
+    for (const row of returned) {
+      inserted.push({
+        source_node_id: Number(row.source_node_id),
+        target_node_id: Number(row.target_node_id),
+        edge_id: Number(row.edge_id),
+        relationship: String(row.relationship ?? ''),
+        metamodel: String(row.metamodel ?? ''),
+      });
+    }
+  }
+  return inserted;
+}
 
 /**
  * Create `RIA_UNIV_INSTANCE_REL` graph edges for a batch of resolved
  * relationship rows.  Derives the edge column list from `CANONICAL_REL_TABLES`
  * rather than hard-coding it, so schema changes propagate automatically.
  *
- * Uses batched UNWIND queries (EDGE_BATCH_SIZE rows per query) to avoid
- * oversized Cypher statements.
+ * Uses batched UNWIND queries (EDGE_BATCH_SIZE rows per query); see
+ * {@link buildEdgeCreateQuery} for why the statement has the shape it has.
  */
 export async function createInstanceRelEdges(
   relRows: Array<{
@@ -195,30 +312,17 @@ export async function createInstanceRelEdges(
   runner: IDbModule | DbTransaction,
   batchSize = EDGE_BATCH_SIZE,
 ): Promise<void> {
-  const relTableDef = CANONICAL_REL_TABLES.find(t => t.name === 'RIA_UNIV_INSTANCE_REL');
-  if (!relTableDef) throw new Error('Canonical relationship table not found: RIA_UNIV_INSTANCE_REL');
-  const cols = relTableDef.columns ?? [];
+  const query = buildEdgeCreateQuery('RIA_UNIV_INSTANCE_REL');
 
   for (let i = 0; i < relRows.length; i += batchSize) {
-    const batch = relRows.slice(i, i + batchSize);
-    // Build inline UNWIND list — values are safe integers/escaped strings
-    const items = batch.map(r => {
-      const props = cols.map(col => {
-        if (col.name === 'edge_instance_id') return `edge_instance_id: ${r.edge_id}`;
-        if (col.name === 'relationship')     return `relationship: '${e(r.relationship)}'`;
-        if (col.name === 'metamodel')        return `metamodel: '${e(r.metamodel)}'`;
-        return `${col.name}: null`;
-      }).join(', ');
-      return `{src: ${r.source_node_id}, tgt: ${r.target_node_id}, ${props}}`;
-    }).join(', ');
-
-    const propParts = cols.map(col => `${col.name}: item.${col.name}`).join(', ');
-    await runner.runQuery(
-      `UNWIND [${items}] AS item
-       MATCH (src:RIA_UNIV_ConceptInstance), (tgt:RIA_UNIV_ConceptInstance)
-       WHERE src.node_id = item.src AND tgt.node_id = item.tgt
-       CREATE (src)-[:RIA_UNIV_INSTANCE_REL { ${propParts} }]->(tgt)`
-    );
+    const rows = relRows.slice(i, i + batchSize).map(r => ({
+      src: r.source_node_id,
+      tgt: r.target_node_id,
+      edge_instance_id: r.edge_id,
+      relationship: r.relationship,
+      metamodel: r.metamodel,
+    }));
+    await runner.runQuery(query, { rows });
   }
 }
 
@@ -239,31 +343,22 @@ export async function createCrossNsInstanceRelEdges(
   runner: IDbModule | DbTransaction,
   batchSize = EDGE_BATCH_SIZE,
 ): Promise<void> {
-  const relTableDef = CANONICAL_REL_TABLES.find(t => t.name === 'RIA_UNIV_CROSSNS_INSTANCE_REL');
-  if (!relTableDef) throw new Error('Canonical relationship table not found: RIA_UNIV_CROSSNS_INSTANCE_REL');
-  const cols = relTableDef.columns ?? [];
+  const query = buildEdgeCreateQuery(
+    'RIA_UNIV_CROSSNS_INSTANCE_REL',
+    ['source_namespace', 'target_namespace'],
+  );
 
   for (let i = 0; i < crossNsRows.length; i += batchSize) {
-    const batch = crossNsRows.slice(i, i + batchSize);
-    const items = batch.map(r => {
-      const props = cols.map(col => {
-        if (col.name === 'edge_instance_id')  return `edge_instance_id: ${r.edge_id}`;
-        if (col.name === 'relationship')      return `relationship: '${e(r.relationship)}'`;
-        if (col.name === 'metamodel')         return `metamodel: '${e(r.metamodel)}'`;
-        if (col.name === 'source_namespace')  return `source_namespace: '${e(r.source_namespace)}'`;
-        if (col.name === 'target_namespace')  return `target_namespace: '${e(r.target_namespace)}'`;
-        return `${col.name}: null`;
-      }).join(', ');
-      return `{src: ${r.source_node_id}, tgt: ${r.target_node_id}, ${props}}`;
-    }).join(', ');
-
-    const propParts = cols.map(col => `${col.name}: item.${col.name}`).join(', ');
-    await runner.runQuery(
-      `UNWIND [${items}] AS item
-       MATCH (src:RIA_UNIV_ConceptInstance), (tgt:RIA_UNIV_ConceptInstance)
-       WHERE src.node_id = item.src AND tgt.node_id = item.tgt
-       CREATE (src)-[:RIA_UNIV_CROSSNS_INSTANCE_REL { ${propParts} }]->(tgt)`
-    );
+    const rows = crossNsRows.slice(i, i + batchSize).map(r => ({
+      src: r.source_node_id,
+      tgt: r.target_node_id,
+      edge_instance_id: r.edge_id,
+      relationship: r.relationship,
+      metamodel: r.metamodel,
+      source_namespace: r.source_namespace,
+      target_namespace: r.target_namespace,
+    }));
+    await runner.runQuery(query, { rows });
   }
 }
 

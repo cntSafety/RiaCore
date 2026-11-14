@@ -344,8 +344,8 @@ export const api = {
       window.riacore.namespaces.list(),
     createAuthored: (params: CreateAuthoredNamespaceParams): Promise<CreatedNamespaceInfo> =>
       window.riacore.namespaces.createAuthored(params),
-    getChildren: (namespace: string, parentNodeId?: number, offset?: number, limit?: number, showAll?: boolean, scopeNamespace?: string): Promise<GetChildrenResponse> =>
-      window.riacore.namespaces.getChildren({ namespace, parentNodeId, offset, limit, showAll, scopeNamespace }),
+    getChildren: (namespace: string, parentNodeId?: number, offset?: number, limit?: number, showAll?: boolean, scopeNamespace?: string, includeDefinitionMembers?: boolean): Promise<GetChildrenResponse> =>
+      window.riacore.namespaces.getChildren({ namespace, parentNodeId, offset, limit, showAll, scopeNamespace, includeDefinitionMembers }),
     getAncestorPath: (namespace: string, nodeId: number): Promise<number[]> =>
       window.riacore.namespaces.getAncestorPath({ namespace, nodeId }),
     /**
@@ -353,8 +353,8 @@ export const api = {
      * that contain it. `showAll` must match the tree's display setting, because
      * hidden concepts shift both the index and the totals.
      */
-    getNodeLocation: (namespace: string, nodeId: number, showAll?: boolean): Promise<TreeNodeLocation> =>
-      window.riacore.namespaces.getNodeLocation({ namespace, nodeId, showAll }),
+    getNodeLocation: (namespace: string, nodeId: number, showAll?: boolean, includeDefinitionMembers?: boolean): Promise<TreeNodeLocation> =>
+      window.riacore.namespaces.getNodeLocation({ namespace, nodeId, showAll, includeDefinitionMembers }),
     search: (query: string, offset?: number, limit?: number): Promise<SearchResult> =>
       window.riacore.namespaces.search({ query, offset, limit }),
     previewDeleteImpact: (namespace: string): Promise<NamespaceDeleteImpactPreview> =>
@@ -520,6 +520,8 @@ export const api = {
       window.riacore.safety.getInstance({ nodeId }),
     getRelationships: (nodeId: number): Promise<RelationshipData[]> =>
       window.riacore.safety.getRelationships({ nodeId }),
+    getAggregatedRelationships: (nodeId: number, depth?: number): Promise<import('@riacore/app-contracts').AggregatedRelationshipsResult> =>
+      window.riacore.safety.getAggregatedRelationships({ nodeId, depth }),
     createTag: (params: CreateTagParams): Promise<{ node_id: number }> =>
       window.riacore.safety.createTag(params),
     getTag: (nodeId: number): Promise<ConceptInstanceData> =>

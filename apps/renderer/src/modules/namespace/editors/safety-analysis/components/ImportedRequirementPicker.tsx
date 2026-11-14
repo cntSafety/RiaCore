@@ -17,15 +17,26 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { lazy, Suspense, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Input, Popover, Button, List, Tag, Spin, Empty, Typography, theme, App } from 'antd';
 import type { InputRef } from 'antd';
-import { SearchOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { SearchOutlined, LinkOutlined, InfoCircleOutlined, ApartmentOutlined } from '@ant-design/icons';
 import type { ConceptInstanceData } from '@riacore/app-contracts';
-import { useSearchRequirementsAcrossNamespaces } from '../hooks/useSafetyQueries';
+import { useMalfunction, useSearchRequirementsAcrossNamespaces } from '../hooks/useSafetyQueries';
 import { useLinkDirectRequirementToFm } from '../hooks/useSafetyMutations';
 import { useNamespaceConnections, useConnectMutation } from '../../../../../hooks/useNamespaceConnections';
 import { useCrossNsLinkSettings } from '../../../../../hooks/useCrossNsLinkSettings';
+import type { SelectedTreeElement } from '../types';
+
+const GenericModelBrowserModal = lazy(() => import('../../generic/GenericModelBrowserModal').then(m => ({ default: m.GenericModelBrowserModal })));
+
+/** Parent requirements remain eligible even when they have children. */
+function isImportedRequirement(concept: string): boolean {
+  return ['RequirementUsage', 'RequirementDefinition', 'requirement_usage', 'requirement_definition'].includes(concept)
+    || (concept.startsWith('need_') && concept !== 'need_document');
+}
+
+type RequirementTarget = Pick<ConceptInstanceData, 'node_id' | 'namespace'>;
 
 interface ImportedRequirementPickerProps {
   fmNodeId: number;
@@ -63,15 +74,25 @@ function getNamespaceBadgeText(req: ConceptInstanceData): string {
 export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunctionNamespace }: ImportedRequirementPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseNamespace, setBrowseNamespace] = useState('');
+  const [selecting, setSelecting] = useState(false);
+  const selectingRef = useRef(false);
   const inputRef = useRef<InputRef>(null);
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => inputRef.current?.focus(), 100);
+    return () => clearTimeout(timer);
+  }, [open]);
   const link = useLinkDirectRequirementToFm();
   const connect = useConnectMutation();
   const { message, modal } = App.useApp();
   const { token } = theme.useToken();
 
   const { data: results, isFetching, isError, error } = useSearchRequirementsAcrossNamespaces(query);
-  const { data: connectionGraph } = useNamespaceConnections();
-  const { data: linkSettings } = useCrossNsLinkSettings();
+  const { data: connectionGraph, isError: connectionError } = useNamespaceConnections();
+  const { data: linkSettings, isError: settingsError } = useCrossNsLinkSettings();
+  const malfunction = useMalfunction(browseOpen ? fmNodeId : undefined);
   const unconnectedMode = linkSettings?.unconnectedNamespaceMode ?? 'prompt';
 
   // Namespaces already connected (imported -> this malfunction's authored namespace).
@@ -83,7 +104,7 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunction
   }, [connectionGraph, malfunctionNamespace]);
 
   const isConnected = useCallback(
-    (req: ConceptInstanceData) => connectedNamespaces.has(req.namespace),
+    (req: RequirementTarget) => connectedNamespaces.has(req.namespace),
     [connectedNamespaces],
   );
 
@@ -93,52 +114,68 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunction
     return results.filter(isConnected);
   }, [results, unconnectedMode, isConnected]);
 
+  const browseNamespaces = useMemo(() => (connectionGraph?.imported ?? [])
+    .filter(ns => unconnectedMode !== 'restrict' || connectedNamespaces.has(ns.name))
+    .sort((a, b) => Number(connectedNamespaces.has(b.name)) - Number(connectedNamespaces.has(a.name)) || a.name.localeCompare(b.name))
+    .map(ns => ({ value: ns.name, label: ns.name })), [connectionGraph, connectedNamespaces, unconnectedMode]);
+  const activeBrowseNamespace = browseNamespaces.some(ns => ns.value === browseNamespace)
+    ? browseNamespace : browseNamespaces[0]?.value ?? '';
+  const selectionDisabledReason = (element: SelectedTreeElement): string | undefined => {
+    if (!browseNamespaces.some(ns => ns.value === element.namespace)) return 'This source is no longer available for linking.';
+    if (!isImportedRequirement(element.concept)) return 'Select a requirement; documents and other elements cannot be linked.';
+    if (linkedNodeIds.has(element.nodeId)) return 'This requirement is already linked.';
+    return undefined;
+  };
+
   const handleOpen = useCallback((visible: boolean) => {
     setOpen(visible);
     if (visible) {
       setQuery('');
-      setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, []);
 
-  const performLink = useCallback(async (req: ConceptInstanceData) => {
+  const performLink = useCallback(async (req: RequirementTarget) => {
     await link.mutateAsync({ failureModeNodeId: fmNodeId, requirementNodeId: req.node_id });
     setOpen(false);
     setQuery('');
+    setBrowseOpen(false);
   }, [link, fmNodeId]);
 
-  const handleSelect = (req: ConceptInstanceData) => {
-    if (linkedNodeIds.has(req.node_id)) return;
+  const finishSelection = () => { selectingRef.current = false; setSelecting(false); };
+  const handleSelect = (req: RequirementTarget) => {
+    if (selectingRef.current || linkedNodeIds.has(req.node_id)) return;
+    if (!isConnected(req) && unconnectedMode === 'restrict') return;
+    selectingRef.current = true;
+    setSelecting(true);
 
     if (isConnected(req)) {
       performLink(req).catch((err: unknown) => {
         message.error(String((err as Error)?.message ?? 'Failed to link requirement'));
-      });
+      }).finally(finishSelection);
       return;
     }
-
-    // Unreachable in "restrict" mode (unconnected matches are filtered out),
-    // but guard anyway in case settings change mid-search.
-    if (unconnectedMode === 'restrict') return;
 
     modal.confirm({
       title: 'Connect namespaces?',
       content: `"${req.namespace}" isn't connected to this analysis yet. Connect it and link the requirement? Declining creates neither the connection nor the link.`,
       okText: 'Connect & Link',
       cancelText: 'Cancel',
+      onCancel: finishSelection,
       onOk: async () => {
         try {
           await connect.mutateAsync({ sourceNamespace: req.namespace, targetNamespace: malfunctionNamespace });
           await performLink(req);
         } catch (err) {
           message.error(String((err as Error)?.message ?? 'Failed to connect and link requirement'));
+        } finally {
+          finishSelection();
         }
       },
     });
   };
 
   const content = (
-    <div style={{ width: 380 }}>
+    <div style={{ width: 380, maxWidth: 'calc(100vw - 64px)' }}>
       <Input
         ref={inputRef}
         size="small"
@@ -205,10 +242,18 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunction
           }}
         />
       )}
+      <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, marginTop: 8, paddingTop: 8 }}>
+        <Button icon={<ApartmentOutlined />} block disabled={!connectionGraph || !linkSettings || selecting} onClick={() => {
+          setOpen(false);
+          setBrowseOpen(true);
+        }}>Browse requirement hierarchy…</Button>
+        {(connectionError || settingsError) && <Typography.Text type="danger">Could not load imported sources or linking settings.</Typography.Text>}
+      </div>
     </div>
   );
 
   return (
+    <>
     <Popover
       open={open}
       onOpenChange={handleOpen}
@@ -249,5 +294,26 @@ export function ImportedRequirementPicker({ fmNodeId, linkedNodeIds, malfunction
         Link Imported
       </Button>
     </Popover>
+    {browseOpen && (
+      <Suspense fallback={<Spin description="Opening requirement browser…"><div style={{ minHeight: 40 }} /></Spin>}>
+        <GenericModelBrowserModal
+          open
+          onClose={() => setBrowseOpen(false)}
+          namespace={activeBrowseNamespace}
+          selection={{
+            targetLabel: String(malfunction.data?.attributes.has_name ?? `Malfunction #${fmNodeId}`),
+            namespaces: browseNamespaces,
+            onNamespaceChange: setBrowseNamespace,
+            disabledReason: selectionDisabledReason,
+            onConfirm: (element) => {
+              if (!selectionDisabledReason(element)) handleSelect({ node_id: element.nodeId, namespace: element.namespace });
+            },
+            isLinked: (element) => linkedNodeIds.has(element.nodeId),
+            pending: selecting,
+          }}
+        />
+      </Suspense>
+    )}
+    </>
   );
 }

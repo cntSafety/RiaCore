@@ -17,10 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
-import { App, Button, Empty, Input, Modal, Select, Space, Spin, Tag, Typography, theme } from 'antd';
-import { CheckOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from '@ant-design/icons';
+import { AsilSelect } from './components/AsilSelect';
+import { App, Button, Empty, Input, Modal, Space, Spin, Tag, Typography, theme } from 'antd';
+import { CheckOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ColumnsType } from 'antd/es/table';
 import type { NamespaceContext } from '../../../../store/workspaceStore';
 import type { ConceptInstanceData } from '@riacore/app-contracts';
@@ -30,7 +31,6 @@ import { api } from '../../../../api/riacore';
 import { DataTable } from '../../../../components/data-table';
 import { ShowInTreeTrigger } from '../../../../components/ShowInTreeTrigger';
 import { AsilTag } from './components/AsilTag';
-import { useSafetyProfileMetadata } from './hooks/useSafetyProfileMetadata';
 
 interface RequirementRow {
   nodeId: number;
@@ -95,7 +95,6 @@ interface CreateRequirementModalProps {
 function CreateRequirementModal({ open, namespace, onClose }: CreateRequirementModalProps) {
   const { message } = App.useApp();
   const createRequirement = useCreateRequirement(namespace);
-  const profile = useSafetyProfileMetadata();
   const [reqId, setReqId] = useState('');
   const [reqName, setReqName] = useState('');
   const [reqText, setReqText] = useState('');
@@ -145,37 +144,29 @@ function CreateRequirementModal({ open, namespace, onClose }: CreateRequirementM
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
           <div>
             <Typography.Text strong>Req ID</Typography.Text>
-            <Input autoFocus value={reqId} onChange={e => setReqId(e.target.value)} style={{ marginTop: 4 }} placeholder="e.g. REQ-001" />
+            <Input aria-label="Req ID" autoFocus value={reqId} onChange={e => setReqId(e.target.value)} style={{ marginTop: 4 }} placeholder="e.g. REQ-001" />
           </div>
           <div>
             <Typography.Text strong>ASIL</Typography.Text>
-            <Select
+            <AsilSelect
+              aria-label="ASIL"
               value={reqAsil}
-              onChange={setReqAsil}
-              allowClear
-              placeholder="Select ASIL"
+              onChange={(value) => setReqAsil(value ?? '')}
               style={{ width: '100%', marginTop: 4 }}
-              options={profile.asilGroups.map((g) => ({
-                label: g.label,
-                options: g.options.map((v) => ({
-                  value: v,
-                  label: <AsilTag asil={v} />,
-                })),
-              }))}
             />
           </div>
         </div>
         <div>
           <Typography.Text strong>Name <Typography.Text type="danger">*</Typography.Text></Typography.Text>
-          <Input value={reqName} onChange={e => setReqName(e.target.value)} style={{ marginTop: 4 }} placeholder="Requirement name" />
+          <Input aria-label="Name" value={reqName} onChange={e => setReqName(e.target.value)} style={{ marginTop: 4 }} placeholder="Requirement name" />
         </div>
         <div>
           <Typography.Text strong>Description</Typography.Text>
-          <Input.TextArea rows={3} value={reqText} onChange={e => setReqText(e.target.value)} style={{ marginTop: 4 }} placeholder="Requirement text" />
+          <Input.TextArea aria-label="Description" autoSize={{ minRows: 3 }} value={reqText} onChange={e => setReqText(e.target.value)} style={{ marginTop: 4 }} placeholder="Requirement text" />
         </div>
         <div>
           <Typography.Text strong>Link</Typography.Text>
-          <Input value={reqLink} onChange={e => setReqLink(e.target.value)} style={{ marginTop: 4 }} placeholder="https://..." />
+          <Input aria-label="Link" value={reqLink} onChange={e => setReqLink(e.target.value)} style={{ marginTop: 4 }} placeholder="https://..." />
         </div>
       </Space>
     </Modal>
@@ -195,7 +186,6 @@ interface EditRequirementModalProps {
 function EditRequirementModal({ record, namespace, onClose }: EditRequirementModalProps) {
   const { message } = App.useApp();
   const updateRequirement = useUpdateRequirement(namespace);
-  const profile = useSafetyProfileMetadata();
   const [reqId, setReqId] = useState('');
   const [reqName, setReqName] = useState('');
   const [reqText, setReqText] = useState('');
@@ -221,10 +211,11 @@ function EditRequirementModal({ record, namespace, onClose }: EditRequirementMod
     reqLink !== record.reqLink;
 
   const handleSave = async () => {
+    if (!reqName.trim()) { message.warning('Name is required'); return; }
     try {
       await updateRequirement.mutateAsync({
         nodeId: record.nodeId,
-        updates: { req_id: reqId, req_name: reqName, req_text: reqText, req_asil: reqAsil, req_linked_to: reqLink },
+        updates: { req_id: reqId, req_name: reqName.trim(), req_text: reqText, req_asil: reqAsil, req_linked_to: reqLink },
       });
       message.success('Requirement updated');
       onClose();
@@ -240,7 +231,7 @@ function EditRequirementModal({ record, namespace, onClose }: EditRequirementMod
       onCancel={onClose}
       footer={[
         <Button key="cancel" onClick={onClose}>Cancel</Button>,
-        <Button key="save" type="primary" icon={<CheckOutlined />} onClick={handleSave} loading={updateRequirement.isPending} disabled={!isDirty}>Save</Button>,
+        <Button key="save" type="primary" icon={<CheckOutlined />} onClick={handleSave} loading={updateRequirement.isPending} disabled={!isDirty || !reqName.trim()}>Save</Button>,
       ]}
       width={560}
       destroyOnClose
@@ -249,37 +240,29 @@ function EditRequirementModal({ record, namespace, onClose }: EditRequirementMod
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
           <div>
             <Typography.Text strong>Req ID</Typography.Text>
-            <Input autoFocus value={reqId} onChange={e => setReqId(e.target.value)} style={{ marginTop: 4 }} />
+            <Input aria-label="Req ID" autoFocus value={reqId} onChange={e => setReqId(e.target.value)} style={{ marginTop: 4 }} />
           </div>
           <div>
             <Typography.Text strong>ASIL</Typography.Text>
-            <Select
+            <AsilSelect
+              aria-label="ASIL"
               value={reqAsil || undefined}
-              onChange={setReqAsil}
-              allowClear
-              placeholder="Select ASIL"
+              onChange={(value) => setReqAsil(value ?? '')}
               style={{ width: '100%', marginTop: 4 }}
-              options={profile.asilGroups.map((g) => ({
-                label: g.label,
-                options: g.options.map((v) => ({
-                  value: v,
-                  label: <AsilTag asil={v} />,
-                })),
-              }))}
             />
           </div>
         </div>
         <div>
           <Typography.Text strong>Name</Typography.Text>
-          <Input value={reqName} onChange={e => setReqName(e.target.value)} style={{ marginTop: 4 }} />
+          <Input aria-label="Name" value={reqName} onChange={e => setReqName(e.target.value)} style={{ marginTop: 4 }} />
         </div>
         <div>
           <Typography.Text strong>Description</Typography.Text>
-          <Input.TextArea rows={3} value={reqText} onChange={e => setReqText(e.target.value)} style={{ marginTop: 4 }} />
+          <Input.TextArea aria-label="Description" autoSize={{ minRows: 3 }} value={reqText} onChange={e => setReqText(e.target.value)} style={{ marginTop: 4 }} />
         </div>
         <div>
           <Typography.Text strong>Link</Typography.Text>
-          <Input value={reqLink} onChange={e => setReqLink(e.target.value)} style={{ marginTop: 4 }} />
+          <Input aria-label="Link" value={reqLink} onChange={e => setReqLink(e.target.value)} style={{ marginTop: 4 }} />
         </div>
       </Space>
     </Modal>
@@ -338,7 +321,27 @@ export function RequirementsView({ ns }: { ns: NamespaceContext }) {
     [rows],
   );
 
-  const handleNameContextMenu = async (e: React.MouseEvent, record: RequirementRow) => {
+  const handleDelete = useCallback((record: RequirementRow) => {
+    modal.confirm({
+      title: 'Delete requirement?',
+      content: `This will permanently delete "${record.reqName || record.reqId}" and unlink it from all malfunctions.`,
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await deleteRequirement.mutateAsync(record.nodeId);
+          message.success('Requirement deleted');
+        } catch (err: unknown) {
+          message.error(String((err as Error)?.message ?? 'Failed to delete requirement'));
+          // Keep the confirmation open so a failed deletion can be retried.
+          throw err;
+        }
+      },
+    });
+  }, [deleteRequirement, message, modal]);
+
+  const handleNameContextMenu = useCallback(async (e: React.MouseEvent, record: RequirementRow) => {
     e.preventDefault();
     e.stopPropagation();
     if (navigatingRef.current) return;
@@ -358,26 +361,12 @@ export function RequirementsView({ ns }: { ns: NamespaceContext }) {
       } else if (selectedId === 'edit') {
         setEditingRecord(record);
       } else if (selectedId === 'delete') {
-        modal.confirm({
-          title: 'Delete requirement?',
-          content: 'This will permanently delete the requirement and unlink it from all malfunctions.',
-          okText: 'Delete',
-          okButtonProps: { danger: true },
-          cancelText: 'Cancel',
-          onOk: async () => {
-            try {
-              await deleteRequirement.mutateAsync(record.nodeId);
-              message.success('Requirement deleted');
-            } catch (err: unknown) {
-              message.error(String((err as Error)?.message ?? 'Failed to delete requirement'));
-            }
-          },
-        });
+        handleDelete(record);
       }
     } finally {
       navigatingRef.current = false;
     }
-  };
+  }, [handleDelete, ns.name]);
 
   const columns = useMemo<ColumnsType<RequirementRow>>(() => [
     {
@@ -458,8 +447,23 @@ export function RequirementsView({ ns }: { ns: NamespaceContext }) {
         );
       },
     },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [asilFilters, linkedMalfunctionFilters, ns.name]);
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 160,
+      fixed: 'right',
+      render: (_, record) => (
+        <Space size={4}>
+          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => setEditingRecord(record)}>
+            Edit
+          </Button>
+          <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
+            Delete
+          </Button>
+        </Space>
+      ),
+    },
+  ], [asilFilters, linkedMalfunctionFilters, ns.name, handleNameContextMenu, handleDelete]);
 
   if (requirementsQuery.isLoading) {
     return <div style={{ padding: 48, textAlign: 'center' }}><Spin /></div>;
@@ -500,6 +504,7 @@ export function RequirementsView({ ns }: { ns: NamespaceContext }) {
         columns={columns}
         dataSource={rows}
         rowKey="nodeId"
+        scroll={{ x: 1140 }}
       />
 
       <EditRequirementModal

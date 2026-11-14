@@ -1,0 +1,46 @@
+/* Check Model uses one reading scale for ordinary and evaluated results.
+ * The theme also reaches drawers/popovers through React context. The selectors
+ * below supersede the older compact safety-editor styles only in this surface.
+ */
+.ria-checks-surface {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ria-checks-surface .ria-scope {
+  --ria-fg: var(--ria-check-fg);
+  --ria-fg-muted: var(--ria-check-muted);
+  --ria-row-hover: var(--ria-check-hover);
+  --ria-nav-active: var(--ria-check-active);
+  --ria-accent: var(--ria-check-accent);
+  font: inherit;
+}
+
+.ria-checks-surface .ria-navitem__label {
+  min-width: 0;
+  font-size: inherit;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ria-checks-surface .ria-navitem__count {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Extra specificity keeps the legacy 11px !important header rule from winning. */
+.ria-checks-surface.ria-checks .ant-table-thead > tr > th {
+  font-size: var(--ria-check-font-size) !important;
+  letter-spacing: normal;
+  color: var(--ria-check-fg) !important;
+  background: var(--ria-check-table-head) !important;
+}
+
+.ria-checks-surface.ria-checks .ant-table-tbody > tr > td {
+  font-size: var(--ria-check-font-size);
+  color: var(--ria-check-fg);
+}

@@ -39,13 +39,13 @@
  * Requirements: 1.2, 2.5, 10.2, 10.3, 12.1–12.4
  */
 
+import { AsilSelect } from './AsilSelect';
 import { useCallback, useMemo, useState } from 'react';
-import { Alert, App, Empty, Input, Modal, Select, Space, Spin, Tag, theme } from 'antd';
+import { Alert, App, Empty, Input, Modal, Space, Spin, Tag, theme } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePropagationsForComponent } from '../hooks/useSafetyQueries';
 import { usePasteMalfunction } from '../hooks/useSafetyMutations';
 import { toRows } from '../utils/malfunctionTableHelpers';
-import { AsilTag } from './AsilTag';
 import type { SelectedTreeElement } from '../types';
 import type { MalfunctionRow } from '../utils/malfunctionTableHelpers';
 import { useWorkspaceStore } from '../../../../../store/workspaceStore';
@@ -151,15 +151,6 @@ export function MalfunctionTableView({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const profile = useSafetyProfileMetadata();
-  const asilFilterOptions = useMemo(
-    () => [
-      { value: '', label: 'All ASIL' },
-      ...profile.asilGroups.flatMap((group) =>
-        group.options.map((value) => ({ value, label: value })),
-      ),
-    ],
-    [profile.asilGroups],
-  );
 
   // ── Resizable columns (shared template for header + every row) ─────────────
   const { gridTemplateColumns, totalMinWidth, widths, startResize } = useResizableColumns(
@@ -346,20 +337,12 @@ export function MalfunctionTableView({
           onSearch={(value) => setFilterText(value)}
         />
 
-        <Select
+        <AsilSelect
           size="small"
           style={{ width: 110 }}
           value={filterAsil}
-          onChange={(value) => setFilterAsil(value)}
-          options={asilFilterOptions}
-          optionRender={(option) => {
-            if (!option.value) return <span>{option.label}</span>;
-            return (
-              <Space size={4}>
-                <AsilTag asil={String(option.value)} label={option.label} fontSize={11} />
-              </Space>
-            );
-          }}
+          onChange={setFilterAsil}
+          emptyLabel="All ASIL"
         />
       </Space>
     </div>

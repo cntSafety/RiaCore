@@ -37,6 +37,10 @@ interface ImportRunStore {
   session: number;
   lastImportRunId: string | null;
   importAllResults: ImportImpactResult[] | null;
+  // Batch lifetime includes the idle gaps and content remounts between sources.
+  importAllInProgress: boolean;
+  tryStartImportAll: (session: number) => boolean;
+  endImportAll: (session: number) => void;
   setLastImportRunId: (runId: string | null, session: number) => void;
   setImportAllResults: (results: ImportImpactResult[] | null, session: number) => void;
   activeRuns: Map<string, ActiveRun>;
@@ -52,6 +56,15 @@ export const useImportRunStore = create<ImportRunStore>((set, get) => ({
   session: 0,
   lastImportRunId: null,
   importAllResults: null,
+  importAllInProgress: false,
+  tryStartImportAll: (session) => {
+    if (session !== get().session || get().importAllInProgress) return false;
+    set({ importAllInProgress: true });
+    return true;
+  },
+  endImportAll: (session) => {
+    if (session === get().session) set({ importAllInProgress: false });
+  },
   setLastImportRunId: (runId, session) => {
     if (session === get().session) set({ lastImportRunId: runId });
   },
@@ -127,6 +140,6 @@ export const useImportRunStore = create<ImportRunStore>((set, get) => ({
       clearTimeout(timer);
     }
     finishTimers.clear();
-    set((s) => ({ activeRuns: new Map(), session: s.session + 1, lastImportRunId: null, importAllResults: null }));
+    set((s) => ({ activeRuns: new Map(), session: s.session + 1, lastImportRunId: null, importAllResults: null, importAllInProgress: false }));
   },
 }));

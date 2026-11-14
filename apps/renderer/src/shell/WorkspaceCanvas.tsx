@@ -504,11 +504,9 @@ function ImporterCardItem({
         }
       >
         <AccentStrip accent={typeIcon.accent} radius={token.borderRadiusSM} />
-        <Tooltip title={typeIcon.label}>
-          <div style={{ fontSize: 11, color: token.colorTextTertiary, marginBottom: 2 }}>
-            {source.name}
-          </div>
-        </Tooltip>
+        <div style={{ fontSize: 11, color: token.colorTextTertiary, marginBottom: 2 }}>
+          {source.name}
+        </div>
         {namespaceStats && (
           <div style={{ fontSize: 10, color: token.colorTextTertiary, marginBottom: 2 }}>
             {namespaceStats.node_count.toLocaleString()} nodes · {namespaceStats.edge_count.toLocaleString()} edges
@@ -780,6 +778,20 @@ function AuthoredNamespaceCardItem({
   const AnalysisIcon = analysisDecoration?.icon ?? SafetyCertificateOutlined;
   const checkSummaryQuery = useLoadCheckSummary(ns.name);
 
+  // Entering (or checking) an analysis namespace while an import is running
+  // reads a namespace that is mid-write: the importer has not committed every
+  // node/edge to RiaGraph yet, so the editor and the check both render a
+  // partial, misleading state. Both actions stay blocked until the backend
+  // import lock clears, which happens on success AND on fault alike (the
+  // `finally` in imports.runFromSource), so a failed run cannot leave the
+  // buttons stuck. `anyRunning` also covers Run All Imports, where the gap
+  // between two sources is still not a safe moment to open.
+  const blockedReason = filesCorrupted
+    ? 'Repair the manifest before opening the analysis workspace'
+    : anyRunning
+      ? 'An import is running — the analysis namespace can be opened once the import finishes'
+      : undefined;
+
   return (
     <div>
       <Card
@@ -852,13 +864,13 @@ function AuthoredNamespaceCardItem({
         </div>
         <CheckSummaryBadges summary={checkSummaryQuery.data} />
         <Space size={6} wrap style={{ width: '100%', justifyContent: 'flex-end', marginTop: 4 }}>
-          <Tooltip title={filesCorrupted ? 'Repair the manifest before opening the analysis workspace' : undefined}>
-            <Button size="small" icon={<SafetyCertificateOutlined />} onClick={onCheck} disabled={!onCheck || filesCorrupted} style={{ fontSize: 11 }}>
+          <Tooltip title={blockedReason}>
+            <Button size="small" icon={<SafetyCertificateOutlined />} onClick={onCheck} disabled={!onCheck || !!blockedReason} style={{ fontSize: 11 }}>
               Check
             </Button>
           </Tooltip>
-          <Tooltip title={filesCorrupted ? 'Repair the manifest before opening the analysis workspace' : undefined}>
-            <Button size="small" type="primary" icon={<EyeOutlined />} onClick={onOpen} disabled={!onOpen || filesCorrupted} style={{ fontSize: 11 }}>
+          <Tooltip title={blockedReason}>
+            <Button size="small" type="primary" icon={<EyeOutlined />} onClick={onOpen} disabled={!onOpen || !!blockedReason} style={{ fontSize: 11 }}>
               Open
             </Button>
           </Tooltip>
@@ -1512,10 +1524,20 @@ export function WorkspaceCanvas({
       role: 'authored',
     }));
 
-  // ── Import run state — backend is the source of truth ───────────────────
+  // Backend tracks each source; the session store covers the entire batch,
+  // including persistence/refresh gaps and canvas remounts between sources.
   const { data: activeImport } = useActiveImport();
   const activeImportSourceId = activeImport?.sourceId ?? null;
-  const anyRunning = activeImportSourceId !== null;
+  const importAllInProgress = useImportRunStore((s) => s.importAllInProgress);
+  // `useActiveImport` polls on a 2 s interval, so the backend lock is not
+  // visible for up to two seconds after a run starts. `activeRuns` is written
+  // synchronously by the run mutation and cleared in its onSuccess/onError, so
+  // it closes that window — which matters here because `anyRunning` now gates
+  // opening an analysis namespace, and the gap would otherwise let the user in
+  // right after pressing Run.
+  const sessionRunsActive = useImportRunStore((s) => s.activeRuns.size > 0);
+  const anyRunning =
+    activeImportSourceId !== null || importAllInProgress || sessionRunsActive;
 
   // ── Namespace connection graph — drives the React Flow edges ─────────────
   // The graph exposes distinct imported/analysis names and the directed
@@ -1718,11 +1740,8 @@ export function WorkspaceCanvas({
     }
   };
 
-  const importAllInProgressRef = useRef(false);
-
   // Import all sources sequentially, showing an aggregate summary modal when done (#64).
   const handleImportAll = async () => {
-    if (importAllInProgressRef.current) return;
     const sources = importSources;
     if (sources.length === 0) return;
     // Guard against concurrent invocations (e.g. from menu while a run is in progress).
@@ -1756,12 +1775,15 @@ export function WorkspaceCanvas({
       );
     }
 
-    importAllInProgressRef.current = true;
+    // Acquire synchronously so button/menu invocations cannot start a second
+    // loop before React renders the busy state, or after a content remount.
+    if (!useImportRunStore.getState().tryStartImportAll(importSession)) return;
     let failed = 0;
     const errors: string[] = [];
     const succeeded: { sourceName: string; runId: string }[] = [];
     try {
       for (let i = 0; i < runnable.length; i++) {
+        if (useImportRunStore.getState().session !== importSession) return;
         const src = runnable[i];
         void message.loading({ content: `Importing ${src.name} (${i + 1} of ${runnable.length})…`, key: 'import-all-progress', duration: 0 });
         try {
@@ -1773,9 +1795,12 @@ export function WorkspaceCanvas({
         }
       }
     } finally {
-      importAllInProgressRef.current = false;
-      void message.destroy('import-all-progress');
+      useImportRunStore.getState().endImportAll(importSession);
+      if (useImportRunStore.getState().session === importSession) {
+        void message.destroy('import-all-progress');
+      }
     }
+    if (useImportRunStore.getState().session !== importSession) return;
     if (failed === 0) {
       setImportAllResults(succeeded);
     } else {
@@ -1877,7 +1902,12 @@ export function WorkspaceCanvas({
       setDeleteTarget({ namespace: src.targetNamespace, role: 'imported', sourceId: src.sourceId }),
     onUpdateFromBranch: (src: ImportSourceInfo) => setUpdateFromBranchSource(src),
     onUpdateFromRepo: (src: ImportSourceInfo) => { void handleUpdateFromRepo(src); },
-    onOpenAnalysis: (ns: AuthoredNsCardData) =>
+    // Both guard on the live `anyRunning` rather than trusting the card's
+    // disabled state: node data is rebuilt behind a fingerprint, so a click
+    // landing on a not-yet-rebuilt card must not open a namespace the importer
+    // is still writing.
+    onOpenAnalysis: (ns: AuthoredNsCardData) => {
+      if (graphDataRef.current.anyRunning) return;
       onEditNamespace?.({
         namespaceId: ns.id,
         name: ns.name,
@@ -1885,8 +1915,10 @@ export function WorkspaceCanvas({
         owningApplication: ns.owningApplication,
         metamodel: ns.standard,
         workingDir: graphDataRef.current.workingDir,
-      }),
-    onCheckAnalysis: (ns: AuthoredNsCardData) =>
+      });
+    },
+    onCheckAnalysis: (ns: AuthoredNsCardData) => {
+      if (graphDataRef.current.anyRunning) return;
       onCheckNamespace?.({
         namespaceId: ns.id,
         name: ns.name,
@@ -1894,7 +1926,8 @@ export function WorkspaceCanvas({
         owningApplication: ns.owningApplication,
         metamodel: ns.standard,
         workingDir: graphDataRef.current.workingDir,
-      }),
+      });
+    },
     onDeleteAnalysis: (ns: AuthoredNsCardData) =>
       setDeleteTarget({ namespace: ns.id, role: 'authored' }),
     onMergeFromFiles: (ns: AuthoredNsCardData) =>
@@ -2832,7 +2865,7 @@ export function WorkspaceCanvas({
     return unsubscribe;
   // handleImportAll closes over importSources and anyRunning — re-subscribe when they change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [importSources, anyRunning]);
+  }, [importSources, anyRunning, importSession]);
 
   return (
     <div

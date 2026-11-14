@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
+import { packagedAssetPath } from '@riacore/importer-sdk';
 /**
  * The concept presentation catalog (spec-view.md Phase 4.1).
  *
@@ -68,6 +69,8 @@ const DEFAULT_LABEL_ATTRIBUTE = 'name';
  */
 function resolveShippedPresentationRoot(): string {
   const envRoot = process.env.RIACORE_PRESENTATION_ROOT;
+  const packaged = packagedAssetPath('node_modules/@riacore/app-core/presentation', envRoot);
+  if (packaged) return packaged;
   const candidates = [
     envRoot,
     path.resolve(__dirname, '..', '..', 'presentation'),
@@ -167,6 +170,8 @@ export function loadPresentationCatalog(workingDir: string): PresentationCatalog
   const shippedPath = path.join(resolveShippedPresentationRoot(), 'concept-presentation.json');
   const repoPath = path.join(workingDir, REPO_PRESENTATION_RELATIVE_PATH);
 
+  // A missing shipped catalog is a broken package, not an empty workspace.
+  packagedAssetPath('node_modules/@riacore/app-core/presentation', shippedPath);
   const shippedEntries = readCatalogFile(shippedPath, 'shipped');
   const repoEntries = readCatalogFile(repoPath, 'repository');
 

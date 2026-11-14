@@ -44,6 +44,7 @@ import { WarningOutlined } from '@ant-design/icons';
 import { ShowInTreeTrigger } from '../../../../../components/ShowInTreeTrigger';
 import { api } from '../../../../../api/riacore';
 import type { DiagramMalfunctionRef } from './diagramModel';
+import type { SelectedTreeElement, TreeNodeNavigator } from '../types';
 
 export interface PortPinProps {
   /** Unique port identifier for ref tracking and hover. */
@@ -60,6 +61,8 @@ export interface PortPinProps {
   bidirectional?: boolean;
   /** Whether this port has malfunctions attached. */
   warn: boolean;
+  /** Explanation from the same ASIL check used by Check Model. */
+  asilMismatch?: string;
   /** ASIL hex color for the port square, or null for no malfunctions. */
   asilColor: string | null;
   /** Which side of the card this pin sits on (determines layout order). */
@@ -72,17 +75,19 @@ export interface PortPinProps {
   onHover: (id: string | null) => void;
   /** Port navigation target — nodeId, namespace, concept (portType). */
   portTarget?: { nodeId: number; namespace: string; concept: string };
+  /** The SysML part usage exposing this declaration in the diagram. */
+  portUsageContext?: SelectedTreeElement;
   /** Malfunctions attached to this port (for warning icon navigation). */
   malfunctions?: DiagramMalfunctionRef[];
   /** The authored safety namespace where malfunctions live. */
   malfunctionNamespace?: string;
   /** Navigation callback for "Show in Tree". */
-  onNavigateToNode?: (nodeId: number, namespace: string, concept: string) => void;
+  onNavigateToNode?: TreeNodeNavigator;
   /** Navigation callback for "Show Reference in Tree" — navigates to the reference child under the host. */
   onNavigateToReference?: (refNodeId: number, refNamespace: string, refConcept: string, hostNodeId: number, hostNamespace: string) => void;
 }
 
-export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor, side, refCb, hovered, onHover, portTarget, malfunctions, malfunctionNamespace, onNavigateToNode, onNavigateToReference }: PortPinProps) {
+export function PortPin({ id, name, dir, bidirectional = false, warn, asilMismatch, asilColor, side, refCb, hovered, onHover, portTarget, portUsageContext, malfunctions, malfunctionNamespace, onNavigateToNode, onNavigateToReference }: PortPinProps) {
   const { token } = theme.useToken();
   const navigatingRef = useRef(false);
 
@@ -166,7 +171,9 @@ export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor,
   const portWithNav = portTarget && onNavigateToNode ? (
     <ShowInTreeTrigger
       homeTarget={portTarget}
-      onNavigate={onNavigateToNode}
+      onNavigate={(nodeId, namespace, concept) => portUsageContext
+        ? onNavigateToNode(nodeId, namespace, concept, portUsageContext)
+        : onNavigateToNode(nodeId, namespace, concept)}
       wrapperStyle={contentStyle}
       hideKebab
     >
@@ -231,15 +238,18 @@ export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor,
       }).join('\n')
     : undefined;
 
-  const warningIcon = warn ? (
+  const warningIcon = warn || asilMismatch ? (
     <Tooltip
-      title={malfunctionTooltip}
+      title={[asilMismatch, malfunctionTooltip].filter(Boolean).join('\n\n') || undefined}
       mouseEnterDelay={0.3}
       overlayStyle={{ maxWidth: 360 }}
       overlayInnerStyle={{ whiteSpace: 'pre-wrap', fontSize: 12, color: token.colorText }}
       color={token.colorBgElevated}
     >
       <span
+        role="img"
+        aria-label={asilMismatch ? `ASIL mismatch on ${name}` : `Malfunctions on ${name}`}
+        data-asil-mismatch={asilMismatch ? 'true' : undefined}
         onContextMenu={malfunctions && malfunctions.length > 0 ? handleMalfunctionContextMenu : undefined}
         style={{ display: 'inline-flex', cursor: malfunctions && malfunctions.length > 0 ? 'context-menu' : 'default', flexShrink: 0 }}
       >
@@ -248,12 +258,13 @@ export function PortPin({ id, name, dir, bidirectional = false, warn, asilColor,
           `#d4380d`, so a port whose only malfunction was QM — "there is a
           malfunction here and nobody has classified it" — still rendered a red
           error triangle, which overstated it. `squareColor` already resolves the
-          ASIL with the same QM-grey fallback, so icon and square agree.
+          ASIL with the same QM-grey fallback. A confirmed check mismatch uses
+          the error theme colour so it is distinct from a malfunction marker.
         */}
         <WarningOutlined
           style={{
             fontSize: 11,
-            color: squareColor,
+            color: asilMismatch ? token.colorError : squareColor,
             flexShrink: 0,
           }}
         />

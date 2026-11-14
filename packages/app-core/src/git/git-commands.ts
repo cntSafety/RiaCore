@@ -21,6 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { createRegistry } from '../dispatch/channel-registry.js';
 import { loadWorkspaceGitConfig, saveWorkspaceGitConfig } from './store-commit-hook.js';
+import { extraGitignoreEntries } from '../db/graph-engine.js';
 
 type Registry = ReturnType<typeof createRegistry>;
 
@@ -40,16 +41,18 @@ const RIA_GITIGNORE_REQUIRED = ['db', 'db.wal', 'logs/'];
 
 async function ensureGitignore(repoDir: string): Promise<{ created: boolean; updated: boolean }> {
   const gitignorePath = path.join(repoDir, '.gitignore');
+  // Database files of a non-default graph engine (RiaGraph, dual mode); none for ladybug.
+  const engineEntries = extraGitignoreEntries(repoDir);
 
   if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, RIA_GITIGNORE_CONTENT, 'utf-8');
+    fs.writeFileSync(gitignorePath, RIA_GITIGNORE_CONTENT + engineEntries.map((entry) => `${entry}\n`).join(''), 'utf-8');
     return { created: true, updated: false };
   }
 
   const existing = fs.readFileSync(gitignorePath, 'utf-8');
   const lines = existing.split('\n').map((l) => l.trim());
 
-  const missing = RIA_GITIGNORE_REQUIRED.filter((entry) => !lines.includes(entry));
+  const missing = [...RIA_GITIGNORE_REQUIRED, ...engineEntries].filter((entry) => !lines.includes(entry));
 
   if (missing.length === 0) {
     return { created: false, updated: false };

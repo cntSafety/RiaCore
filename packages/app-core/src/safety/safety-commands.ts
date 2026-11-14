@@ -20,7 +20,7 @@
 import { createHash } from 'crypto';
 import type { Result } from '@riacore/app-contracts';
 import type { IDbModule } from '../db/db-module.js';
-import type { IInstanceService, ConceptInstanceData } from '../namespaces/instance-service.js';
+import { createInstanceService, type IInstanceService, type ConceptInstanceData } from '../namespaces/instance-service.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -69,6 +69,8 @@ export interface PropagationMalfunctionData extends ConceptInstanceData {
 }
 
 export interface CreateTagParams {
+  /** When supplied, create and attach the tag atomically. */
+  targetNodeId?: number;
   namespace: string;
   name: string;
   description?: string;
@@ -395,11 +397,95 @@ export async function resolveAuthoredMetamodel(
 export function createSafetyCommands(
   instanceService: IInstanceService,
   dbModule: IDbModule,
+  options: { transactionBound?: boolean } = {},
 ): ISafetyCommands {
 
   // -----------------------------------------------------------------------
   // Internal helpers
   // -----------------------------------------------------------------------
+
+  /** Bind every read/write to the transaction connection; the DB lock is not reentrant. */
+  async function atomicWrite<T>(
+    work: (instances: IInstanceService, db: IDbModule) => Promise<Result<T>>,
+  ): Promise<Result<T>> {
+    if (options.transactionBound) return work(instanceService, dbModule);
+    if (!dbModule.beginTransaction) {
+      return { ok: false, error: 'Atomic safety writes require database transaction support' };
+    }
+    const tx = await dbModule.beginTransaction();
+    const scopedDb: IDbModule = {
+      ...dbModule,
+      runQuery: (query, params) => tx.runQuery(query, params),
+      beginTransaction: undefined,
+    };
+    try {
+      const result = await work(createInstanceService(scopedDb), scopedDb);
+      if (result.ok) await tx.commit();
+      else await tx.rollback();
+      return result;
+    } catch (error) {
+      await tx.rollback();
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** Validate the existing endpoint and exact namespace pair before creating a node. */
+  async function attachmentTarget(
+    instances: IInstanceService,
+    db: IDbModule,
+    namespace: string,
+    targetNodeId: number,
+    relationship: 'occurs_at' | 'has_notes' | 'has_tag',
+  ): Promise<Result<ConceptInstanceData>> {
+    if (!Number.isSafeInteger(targetNodeId) || targetNodeId < 0) {
+      return { ok: false, error: 'Attachment target must be a valid node ID resolved in the current workspace' };
+    }
+    const target = await instances.getInstance(targetNodeId);
+    if (!target.ok) return target;
+    const metamodel = await resolveAuthoredMetamodel(db, namespace);
+    const definitions = await db.runQuery(
+      `MATCH (mm:RIA_META_Metamodel {name: $metamodel})-[:RIA_META_DEFINES_RELATIONSHIP]->(r:RIA_META_Relationship {name: $relationship})
+       RETURN r.source_concept AS source_concept, r.target_concept AS target_concept`,
+      { metamodel, relationship },
+    );
+    if (definitions.length === 0) {
+      return { ok: false, error: `Relationship '${relationship}' not found in metamodel '${metamodel}'` };
+    }
+    const createdConcept = relationship === 'occurs_at' ? 'malfunction' : relationship === 'has_notes' ? 'safety_note' : 'tag';
+    const endpoints = relationship === 'occurs_at'
+      ? [createdConcept, target.data.concept]
+      : [target.data.concept, createdConcept];
+    for (const [index, key] of ['source_concept', 'target_concept'].entries()) {
+      const expected = String(definitions[0][key] ?? '');
+      if (!expected || expected === endpoints[index]) continue;
+      // Match the generic writer's registered-concept policy; primitive ranges
+      // (e.g. occurs_at's string) deliberately allow imported concept types.
+      const concepts = await db.runQuery(
+        `MATCH (c:RIA_META_Concept {name: $concept, metamodel: $metamodel}) RETURN c.name AS name`,
+        { concept: expected, metamodel },
+      );
+      if (concepts.length > 0) {
+        return { ok: false, error: `Concept '${endpoints[index]}' does not match expected '${expected}' for relationship '${relationship}'` };
+      }
+    }
+    if (namespace === target.data.namespace) {
+      if (relationship === 'occurs_at') {
+        return { ok: false, error: 'The occurs_at target must be in a connected source namespace' };
+      }
+    } else {
+      const pairs = await db.runQuery(
+        `MATCH (i:RIA_UNIV_Namespace)-[:RIA_UNIV_NamespaceConnection]->(a:RIA_UNIV_Namespace)
+         WHERE (i.name = $sourceNs AND a.name = $targetNs)
+            OR (i.name = $targetNs AND a.name = $sourceNs)
+         RETURN count(*) AS cnt`,
+        { sourceNs: namespace, targetNs: target.data.namespace },
+      );
+      if (Number(pairs[0]?.cnt ?? 0) === 0) {
+        return { ok: false, error: `No connection exists between namespaces '${namespace}' and '${target.data.namespace}'. Connect them first.` };
+      }
+    }
+    return target;
+  }
 
   // -----------------------------------------------------------------------
   // Forward-edge lookup helpers
@@ -483,6 +569,7 @@ export function createSafetyCommands(
           `MATCH (parent:RIA_UNIV_ConceptInstance)-[r:RIA_UNIV_INSTANCE_REL]->(child:RIA_UNIV_ConceptInstance {node_id: $nodeId})
            WHERE r.relationship IN $relationships
            RETURN parent.node_id AS node_id
+           ORDER BY node_id
            LIMIT 1`,
           { nodeId: structuralNodeId, relationships: containmentRels },
         );
@@ -554,51 +641,31 @@ export function createSafetyCommands(
     async createMalfunction(
       params: CreateMalfunctionParams,
     ): Promise<Result<{ node_id: number }>> {
-      const guard = await assertAuthoredNamespace(dbModule, params.namespace, 'malfunction');
-      if (!guard.ok) return guard;
+      return atomicWrite(async (instances, db) => {
+        const guard = await assertAuthoredNamespace(db, params.namespace, 'malfunction');
+        if (!guard.ok) return guard;
+        const target = params.occursAtNodeId !== undefined
+          ? await attachmentTarget(instances, db, params.namespace, params.occursAtNodeId, 'occurs_at')
+          : undefined;
+        if (target && !target.ok) return target;
 
-      const attributes: Record<string, unknown> = {
-        uuid: crypto.randomUUID(),
-        has_name: params.name,
-        malfunction_description: params.description,
-      };
-      if (params.asil !== undefined) {
-        attributes.malfunction_asil = params.asil;
-      }
-
-      const createResult = await instanceService.createInstance(
-        params.namespace,
-        'malfunction',
-        attributes,
-      );
-      if (!createResult.ok) return createResult;
-
-      if (params.occursAtNodeId !== undefined) {
-        // Resolve target namespace
-        const tgtResult = await instanceService.getInstance(params.occursAtNodeId);
-        if (!tgtResult.ok) {
-          return {
-            ok: false,
-            error: `Cross-namespace relationship failed: ${tgtResult.error}. Malfunction created with node_id ${createResult.data.node_id}`,
-          };
+        const attributes: Record<string, unknown> = {
+          uuid: crypto.randomUUID(),
+          has_name: params.name,
+          malfunction_description: params.description,
+        };
+        if (params.asil !== undefined) attributes.malfunction_asil = params.asil;
+        const created = await instances.createInstance(params.namespace, 'malfunction', attributes);
+        if (!created.ok) return created;
+        if (target?.ok) {
+          const linked = await instances.createCrossNsRelationship(
+            created.data.node_id, target.data.node_id, 'occurs_at',
+            await resolveAuthoredMetamodel(db, params.namespace), params.namespace, target.data.namespace,
+          );
+          if (!linked.ok) return linked;
         }
-        const crossResult = await instanceService.createCrossNsRelationship(
-          createResult.data.node_id,
-          params.occursAtNodeId,
-          'occurs_at',
-          await resolveAuthoredMetamodel(dbModule, params.namespace),
-          params.namespace,
-          tgtResult.data.namespace,
-        );
-        if (!crossResult.ok) {
-          return {
-            ok: false,
-            error: `Cross-namespace relationship failed: ${crossResult.error}. Malfunction created with node_id ${createResult.data.node_id}`,
-          };
-        }
-      }
-
-      return createResult;
+        return created;
+      });
     },
 
     async getMalfunction(nodeId: number): Promise<Result<MalfunctionData>> {
@@ -688,20 +755,22 @@ export function createSafetyCommands(
       failureModeNodeId: number,
       targetNodeId: number,
     ): Promise<Result<{ edge_id: number }>> {
-      const fmCheck = await assertConcept(instanceService, failureModeNodeId, 'malfunction');
-      if (!fmCheck.ok) return fmCheck;
+      return atomicWrite(async (instances, db) => {
+        const fmCheck = await assertConcept(instances, failureModeNodeId, 'malfunction');
+        if (!fmCheck.ok) return fmCheck;
 
-      const tgtResult = await instanceService.getInstance(targetNodeId);
-      if (!tgtResult.ok) return tgtResult;
+        const tgtResult = await attachmentTarget(instances, db, fmCheck.data.namespace, targetNodeId, 'occurs_at');
+        if (!tgtResult.ok) return tgtResult;
 
-      return instanceService.createCrossNsRelationship(
-        failureModeNodeId,
-        targetNodeId,
-        'occurs_at',
-        await resolveAuthoredMetamodel(dbModule, fmCheck.data.namespace),
-        fmCheck.data.namespace,
-        tgtResult.data.namespace,
-      );
+        return instances.createCrossNsRelationship(
+          failureModeNodeId,
+          targetNodeId,
+          'occurs_at',
+          await resolveAuthoredMetamodel(db, fmCheck.data.namespace),
+          fmCheck.data.namespace,
+          tgtResult.data.namespace,
+        );
+      });
     },
 
     async detachOccursAt(
@@ -1356,6 +1425,10 @@ export function createSafetyCommands(
 
       // When a search term is provided, filter inside Cypher so we don't miss
       // results that fall outside an arbitrary LIMIT applied before filtering.
+      // The CONTAINS on the raw JSON is broader than the field match below, so
+      // it is not capped either: the 50 kept are counted after that match.
+      // Both are ordered, so which requirements make the cut does not depend
+      // on the graph engine's row order.
       const cypher = lower
         ? `MATCH (req:RIA_UNIV_ConceptInstance)
            WHERE (req.concept IN ['RequirementUsage', 'RequirementDefinition']
@@ -1363,13 +1436,14 @@ export function createSafetyCommands(
              AND toLower(req.attributes) CONTAINS $search
            RETURN req.node_id AS node_id, req.namespace AS namespace, req.concept AS concept,
                   req.metamodel AS metamodel, req.attributes AS attributes
-           LIMIT 50`
+           ORDER BY namespace, node_id`
         : `MATCH (req:RIA_UNIV_ConceptInstance)
            WHERE req.concept IN ['RequirementUsage', 'RequirementDefinition']
               OR (req.concept STARTS WITH 'need_' AND req.concept <> 'need_document')
            RETURN req.node_id AS node_id, req.namespace AS namespace, req.concept AS concept,
                   req.metamodel AS metamodel, req.attributes AS attributes
-           LIMIT 500`;
+           ORDER BY namespace, node_id
+           LIMIT 50`;
 
       const rows = await dbModule.runQuery(cypher, lower ? { search: lower } : {});
 
@@ -1422,66 +1496,23 @@ export function createSafetyCommands(
       noteText: string,
       targetNodeId: number,
     ): Promise<Result<{ node_id: number }>> {
-      const guard = await assertAuthoredNamespace(dbModule, namespace, 'safety_note');
-      if (!guard.ok) return guard;
-
-      // Resolve the target before writing anything. A stale selection must not
-      // create an unlinked note and report success.
-      const tgtResult = await instanceService.getInstance(targetNodeId);
-      if (!tgtResult.ok) return tgtResult;
-      const metamodel = await resolveAuthoredMetamodel(dbModule, namespace);
-
-      const attributes: Record<string, unknown> = {
-        uuid: crypto.randomUUID(),
-        note_text: noteText,
-      };
-
-      const createResult = await instanceService.createInstance(namespace, 'safety_note', attributes);
-      if (!createResult.ok) return createResult;
-
-      // Create a has_notes edge from the parent element to this note —
-      // same pattern as has_review / has_safety_tasks (tag pattern: no parent ID in attributes).
-      //   Same namespace  → RIA_UNIV_INSTANCE_REL     (element → note)
-      //   Cross-namespace → RIA_UNIV_CROSSNS_INSTANCE_REL (element → note)
-      let linkError: string | undefined;
-      try {
-        const linkResult = tgtResult.data.namespace !== namespace
-          ? await instanceService.createCrossNsRelationship(
-            targetNodeId,
-            createResult.data.node_id,
-            'has_notes',
-            metamodel,
-            tgtResult.data.namespace,
-            namespace,
-          )
-          : await instanceService.createRelationship(
-            targetNodeId,
-            createResult.data.node_id,
-            'has_notes',
+      return atomicWrite(async (instances, db) => {
+        const guard = await assertAuthoredNamespace(db, namespace, 'safety_note');
+        if (!guard.ok) return guard;
+        const target = await attachmentTarget(instances, db, namespace, targetNodeId, 'has_notes');
+        if (!target.ok) return target;
+        const created = await instances.createInstance(namespace, 'safety_note', {
+          uuid: crypto.randomUUID(), note_text: noteText,
+        });
+        if (!created.ok) return created;
+        const linked = target.data.namespace === namespace
+          ? await instances.createRelationship(targetNodeId, created.data.node_id, 'has_notes')
+          : await instances.createCrossNsRelationship(
+            targetNodeId, created.data.node_id, 'has_notes',
+            await resolveAuthoredMetamodel(db, namespace), target.data.namespace, namespace,
           );
-        if (!linkResult.ok) linkError = linkResult.error;
-      } catch (error) {
-        linkError = error instanceof Error ? error.message : String(error);
-      }
-      if (linkError !== undefined) {
-        // Remove only the note created by this request, including any partial
-        // link record. Existing notes and the selected element are untouched.
-        let cleanupError: string | undefined;
-        try {
-          const cleanup = await instanceService.deleteInstance(createResult.data.node_id);
-          if (!cleanup.ok) cleanupError = cleanup.error;
-        } catch (error) {
-          cleanupError = error instanceof Error ? error.message : String(error);
-        }
-        return {
-          ok: false,
-          error: cleanupError === undefined
-            ? `Could not attach safety note: ${linkError}. The new note was removed.`
-            : `Could not attach safety note: ${linkError}. Could not remove safety note ${createResult.data.node_id}: ${cleanupError}`,
-        };
-      }
-
-      return createResult;
+        return linked.ok ? created : linked;
+      });
     },
 
     async getNoteParent(noteNodeId: number): Promise<Result<ConceptInstanceData | null>> {
@@ -1775,21 +1806,29 @@ export function createSafetyCommands(
     async createTag(
       params: CreateTagParams,
     ): Promise<Result<{ node_id: number }>> {
-      const guard = await assertAuthoredNamespace(dbModule, params.namespace, 'tag');
-      if (!guard.ok) return guard;
-
-      const attributes: Record<string, unknown> = {
-        uuid: crypto.randomUUID(),
-        has_name: params.name,
-      };
-      if (params.description !== undefined) {
-        attributes.tag_description = params.description;
-      }
-      if (params.color !== undefined) {
-        attributes.tag_color = params.color;
-      }
-
-      return instanceService.createInstance(params.namespace, 'tag', attributes);
+      return atomicWrite(async (instances, db) => {
+        const guard = await assertAuthoredNamespace(db, params.namespace, 'tag');
+        if (!guard.ok) return guard;
+        const target = params.targetNodeId !== undefined
+          ? await attachmentTarget(instances, db, params.namespace, params.targetNodeId, 'has_tag')
+          : undefined;
+        if (target && !target.ok) return target;
+        const attributes: Record<string, unknown> = { uuid: crypto.randomUUID(), has_name: params.name };
+        if (params.description !== undefined) attributes.tag_description = params.description;
+        if (params.color !== undefined) attributes.tag_color = params.color;
+        const created = await instances.createInstance(params.namespace, 'tag', attributes);
+        if (!created.ok) return created;
+        if (target?.ok) {
+          const linked = target.data.namespace === params.namespace
+            ? await instances.createRelationship(target.data.node_id, created.data.node_id, 'has_tag')
+            : await instances.createCrossNsRelationship(
+              target.data.node_id, created.data.node_id, 'has_tag',
+              await resolveAuthoredMetamodel(db, params.namespace), target.data.namespace, params.namespace,
+            );
+          if (!linked.ok) return linked;
+        }
+        return created;
+      });
     },
 
     async getTag(nodeId: number): Promise<Result<ConceptInstanceData>> {
@@ -1849,38 +1888,40 @@ export function createSafetyCommands(
       elementNodeId: number,
       tagNodeId: number,
     ): Promise<Result<{ edge_id: number }>> {
-      // 1. Validate element exists
-      const elemResult = await instanceService.getInstance(elementNodeId);
-      if (!elemResult.ok) return elemResult;
+      return atomicWrite(async (instances, db) => {
+        // 1. Validate element exists
+        const elemResult = await instances.getInstance(elementNodeId);
+        if (!elemResult.ok) return elemResult;
 
-      // 2. Validate tag exists and is a 'tag' concept
-      const tagCheck = await assertConcept(instanceService, tagNodeId, 'tag');
-      if (!tagCheck.ok) return tagCheck;
+        // 2. Validate tag exists and is a 'tag' concept
+        const tagCheck = await assertConcept(instances, tagNodeId, 'tag');
+        if (!tagCheck.ok) return tagCheck;
 
-      // 3. Validate both are in the same namespace
-      if (elemResult.data.namespace !== tagCheck.data.namespace) {
-        return {
-          ok: false,
-          error: 'Source and target instances must be in the same namespace',
-        };
-      }
+        // 3. Validate both are in the same namespace
+        if (elemResult.data.namespace !== tagCheck.data.namespace) {
+          return {
+            ok: false,
+            error: 'Source and target instances must be in the same namespace',
+          };
+        }
 
-      // 4. Check for duplicate has_tag edge
-      const dupRows = await dbModule.runQuery(
-        `MATCH (ri:RIA_UNIV_RelationshipInstance)
-         WHERE ri.source_node_id = $srcId AND ri.target_node_id = $tgtId AND ri.relationship = 'has_tag'
-         RETURN ri.edge_id AS edge_id`,
-        { srcId: elementNodeId, tgtId: tagNodeId },
-      );
-      if (dupRows.length > 0) {
-        return {
-          ok: false,
-          error: 'Tag link already exists',
-        };
-      }
+        // 4. Check for duplicate has_tag edge
+        const dupRows = await db.runQuery(
+          `MATCH (ri:RIA_UNIV_RelationshipInstance)
+           WHERE ri.source_node_id = $srcId AND ri.target_node_id = $tgtId AND ri.relationship = 'has_tag'
+           RETURN ri.edge_id AS edge_id`,
+          { srcId: elementNodeId, tgtId: tagNodeId },
+        );
+        if (dupRows.length > 0) {
+          return {
+            ok: false,
+            error: 'Tag link already exists',
+          };
+        }
 
-      // 5. Create the has_tag relationship
-      return instanceService.createRelationship(elementNodeId, tagNodeId, 'has_tag');
+        // 5. Create the has_tag relationship
+        return instances.createRelationship(elementNodeId, tagNodeId, 'has_tag');
+      });
     },
 
     async unlinkTag(
@@ -1950,31 +1991,33 @@ export function createSafetyCommands(
       tagNodeId: number,
       importedElementNodeId: number,
     ): Promise<Result<{ edge_id: number }>> {
-      // 1. Validate tag exists and is a 'tag' concept
-      const tagCheck = await assertConcept(instanceService, tagNodeId, 'tag');
-      if (!tagCheck.ok) return tagCheck;
+      return atomicWrite(async (instances, db) => {
+        // 1. Validate tag exists and is a 'tag' concept
+        const tagCheck = await assertConcept(instances, tagNodeId, 'tag');
+        if (!tagCheck.ok) return tagCheck;
 
-      // 2. Validate imported element exists
-      const tgtResult = await instanceService.getInstance(importedElementNodeId);
-      if (!tgtResult.ok) return tgtResult;
+        // 2. Validate imported element exists
+        const tgtResult = await instances.getInstance(importedElementNodeId);
+        if (!tgtResult.ok) return tgtResult;
 
-      // 3. Validate they are in different namespaces
-      if (tagCheck.data.namespace === tgtResult.data.namespace) {
-        return {
-          ok: false,
-          error: 'Tag and target must be in different namespaces for cross-namespace linking',
-        };
-      }
+        // 3. Validate they are in different namespaces
+        if (tagCheck.data.namespace === tgtResult.data.namespace) {
+          return {
+            ok: false,
+            error: 'Tag and target must be in different namespaces for cross-namespace linking',
+          };
+        }
 
-      // 4. Create cross-NS relationship: imported element → tag
-      return instanceService.createCrossNsRelationship(
-        importedElementNodeId,
-        tagNodeId,
-        'has_tag',
-        await resolveAuthoredMetamodel(dbModule, tagCheck.data.namespace),
-        tgtResult.data.namespace,
-        tagCheck.data.namespace,
-      );
+        // 4. Create cross-NS relationship: imported element → tag
+        return instances.createCrossNsRelationship(
+          importedElementNodeId,
+          tagNodeId,
+          'has_tag',
+          await resolveAuthoredMetamodel(db, tagCheck.data.namespace),
+          tgtResult.data.namespace,
+          tagCheck.data.namespace,
+        );
+      });
     },
 
     async unlinkTagCrossNs(

@@ -116,6 +116,22 @@ export const initialTreeIndexState: TreeIndexState = {
 // Reducer
 // ---------------------------------------------------------------------------
 
+/** Recursive type definitions may revisit a declaration. Keep that last link
+ * selectable, but stop expanding it instead of growing an infinite usage tree. */
+function guardReferenceCycle(child: TreeNodeRecord, state: TreeIndexState): TreeNodeRecord {
+  if (!child.key.startsWith('via:')) return child;
+  let parentKey = child.parentKey;
+  const visited = new Set<string>();
+  while (parentKey && !visited.has(parentKey)) {
+    visited.add(parentKey);
+    const parent = state.nodesByKey[parentKey];
+    if (!parent) break;
+    if (parent.namespace === child.namespace && parent.nodeId === child.nodeId) return { ...child, isLeaf: true };
+    parentKey = parent.parentKey;
+  }
+  return child;
+}
+
 export function treeReducer(state: TreeIndexState, action: TreeAction): TreeIndexState {
   switch (action.type) {
     case 'INIT_NAMESPACES': {
@@ -209,7 +225,7 @@ export function treeReducer(state: TreeIndexState, action: TreeAction): TreeInde
       for (const child of children) {
         if (!seenKeys.has(child.key)) {
           seenKeys.add(child.key);
-          nextNodesByKey[child.key] = child;
+          nextNodesByKey[child.key] = guardReferenceCycle(child, state);
           childKeys.push(child.key);
         }
       }
@@ -328,7 +344,7 @@ export function treeReducer(state: TreeIndexState, action: TreeAction): TreeInde
 
       for (const child of children) {
         if (!existingKeys.has(child.key)) {
-          nextNodesByKey[child.key] = child;
+          nextNodesByKey[child.key] = guardReferenceCycle(child, state);
           appendedKeys.push(child.key);
         }
       }

@@ -26,7 +26,7 @@
  */
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
-import { createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createCommandDispatcher, createLoadGate, createMappingRegistry, registerBuiltInMappings, createViewService, createFileLoggerFactory, createAutoSaveCoordinator } from '@riacore/app-core';
+import { GraphEngineProcessSwitchError, createDbModule, createWorkspaceService, createPersistorService, createImporterOrchestrationService, createImporterRegistry, createProvisioningService, createProfileRegistry, createNamespaceService, createInstanceService, createSafetyCommands, createConnectionService, createCommandDispatcher, createLoadGate, createMappingRegistry, registerBuiltInMappings, createViewService, createFileLoggerFactory, createAutoSaveCoordinator } from '@riacore/app-core';
 import type { IDbModule, IWorkspaceService, IImporterOrchestrationService, IImporterRegistry, IProvisioningService, IProfileRegistry, INamespaceService, IInstanceService, ISafetyCommands, ICommandDispatcher, ServiceDependencies, LoadGate, IMappingRegistry, IViewService, IAutoSaveCoordinator } from '@riacore/app-core';
 import { createGitService } from '@riacore/git-service';
 import type { IGitService } from '@riacore/git-service';
@@ -204,6 +204,18 @@ function handleMessage(data: MainMessage): void {
       })
       .catch(async (err) => {
         const message = err instanceof Error ? err.message : String(err);
+        if (GraphEngineProcessSwitchError.is(err)) {
+          // Not a failure: the workspace runs on the other graph engine, which
+          // needs a fresh worker. The manager restarts this one and repeats the request.
+          sendLog('info', 'Request needs a worker on another graph engine; asking for a restart', {
+            channel,
+            loaded: err.loaded,
+            required: err.required,
+          });
+          const response: WorkerErrorResponse = { type: 'response', id, ok: false, error: message, restartWorker: true };
+          send(response);
+          return;
+        }
         const errorContext = {
           channel,
           error: message,

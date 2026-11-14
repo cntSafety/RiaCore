@@ -189,7 +189,15 @@ Windows distributors must use a validly licensed Visual Studio or Build Tools in
 
 License collection runs during staging and again after electron-builder assembles the final package. Release validation rejects missing license entries, altered or missing license texts, unreviewed npm license declarations, and native component versions outside the reviewed inventory in `apps/desktop-host/build/third-party/`. Update version-specific upstream evidence when these dependencies change. Archives that declare MIT but omit a separate license file retain the publisher's declaration and author metadata alongside canonical license terms; the collector never invents copyright years or assumes a license for undeclared packages. The spreadsheet ZIP reader's legacy `buffers` dependency is therefore mapped to the explicitly MIT-licensed `node-buffers` fork.
 
-Build from the repo root:
+From the extracted source or repository root, fetch the pinned RiaGraph binding
+for your platform. This downloads a public release and verifies its checksums;
+no private repository access or token is required:
+
+```bash
+pnpm riagraph:fetch
+```
+
+Then run the package command for your platform:
 
 ```bash
 pnpm package:desktop:win

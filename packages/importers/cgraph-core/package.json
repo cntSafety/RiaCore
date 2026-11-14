@@ -1,0 +1,21 @@
+{
+  "name": "@riacore/importer-cgraph",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --run --passWithNoTests"
+  },
+  "dependencies": {
+    "@riacore/app-contracts": "workspace:*",
+    "@riacore/importer-sdk": "workspace:*",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

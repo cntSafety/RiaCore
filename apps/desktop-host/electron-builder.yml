@@ -29,6 +29,12 @@ extraResources:
     to: git
     filter:
       - '**/*'
+  # The RiaGraph graph engine (prepare-package.cjs copyRiaGraphBinding): a
+  # prebuilt binding, not a workspace dependency, so it is copied as it is.
+  - from: .release/riagraph
+    to: vendor/riagraph-core
+    filter:
+      - '**/*'
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 msi:
   oneClick: false

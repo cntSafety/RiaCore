@@ -1,0 +1,1125 @@
+## CGraph Metamodel — a static code graph for C translation units
+##
+## Project-independent: nothing here names a component type, a BSW layer or a
+## directory convention. Consumed by the RIACore import write service via
+## parseLinkMLSchema(); produced by the CGraph generator.
+##
+## Rationale, derivation rules and measurements are NOT repeated here:
+##   SPEC-CGraph.md              the normative rules
+##   SPEC-UnattributableAccess.md  what the access rules cannot resolve
+##   README.md                   how to run it, what it produced
+##
+## Two invariants a reader needs before editing:
+##   - every concrete class inherits exactly one `identifier: true` attribute,
+##     `stable_path`, from c_element. Adding another breaks the whole schema,
+##     not just that class (linkml-parser.ts rejects it).
+##   - stable_path is unique ACROSS concepts and excludes line numbers.
+
+id: https://riacore.dev/schema/cgraph
+name: CGraph
+title: CGraph - Static Code Graph for C
+description: >-
+  Static code graph for C codebases, extracted from compiler-resolved ASTs.
+  Models components, files, functions, file-scope variables, named types,
+  parameters, symbols defined outside the analysed corpus, and
+  inline-assembly sites. Relationships cover containment, declaration,
+  inclusion, calls, data access by access class, function-address references,
+  callback registration, typing and signatures.
+
+  Scope: the call, data-access and type graph over functions, file-scope
+  objects, named types, parameters and record members. Enumerators,
+  block-scope locals, derived types and macros are deliberately not nodes.
+  Macro EFFECTS are modelled, because the front end parses after
+  preprocessing; macro identity is not.
+
+  Positioned at the program-entity tier, in the FAMIX / OMG-KDM
+  (ISO/IEC 19506) tradition rather than the statement tier of a Code Property
+  Graph.
+
+  CHANGELOG
+    2.6.0  The value-analysis layer. Additive; no identity change for any
+           existing node.
+           Two kinds of fact now coexist and are kept in different slots so
+           a consumer always knows which one it is reading:
+             AST facts    certain from the expression alone - calls, reads,
+                          writes, read_writes, takes_address_of, registers,
+                          references. Unchanged.
+             value-analysis facts
+                          derived by a sound value analysis (abstract
+                          interpretation) over an analysis unit,
+                          over-approximations in the analysed context -
+                          may_read, may_write, may_dispatch_to,
+                          analysis_reached.
+           The schema names no analyser. Which tool and version produced the
+           value-analysis facts, and with which settings, is recorded in the
+           manifest, so two graphs from different analysers are
+           distinguishable without a schema change.
+           Added c_indirect_call_site with has_indirect_call_site,
+           dispatches_through and may_dispatch_to: per-site targets of an
+           indirect call, which `indirect_call_site_count` could only count.
+           Added may_read / may_write: the OBJECTS a function's own
+           statements may access, including through pointers, returned
+           pointers, pointers loaded from configuration tables, and
+           contract-only external routines (memcpy).
+           Added c_absolute_region and owns_region: fixed-address storage
+           (register blocks) as an access target, declared in project
+           configuration.
+           Added c_return with has_return, and `binds` and `flows_to`: data
+           flow between functions through their PORTS - parameters and the
+           return value. `binds` (AST) records which caller supplies which
+           callee port, and how; `flows_to` (value analysis) records which
+           storage a value may be computed from, looking through automatic
+           locals. Endpoints are whole objects.
+           c_variable now covers block-scope `static` objects
+           (`scope_function`, identity file::function::name): persistent
+           state, unlike automatic locals. Added c_variable.is_volatile,
+           c_function.analysis_reached, c_external_symbol.has_contract.
+    2.5.0  Added c_member and has_member; `reads` / `writes` / `read_writes`
+           may target a member. Additive, no identity change.
+           Shipped with two generator corrections that need no schema change:
+           `*(&E)` now resolves to `E`, and a transparent wrapper is stripped
+           to its first expression child rather than to child zero, which a
+           cast to a named type is not. A consumer diffing across this
+           version will see some `takes_address_of` edges disappear and
+           access edges appear in their place.
+    2.4.1  Generator correction only: operators, initialisers and the inline
+           specifier are read from the AST instead of the token stream.
+           Access edges are retargeted; no identity change.
+    2.4.0  Added `declares_external` and `declares_type`, giving the corpus
+           boundary a containment parent, and `c_file.is_synthetic`.
+    2.3.0  `reads` / `writes` / `read_writes` may target a c_parameter, for
+           the accessing function's own parameters only.
+    2.1.0  Widened `reads` / `writes` / `read_writes` to c_referenceable.
+           Added `abstract: true` to c_located.
+    2.0.0  Added the named-type layer (c_type with c_record, c_enum,
+           c_typedef, c_builtin_type) and c_parameter, with slots
+           defines_type, has_type, returns, aliases, has_member_type,
+           has_parameter. Removed c_function.param_count.
+    1.2.0  Removed c_external_symbol.kind_hint and .declared_in; widened
+           `declares` to c_referenceable.
+    1.1.0  Added c_referenceable and `references`; widened
+           `takes_address_of` and `registers` to c_referenceable.
+    1.0.0  Initial.
+version: 2.6.0
+source_file: cgraph.linkml.yaml
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  cgraph: https://riacore.dev/schema/cgraph#
+
+default_prefix: cgraph
+default_range: string
+
+imports:
+  - linkml:types
+
+##############################################################################
+# ENUMERATIONS
+#
+# Declared for documentation. The attributes carrying these values are typed
+# `range: string`, because attribute values are serialised into the
+# ConceptInstance attributes JSON rather than into typed columns.
+##############################################################################
+
+enums:
+
+  storage_class:
+    description: C storage class of a file-scope symbol, as resolved by the compiler.
+    permissible_values:
+      none:
+        description: No explicit storage class; external linkage.
+      static:
+        description: Internal linkage — visible only within its own translation unit.
+      extern:
+        description: Explicitly declared with external linkage.
+
+  parse_status:
+    description: Outcome of the compiler pass over a file.
+    permissible_values:
+      ok:
+        description: Parsed with no errors.
+      warnings:
+        description: Parsed with warnings but no errors.
+      errors:
+        description: Parsed with errors; facts from this file are incomplete.
+      missing:
+        description: Referenced by the build but not present on disk.
+      not_parsed:
+        description: Known as the origin or target of a fact, but never compiled.
+
+##############################################################################
+# CONCEPTS
+##############################################################################
+
+classes:
+
+  # ── Abstract base and mixin ───────────────────────────────────────────────
+
+  c_element:
+    abstract: true
+    description: Abstract root for every node; carries the shared identity.
+    attributes:
+      stable_path:
+        identifier: true
+        required: true
+        description: >-
+          Globally unique, position-independent identity. Construction is
+          normative in the specification: repo-relative POSIX path,
+          '::' before a symbol
+          name, kind prefix on nodes that are neither a file nor a
+          symbol-in-a-file.
+      name:
+        required: true
+        description: >-
+          Short display name; for a symbol the bare C identifier. Not the
+          identity, so a definition moving between files can be found by
+          joining on it.
+
+  c_located:
+    mixin: true
+    # Both flags deliberately: `mixin` says how it is used, `abstract` keeps a
+    # consumer that reads only `abstract` from listing it as a concept.
+    abstract: true
+    description: >-
+      Mixin for elements occupying a span in a source file. Not
+      identity-bearing - these values move whenever surrounding text does.
+    attributes:
+      source_file:
+        required: true
+        description: >-
+          Canonical repo-relative POSIX path of the owning file; for a symbol,
+          the file holding its DEFINITION.
+      line:
+        range: integer
+        description: 1-based line where the extent starts.
+      end_line:
+        range: integer
+        description: 1-based line where the extent ends.
+
+  # ── Structure ─────────────────────────────────────────────────────────────
+
+  c_component:
+    is_a: c_element
+    description: >-
+      A directory-rooted grouping of files, used as the unit of architectural
+      reporting. What counts as a component is project configuration, not
+      schema. Components nest via contains_component; an intermediate level
+      owns no files and so has no owns_file edge.
+    attributes:
+      path:
+        required: true
+        description: Canonical repo-relative POSIX directory path of the component root.
+      in_corpus:
+        range: boolean
+        required: true
+        description: >-
+          True when at least one translation unit at or beneath this component
+          was compiled. False explains an absent edge and must never be read
+          as an absent dependency.
+    rendering:
+      icon: FolderOutlined
+      color: '#8c8c8c'
+
+  c_file:
+    is_a: c_element
+    description: >-
+      A C source or header file. One node per file however many translation
+      units include it. Being a translation unit is an attribute, not a
+      separate concept, so one path cannot yield two identities.
+    attributes:
+      file_name:
+        required: true
+        description: Base name including extension.
+      directory:
+        description: Canonical repo-relative POSIX directory portion of the path.
+      is_header:
+        range: boolean
+        description: True for a file reached only by inclusion (.h/.hpp/.inc).
+      is_translation_unit:
+        range: boolean
+        required: true
+        description: >-
+          True when the build compiles this file as a translation unit.
+          Reported independently of is_header rather than derived from it.
+      is_generated:
+        range: boolean
+        description: >-
+          True when produced by a code generator. Project-configured;
+          a generated file churns for reasons unrelated to design intent.
+      in_corpus:
+        range: boolean
+        required: true
+        description: >-
+          True when the generator compiled or preprocessed this file. False
+          for a file that is only the recorded origin of a declaration.
+      parse_status:
+        description: One of the parse_status enumeration values.
+      diagnostic_count:
+        range: integer
+        description: >-
+          Compiler errors reported for this file as a translation unit.
+          Non-zero means the facts drawn from it are partial.
+      is_synthetic:
+        range: boolean
+        description: >-
+          True for a scope with no file on disk - at most one per graph, the
+          compiler's own, holding builtin types and intrinsics that would
+          otherwise have no containment parent. The one c_file whose
+          stable_path must NOT be resolved against the repository. Absent,
+          not false, on a real file.
+    rendering:
+      icon: FileOutlined
+      color: '#4096ff'
+
+  # ── Types ─────────────────────────────────────────────────────────────────
+  #
+  # ONLY NAMED TYPES ARE NODES. `has_type` / `returns` / `aliases` point at
+  # the named type reached by stripping pointers, arrays and qualifiers; the
+  # full spelling stays in the referring element's `type_spelling`. A node per
+  # derived type would be unbounded and answer no query.
+
+  c_type:
+    abstract: true
+    is_a: c_element
+    description: >-
+      Abstract base for a NAMED type. Not under c_referenceable: an
+      expression cannot take a type's address or store it in a table.
+    attributes:
+      is_anonymous:
+        range: boolean
+        description: >-
+          True when the type has no tag of its own and is named through a
+          typedef - `typedef struct { ... } Foo_t;`. Identity then borrows the
+          typedef's name.
+      size_bytes:
+        range: integer
+        description: >-
+          Size as the target ABI lays it out, where the compiler could compute
+          it. A change here is an interface break nothing else in the graph
+          would show.
+
+  c_record:
+    is_a: c_type
+    mixins:
+      - c_located
+    description: >-
+      A struct or union definition. One concept for both, discriminated by
+      `is_union`: every relationship they take part in is identical.
+    attributes:
+      is_union:
+        range: boolean
+        required: true
+        description: >-
+          True for a union. Load-bearing for safety review: a union is where
+          the object-granular access edges understate aliasing.
+      member_count:
+        range: integer
+        description: >-
+          Number of declared members. Kept as an attribute because it is NOT
+          derivable from has_member_type: a nested anonymous member has no
+          node to count. The only signal that a record's shape changed.
+    rendering:
+      icon: TableOutlined
+      color: '#d4b106'
+
+  c_enum:
+    is_a: c_type
+    mixins:
+      - c_located
+    description: >-
+      An enumeration definition. Enumerators are not nodes, but their count is
+      carried so an added state shows in a diff.
+    attributes:
+      enumerator_count:
+        range: integer
+        description: Number of declared enumerators.
+    rendering:
+      icon: OrderedListOutlined
+      color: '#9254de'
+
+  c_typedef:
+    is_a: c_type
+    mixins:
+      - c_located
+    description: >-
+      A typedef name, a node in its own right: the typedef is the name the
+      codebase uses and a review cites. `aliases` records what it resolves to.
+    rendering:
+      icon: TagOutlined
+      color: '#36cfc9'
+
+  c_builtin_type:
+    is_a: c_type
+    description: >-
+      A compiler-provided arithmetic or void type. No definition site, which
+      is why c_located is not mixed in. Exists so `has_type` and `returns`
+      are total rather than leaving a gap to special-case.
+    rendering:
+      icon: NumberOutlined
+      color: '#bfbfbf'
+
+  # ── Symbols ───────────────────────────────────────────────────────────────
+
+  c_referenceable:
+    abstract: true
+    is_a: c_element
+    description: >-
+      Abstract base for anything a name can refer to, whether or not its
+      definition is in the corpus. Exists because the corpus boundary is not a
+      property of the REFERENCE: taking a function's address is the same act
+      either way.
+
+  c_symbol:
+    abstract: true
+    is_a: c_referenceable
+    mixins:
+      - c_located
+    description: >-
+      Abstract base for a file-scope entity defined inside the corpus, so that
+      `defines`, `declares` and `takes_address_of` can be typed once.
+    attributes:
+      storage:
+        required: true
+        description: One of the storage_class enumeration values.
+      type_spelling:
+        description: >-
+          The compiler's rendering of the declared type, e.g. 'const Cfg_t *'.
+          Informational; not parsed by consumers.
+
+  c_function:
+    is_a: c_symbol
+    description: >-
+      A function with a definition in the corpus. One only declared here and
+      defined elsewhere is a c_external_symbol, so every c_function is
+      something whose body was analysed.
+    attributes:
+      is_inline:
+        range: boolean
+        description: >-
+          Declared inline, as the compiler resolved it - which includes inline
+          reached through a memory-class macro such as LOCAL_INLINE.
+      # No param_count: it is the number of outbound has_parameter edges, and
+      # a derived aggregate is not allowed as a node attribute.
+      indirect_call_site_count:
+        range: integer
+        description: >-
+          Call sites in this body dispatching through a function pointer. A
+          count, not edges: an indirect call has no statically known target
+          and fabricating one would assert a callee the compiler did not
+          resolve.
+      asm_site_count:
+        range: integer
+        description: >-
+          Inline-assembly statements in this body. A measurement, not a
+          fabricated zero - the generator threads the enclosing function
+          through the assembly walk, so 0 means "walked, none found".
+      analysis_reached:
+        range: boolean
+        description: >-
+          Value-analysis fact. True when the value analysis of the analysis unit
+          containing this function reached its body from the unit's entry
+          point. ABSENT - not false - when the function was in no analysis
+          unit. False means "unreachable from the configured roots", which
+          is either dead code or a missing root, and must be reviewed as
+          such rather than read as dead code.
+    rendering:
+      icon: ThunderboltOutlined
+      color: '#597ef7'
+
+  c_variable:
+    is_a: c_symbol
+    description: >-
+      An object with static storage duration defined in the corpus: a
+      file-scope variable, or a block-scope `static`. Automatic locals are
+      out of scope - they cannot be shared state, which is what this
+      exposes. A block-scope static can: it persists across calls, and its
+      address can escape. Its identity is
+      <file>::<enclosing function>::<name>, since two functions may each
+      declare one of the same name.
+    attributes:
+      scope_function:
+        description: >-
+          stable_path of the enclosing function for a block-scope static.
+          Absent for a file-scope variable.
+      is_volatile:
+        range: boolean
+        description: >-
+          Top-level volatile-ness of the object (array layers stripped).
+      is_const:
+        range: boolean
+        description: >-
+          Top-level const-ness of the OBJECT, not of the spelling.
+          `static const Cfg_t *p` is a mutable pointer to const data - module
+          state in fact - and reads false here.
+      is_tentative:
+        range: boolean
+        description: >-
+          True for a tentative definition: a file-scope declaration with no
+          initialiser that the compiler treats as the definition.
+      has_initializer:
+        range: boolean
+        description: >-
+          True when the definition carries an initialiser, taken from the AST
+          rather than the token stream. An initialised file-scope
+          object is where `registers` edges originate.
+    rendering:
+      icon: DatabaseOutlined
+      color: '#13c2c2'
+
+  c_external_symbol:
+    is_a: c_referenceable
+    description: >-
+      A symbol corpus code references but whose definition the generator never
+      saw - the corpus boundary made visible as a node instead of a dropped
+      edge. Keyed on the bare name. Not permanent: widen the corpus and it
+      becomes a c_function or c_variable, which a diff reports as a removal
+      plus an addition. Carries no kind attribute; the relationship reaching
+      it already states function or object.
+    attributes:
+      has_contract:
+        range: boolean
+        description: >-
+          Value-analysis fact, present only for a function called in an
+          analysed context. True when a user-written formal contract states
+          what it reads and writes. False means the analyser assumed default
+          effects derived from the prototype: every may_read / may_write edge naming this
+          symbol in `via_external` rests on that guess.
+    rendering:
+      icon: ApiOutlined
+      color: '#fa8c16'
+
+  c_parameter:
+    is_a: c_referenceable
+    mixins:
+      - c_located
+    description: >-
+      One declared parameter of a function, in declaration order. A node
+      rather than a count so an edge can point at it. Also an access target,
+      but only from the function that declares it.
+    attributes:
+      index:
+        range: integer
+        required: true
+        description: >-
+          Zero-based position. This, not the name, identifies a parameter: C
+          permits an unnamed parameter, and position is what callers bind to.
+      type_spelling:
+        description: >-
+          The declared type as written, including pointer, array and qualifier
+          layers that `has_type` strips.
+      is_variadic:
+        range: boolean
+        description: >-
+          True for the `...` terminator, recorded as a parameter so a
+          signature's arity is not silently reported as fixed.
+    rendering:
+      icon: ImportOutlined
+      color: '#95de64'
+
+  c_return:
+    is_a: c_referenceable
+    mixins:
+      - c_located
+    description: >-
+      The return value of a function with a non-void return type: its
+      output port, the counterpart of c_parameter. Identity
+      <function stable_path>#return. It exists so that a value leaving a
+      function can be an endpoint of `binds` and `flows_to`; it is never an
+      access target.
+    attributes:
+      type_spelling:
+        description: The declared return type as written.
+    rendering:
+      icon: ExportOutlined
+      color: '#73d13d'
+
+  c_member:
+    is_a: c_referenceable
+    mixins:
+      - c_located
+    description: >-
+      One declared member of a struct or union, in declaration order. A node
+      rather than a count, for the same reason c_parameter is: an edge has to
+      be able to point at it.
+
+      Its role as an access target is what it exists for. A dereference
+      through a field - `handle->cfg->value` - reaches storage THROUGH THIS
+      MEMBER, and that is certain from the expression alone. It says nothing
+      about which object, and nothing about which instance of the record.
+
+      Emitted for record DEFINITIONS only; a forward declaration introduces
+      no members.
+    attributes:
+      index:
+        range: integer
+        required: true
+        description: >-
+          Zero-based declaration position. Memory layout follows it, a
+          reordering is an ABI break, and `registers.member_path` is a
+          positional designator that joins to it. Not the identity: a member
+          is keyed on its NAME, so inserting a field does not re-key the
+          fields below it.
+      type_spelling:
+        description: >-
+          The declared type as written, including the pointer, array and
+          qualifier layers that `has_type` strips.
+      is_bitfield:
+        range: boolean
+        description: >-
+          True for a member declared with a width. Load-bearing for review:
+          two bitfields in one storage unit cannot be written independently,
+          so the access edges understate interference as they do for a union.
+      bit_width:
+        range: integer
+        description: Declared width in bits. Present only on a bitfield.
+      offset_bits:
+        range: integer
+        description: >-
+          Offset from the start of the record as the target ABI lays it out,
+          in bits so a bitfield has a meaningful value. Absent where the
+          compiler could not compute it.
+      is_anonymous:
+        range: boolean
+        description: >-
+          True for a member with no name of its own, as in
+          `struct { union { ... }; }`. Its identity falls back to the index,
+          and the angle brackets in its name say so.
+    rendering:
+      icon: MinusSquareOutlined
+      color: '#ffa940'
+
+  # ── Analysis blind spots ──────────────────────────────────────────────────
+
+  c_asm_site:
+    is_a: c_element
+    mixins:
+      - c_located
+    description: >-
+      One inline-assembly statement. A node rather than a counter because what
+      assembly touches is invisible to an AST pass: these are the points where
+      the graph's claims stop. A freedom-from-interference argument needs them
+      addressable, not aggregated.
+    rendering:
+      icon: WarningOutlined
+      color: '#ff4d4f'
+
+  # ── Value-analysis layer ──────────────────────────────────────────────────
+
+  c_indirect_call_site:
+    is_a: c_element
+    mixins:
+      - c_located
+    description: >-
+      One call through a function pointer. A node because the question a
+      safety review asks is per SITE - "what can this dispatch reach" - and
+      a function may hold several sites with unrelated target sets
+      (a generic-slot dispatcher switching on a discriminator holds one
+      per case).
+
+      Identity: icall::<function stable_path>#<ordinal>, the ordinal being
+      the site's position among the function's indirect calls in source
+      order. Not the line: an edit above the function must not re-key it.
+      An inserted site re-keys the sites after it in the same function,
+      which is accepted for the same reason c_asm_site accepts a line.
+
+      The AST facts (`dispatches_through`, holder_kind, is_cast) are always
+      present. The value-analysis facts (`may_dispatch_to`, resolution) need the
+      enclosing function to be in an analysis unit.
+    attributes:
+      ordinal:
+        range: integer
+        required: true
+        description: Zero-based position among the function's indirect calls.
+      holder_kind:
+        required: true
+        description: >-
+          What holds the pointer: `member` (a struct field - task tables,
+          device API tables), `variable` (a file-scope pointer, typically a
+          registered notification), `parameter` (the target depends on the
+          caller), or `expression` (anything else, e.g. a returned pointer).
+      holder_text:
+        description: Human-readable holder, e.g. `member TaskCfg_t.entry`.
+      is_cast:
+        range: boolean
+        description: >-
+          True when the pointer is cast to another function type at the call
+          - the generic-slot idiom. Every slot then has the same type, so a
+          type-based resolution returns the whole table; only a value
+          analysis that follows the discriminator narrows it.
+      resolution:
+        description: >-
+          Value-analysis fact. `resolved` - reached, targets are the may_dispatch_to
+          edges (an empty set is a finding: the pointer is always null or
+          invalid); `unreached` - the enclosing function was analysed but
+          this statement never executed (e.g. a discriminator case never
+          taken); `not_analysed` - the function was not reached or not in
+          an analysis unit. Only `resolved` licenses reading absent
+          may_dispatch_to edges as absent calls.
+    rendering:
+      icon: BranchesOutlined
+      color: '#eb2f96'
+
+  c_absolute_region:
+    is_a: c_referenceable
+    description: >-
+      A fixed-address memory range - a peripheral register block - declared
+      in project configuration and used as an access target. Hardware
+      registers are shared state between every function that touches them
+      (an ISR and a task, two drivers on one peripheral), but they have no
+      C object, so without this node the sharing is invisible. Identity:
+      abs::<configured name>.
+    attributes:
+      base_address:
+        required: true
+        description: Hexadecimal base address, e.g. `0xF0020000`.
+      size_bytes:
+        range: integer
+        required: true
+        description: Size of the range in bytes.
+    rendering:
+      icon: HddOutlined
+      color: '#a0d911'
+
+##############################################################################
+# RELATIONSHIPS
+#
+# Edge attributes are listed per slot as `Edge:` lines. They are NOT
+# declarable in the LinkML subset parseLinkMLSchema() consumes - it reads only
+# description/domain/range/required/identifier/multivalued/is_containment/
+# ifabsent - so they reach the graph unregistered: queryable and diffable, but
+# with no metamodel-level type.
+#
+# ACCESS CLASSES ARE THREE SLOTS, not one slot with an attribute, because the
+# diff keys an edge on (source, target, relationship). One relationship admits
+# one edge per pair, so a function that both reads and writes an object would
+# lose one of the two facts. Same argument for `calls` vs `takes_address_of`.
+##############################################################################
+
+slots:
+
+  # ── Containment ───────────────────────────────────────────────────────────
+  # Together these are a forest over the whole graph: every node has exactly
+  # one containment parent except a root c_component.
+
+  contains_component:
+    domain: c_component
+    range: c_component
+    is_containment: true
+    description: >-
+      A component directly contains a nested component. One edge per
+      parent/child step, never a transitive closure. Acyclic by construction,
+      since the parent of a path is shorter than the path.
+
+  owns_file:
+    domain: c_component
+    range: c_file
+    is_containment: true
+    description: >-
+      A component owns a file. Only the component the grouping rule derives
+      from the file's path owns it - enclosing components do not - so
+      ownership stays single-valued and a file is not counted per level.
+
+  defines:
+    domain: c_file
+    range: c_symbol
+    is_containment: true
+    description: >-
+      A file contains the DEFINITION of a symbol. The inverse of the symbol's
+      own source_file.
+
+  contains_asm:
+    domain: c_file
+    range: c_asm_site
+    is_containment: true
+    description: A file contains an inline-assembly statement.
+
+  has_return:
+    domain: c_function
+    range: c_return
+    is_containment: true
+    description: >-
+      A function with a non-void return type has this return port. Absent
+      for a void function, so its absence is a fact about the signature.
+
+  has_indirect_call_site:
+    domain: c_function
+    range: c_indirect_call_site
+    is_containment: true
+    description: >-
+      A function body contains this call through a function pointer. The
+      number of these edges equals `indirect_call_site_count`.
+
+  owns_region:
+    domain: c_component
+    range: c_absolute_region
+    is_containment: true
+    description: >-
+      The component that owns a configured fixed-address region - the
+      driver of the peripheral. Taken from configuration, not from code.
+
+  defines_type:
+    domain: c_file
+    range: c_type
+    is_containment: true
+    description: >-
+      A file contains the definition of a named type. Definitions only: a
+      forward declaration introduces no members and no layout, and yields
+      `declares_type` instead. c_builtin_type never has this edge.
+
+  has_parameter:
+    domain: c_function
+    range: c_parameter
+    is_containment: true
+    description: >-
+      A function declares this parameter. Ordering comes from the parameter's
+      `index`, not from edge order, which no storage layer preserves.
+
+  has_member:
+    domain: c_record
+    range: c_member
+    is_containment: true
+    description: >-
+      A struct or union declares this member. Emitted for a DEFINITION only,
+      so a record carrying this edge is one whose shape is known and a record
+      without it is either empty or declared-only - which `defines_type`
+      versus `declares_type` already distinguishes. Ordering comes from the
+      member's `index`, not from edge order.
+
+      `member_count` on c_record is NOT the number of these edges and must
+      not be re-derived from them: a nested anonymous member contributes to
+      the count and may yield no node, which is why the count stays a
+      measured attribute.
+
+  declares_external:
+    domain: c_file
+    range: c_external_symbol
+    is_containment: true
+    description: >-
+      The declaration site of record for a symbol defined outside the corpus:
+      the containment parent of a c_external_symbol. Distinct from the
+      multi-valued `declares` - containment must be single-valued, so where
+      several files declare one symbol this names the lexicographically
+      first, so the choice cannot depend on parse order. An intrinsic
+      declared by no header takes the synthesised compiler scope.
+
+  declares_type:
+    domain: c_file
+    range: c_type
+    is_containment: true
+    description: >-
+      A file declares a named type without defining it: the containment parent
+      of a type defined outside the corpus. Mutually exclusive with
+      `defines_type` and together total over named types with a source
+      location, so which one a type carries says whether its members are
+      known. A c_builtin_type takes the synthesised compiler scope.
+
+  # ── Declaration and inclusion ─────────────────────────────────────────────
+
+  declares:
+    domain: c_file
+    range: c_referenceable
+    description: >-
+      A file declares a symbol it does not define - typically a header
+      exporting another file's definition. The set of declaring files is the
+      symbol's advertised interface surface, a different question from where
+      its code is. Ranges over c_referenceable so it also covers a symbol
+      defined outside the corpus.
+
+  includes:
+    domain: c_file
+    range: c_file
+    description: >-
+      A file directly includes another. Transitive inclusion is not flattened.
+      Edge: `is_system` (boolean) for an angle-bracket include,
+      `first_line` (integer).
+
+  # ── Call graph ────────────────────────────────────────────────────────────
+
+  calls:
+    domain: c_function
+    range: c_function
+    description: >-
+      A function contains at least one call site naming another function whose
+      definition is in the corpus. One edge per pair, not per site.
+
+      Asserts the existence of a call SITE, not that a call occurs: the AST
+      establishes the former, only execution the latter.
+      Edge: `call_site_count` (integer), `first_line` (integer).
+
+  calls_external:
+    domain: c_function
+    range: c_external_symbol
+    description: >-
+      A function calls a symbol defined outside the corpus, so that such a
+      call is a visible edge to a visible boundary node instead of an absence.
+      Edge: `call_site_count` (integer), `first_line` (integer).
+
+  takes_address_of:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function body takes a symbol's address without calling it. For a
+      function target this is runtime callback registration; the eventual
+      dispatch is unresolvable and is not represented as a call.
+      Edge: `site_count` (integer), `first_line` (integer).
+
+  # ── Data access ───────────────────────────────────────────────────────────
+  # All three range over c_referenceable because the corpus boundary is not a
+  # property of the access. The range is wider than the truth - it admits
+  # c_function, never an access target - so these narrowings are GENERATOR
+  # INVARIANTS enforced by the acceptance tests, not by the range:
+  #   - no access edge targets a c_function;
+  #   - an edge to a c_parameter targets one of the SOURCE function's own;
+  #   - an edge to a c_variable or c_external_symbol targets an object with
+  #     static storage duration (file-scope, or a block-scope static);
+  #   - an edge to a c_member targets a member of a record defined in the
+  #     corpus, so it always has a has_member parent.
+  #
+  # The overriding rule, unchanged by the widenings above: no access edge
+  # names an object that the compiler did not resolve or that a pointer was
+  # not proved to hold the address of. A c_parameter or c_member target names
+  # a route, not an object, which is why admitting them does not weaken it.
+  #
+  # Route rule for an access through a pointer (`*p`, `p->f`, `p[i]`): the
+  # target is the INNERMOST member in the access path when there is one
+  # (`regs->status_bits.ready` -> member `ready`, so bitfield interference is
+  # visible); otherwise the parameter the pointer came from; otherwise the
+  # pointer member it was loaded from; otherwise an `unattributable_*`
+  # diagnostic. The OBJECT behind such an access is what may_read /
+  # may_write add.
+  #
+  # These are AST facts and are emitted for every analysed body, reachable
+  # or not.
+
+  reads:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function reads storage and never writes it. Four target kinds, and
+      the split between them is the split between naming an OBJECT and naming
+      a ROUTE to one:
+
+        c_variable, c_external_symbol  the object itself
+        c_parameter                    storage reached through one of the
+                                       source function's own parameters
+        c_member                       storage reached through that member of
+                                       that record type
+
+      Only the first kind answers "who reads this state"; a consumer asking
+      that must filter on target concept. The other two say nothing about
+      which object, and c_member says nothing about which instance of the
+      record either.
+      Edge: `site_count` (integer), `first_line` (integer).
+
+  writes:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function writes storage and never reads it. Same four target kinds as
+      `reads`. A write through a dereferenced pointer is never attributed to a
+      GUESSED object; where neither the object nor a route to it can be
+      resolved it becomes an `unattributable_write` diagnostic.
+      Edge: `site_count` (integer), `first_line` (integer).
+
+  read_writes:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function both reads and writes the same storage, at distinct sites or
+      at one site via compound assignment or increment. Same four target kinds
+      as `reads`. A separate class because collapsing it would misreport a
+      read-modify-write, the pattern that matters most for concurrent access
+      review.
+      Edge: `site_count`, `read_site_count`, `write_site_count`,
+      `first_line` (all integer). The per-class counts are carried because
+      one edge per pair is required, not one number.
+
+  # ── Value analysis ────────────────────────────────────────────────────────
+  # Derived by a sound value analysis (abstract interpretation) over an
+  # ANALYSIS UNIT from its entry
+  # point. Sound over-approximations IN THAT CONTEXT: every runtime access
+  # or dispatch reachable from the unit's roots is included, and some that
+  # cannot happen may be. Three limits a consumer must carry with them:
+  #   - no preemption or multicore interleaving is modelled;
+  #   - inline assembly is assumed to touch nothing;
+  #   - an external routine without a contract has GUESSED effects
+  #     (c_external_symbol.has_contract = false).
+  # Absence of an edge is meaningful only for a source with analysis_reached =
+  # true (functions) or resolution = resolved (sites).
+  # Edge attribute `unit` names the analysis unit; with several units the
+  # counts are summed and `unit` lists them comma-separated.
+
+  may_read:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function's OWN statements may read this object - by name, through
+      any pointer, or through a contract-only external routine the function
+      calls. Effects of called functions that have a body are THEIR edges,
+      not the caller's, so the relation composes along `calls` and
+      `may_dispatch_to` without double counting.
+      Targets: c_variable, c_external_symbol (an object), c_absolute_region.
+      Never a parameter, member or automatic local.
+
+      The difference to `reads` is the whole point: `reads` says which
+      object an expression names; this says which object the storage
+      belongs to. A memory manager copying into a RAM block whose address
+      it loads from a configuration table has no `writes` edge to that
+      block and a `may_write` edge to it.
+      Edge: `site_count`, `named_site_count` (sites whose expression names
+      the object), `external_call_site_count` (sites where the access is
+      performed by a contract-only callee), `first_line` (all integer);
+      `via_external` (comma-separated stable_paths of those callees);
+      `byte_ranges` (c_absolute_region only: accessed offsets, e.g.
+      `0x0-0x3,0xC-0xD`); `unit`.
+
+  may_write:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      A function's own statements may write this object. Same targets,
+      attributes and composition rule as `may_read`. A function that both
+      reads and writes an object has both edges; there is no may-
+      read_writes, because a may-fact cannot claim a read-modify-write
+      happens at one site.
+
+  may_dispatch_to:
+    domain: c_indirect_call_site
+    range: c_referenceable
+    description: >-
+      Value-analysis fact: this indirect call site may call this function (c_function,
+      or c_external_symbol for a target defined outside the corpus). The
+      precise answer the AST cannot give. Edge: `unit`.
+
+  # ── Data flow between functions ───────────────────────────────────────────
+  # A function is a box with PORTS: its parameters (c_parameter) and its
+  # return value (c_return). Data crosses a call only through them, and
+  # crosses functions only through ports and objects. Two rules fix what an
+  # endpoint means:
+  #   - a pointer parameter as a flow endpoint denotes the storage it points
+  #     to, not the address (the address is `binds` mode `address`);
+  #   - an endpoint is a whole object; a flow into one field is a flow into
+  #     the object.
+
+  binds:
+    domain: c_function
+    range: c_referenceable
+    description: >-
+      AST fact, direct calls only: at a call site in this function, the
+      caller binds a port of the callee. Target c_parameter - the caller
+      supplies that argument; target c_return - the caller uses the
+      result. A `calls` edge with no `binds` to the callee's c_return means
+      every result is discarded.
+      For an indirect call the binding follows from the site's
+      may_dispatch_to targets and is not repeated here.
+      Edge: `mode` - `value`, `address`, `function` (a function
+      designator), `constant`, or `result`; where sites differ, the modes
+      seen, comma-separated. `constant` - the literal, when every site
+      passes the same one; `site_count`, `first_line`.
+
+  flows_to:
+    domain: c_referenceable
+    range: c_referenceable
+    description: >-
+      Value-analysis fact: a value stored at the target may be computed
+      from the value stored at the source. Endpoints: c_variable,
+      c_external_symbol (an object), c_absolute_region, c_parameter,
+      c_return.
+
+      FRAME RULE. Every fact is established by one function body, named in
+      the `functions` attribute. Its endpoints are objects, that
+      function's own ports, or the ports of functions it calls: an
+      argument flows INTO the callee's parameter, a used result or an
+      out-parameter flows OUT of the callee's port. Automatic locals are
+      looked through. Effects inside a callee with a body are the callee's
+      own facts, so a path over `flows_to` composes calls without double
+      counting. A contract-only external routine (memcpy) has no ports;
+      its effect is a flow in the caller with the routine in
+      `via_external`.
+
+      Ports are shared by all callers, so a path through a port can join
+      one caller's input to another caller's output: the relation
+      over-approximates and never omits a flow the analysis saw.
+      Edge: `dependency` - `data` (computed from), `control` (decides
+      whether or which value is written: conditions, indices, pointers),
+      or `data,control`; `functions` (comma-separated stable_paths),
+      `via_external`, `first_line`, `unit`.
+
+  dispatches_through:
+    domain: c_indirect_call_site
+    range: c_referenceable
+    description: >-
+      AST fact: the member, variable or parameter the function pointer is
+      read from. A member target is the join key back to the `registers`
+      edges whose `member_path` populated it - the type-based answer, kept
+      next to the value-based one so their difference is visible. Absent
+      for holder_kind `expression`.
+
+
+  has_type:
+    domain: c_referenceable
+    range: c_type
+    description: >-
+      The declared type of a variable or parameter, canonicalised to its named
+      type. Domain is c_referenceable so one slot covers both. Does not apply
+      to c_function - a signature is expressed structurally by `returns` and
+      `has_parameter` - nor to c_external_symbol, whose type is known only
+      from a declaration the corpus may not hold.
+      Edge: `indirection` (integer), pointer levels stripped.
+
+  returns:
+    domain: c_function
+    range: c_type
+    description: >-
+      The function's return type, canonicalised. A `void` function points at
+      the builtin `void`, so the edge is total and its absence means the
+      function was not analysed rather than that it returns nothing.
+      Edge: `indirection` (integer).
+
+  aliases:
+    domain: c_typedef
+    range: c_type
+    description: >-
+      What a typedef resolves to, one hop. Chains are not flattened:
+      `typedef Foo_t Bar_t;` yields Bar_t -> Foo_t -> the record. Flattening
+      would discard the intermediate names, which are what the code uses.
+      Edge: `indirection` (integer).
+
+  has_member_type:
+    domain: c_record
+    range: c_type
+    description: >-
+      A struct or union has at least one member of this type. The
+      change-impact edge: without it, "if I change Cfg_t, what is affected"
+      stops at the functions naming Cfg_t directly and misses every record
+      embedding one. One edge per (record, type) pair; member names are not
+      carried.
+      Edge: `member_count` (integer), `indirection` (integer).
+
+  # ── Registration ──────────────────────────────────────────────────────────
+
+  references:
+    domain: c_variable
+    range: c_referenceable
+    description: >-
+      A file-scope object's initialiser names another object without taking a
+      function address - the counterpart of `registers` and hop one of a
+      multi-hop configuration chain. Distinct from the `reads` family, whose
+      domain is a function: an initialiser has no enclosing caller and is not
+      an execution-time access.
+      Edge: `member_path` (string), `container_type` (string),
+      `site_count` (integer), `first_line` (integer).
+
+  registers:
+    domain: c_variable
+    range: c_referenceable
+    description: >-
+      A file-scope object's initialiser stores a function's address - the
+      generic dispatch table: interrupt vector, OS task table, driver
+      notification table. An edge from the OBJECT, since registration happens
+      at file scope with no enclosing caller; without it such a function has
+      no inbound edge and reads as dead code while being an entry point.
+      Resolving it to the eventual caller is out of scope - that needs
+      framework knowledge and belongs in a consumer view.
+      Edge: `member_path` (string), `container_type` (string),
+      `site_count` (integer), `first_line` (integer).

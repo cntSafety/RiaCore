@@ -72,6 +72,7 @@ import {
   type ModelGraph,
 } from '../modules/namespace/editors/model-view/modelGraph';
 import { useCommonModelPresentation } from './usePresentation';
+import { loadModelPortChecks } from './modelViewChecks';
 
 /** The view's immediate metamodel. The model view speaks only this vocabulary. */
 const COMMON_MODEL = 'COMMON_MODEL';
@@ -385,10 +386,13 @@ async function loadModelView(
   const result = await evaluateElements(namespace, elementNodeIds);
   collect(result);
 
-  const malfunctionsByNodeId = await loadMalfunctions(result.representatives, safetyNamespace);
+  const [malfunctionsByNodeId, portCheckMessages] = await Promise.all([
+    loadMalfunctions(result.representatives, safetyNamespace),
+    loadModelPortChecks(result.representatives, namespace, safetyNamespace, diagnostics),
+  ]);
 
   return {
-    graph: buildModelGraph(result, focusId, namespace, malfunctionsByNodeId),
+    graph: buildModelGraph(result, focusId, namespace, malfunctionsByNodeId, portCheckMessages),
     focusId,
     diagnostics: [...new Set(diagnostics)],
   };

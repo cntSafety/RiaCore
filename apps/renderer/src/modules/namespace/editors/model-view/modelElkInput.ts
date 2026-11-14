@@ -329,6 +329,27 @@ export function anchorSide(
   return role === 'source' ? 'east' : 'west';
 }
 
+/** Visible pins use the same endpoint rule as ELK and drag-time routing.
+ * A port used on both borders needs a marker on both, at the same row offset.
+ */
+export function connectedPortSides(graph: ModelGraph): Record<string, Record<string, TileSide[]>> {
+  const tiles = new Map(graph.tiles.map((tile) => [tile.id, tile]));
+  const result: Record<string, Record<string, TileSide[]>> = {};
+  for (const edge of graph.edges) {
+    const delegation = isDelegation(edge, tiles);
+    for (const role of ['source', 'target'] as const) {
+      const tile = tiles.get(edge[role]);
+      const portId = portIdFromHandle(role === 'source' ? edge.sourceHandle : edge.targetHandle);
+      const port = tile?.ports.find((candidate) => candidate.id === portId);
+      if (!tile || !port) continue;
+      const side = anchorSide(role, port.dir, delegation);
+      const sides = (result[tile.id] ??= {})[port.id] ??= [];
+      if (!sides.includes(side)) sides.push(side);
+    }
+  }
+  return result;
+}
+
 /**
  * The room a frame has to leave inside its border, as an ELK padding vector.
  *
@@ -550,11 +571,12 @@ export interface ModelLayout {
  */
 export async function computeModelLayout(graph: ModelGraph): Promise<ModelLayout> {
   const pass1 = await computeElkLayout(buildElkInput(graph, 'FIXED_SIDE'));
+  const portSides = connectedPortSides(graph);
   const ordered: ModelGraph = {
     ...graph,
     tiles: graph.tiles.map((tile) => ({
       ...tile,
-      ports: resolvePortOrder(tile, pass1.portOrder[tile.id]),
+      ports: resolvePortOrder(tile, pass1.portOrder[tile.id], portSides[tile.id]),
     })),
   };
 
@@ -582,20 +604,36 @@ export async function computeModelLayout(graph: ModelGraph): Promise<ModelLayout
 }
 
 /**
- * Resolve the render order of a tile's ports from the order ELK laid them out
- * in. Side is never changed by reordering: the ports are partitioned into
- * inputs and outputs, each side sorted by ELK's rank, and inputs kept before
- * outputs. When ELK returned no order (initial render or grid fallback) the
- * tile's existing deterministic order from `buildModelGraph` is used unchanged.
+ * Preserve ELK's top-to-bottom order on the border actually used by a port.
+ * Opposite-border connections use a synthetic ELK anchor, so its rank must win
+ * over the unused natural anchor. Both-border ports keep the natural border as
+ * a deterministic tie-break: one row cannot satisfy two independent orders.
+ * Missing layout results retain the graph's existing order.
  */
-export function resolvePortOrder(tile: ModelTile, elkOrder: string[] | undefined): ModelPort[] {
+export function resolvePortOrder(
+  tile: ModelTile,
+  elkOrder: string[] | undefined,
+  portSides?: Record<string, TileSide[]>,
+): ModelPort[] {
   if (!elkOrder || elkOrder.length === 0) return tile.ports;
   const rank = new Map(elkOrder.map((id, index) => [id, index]));
-  const inPorts = tile.ports.filter((port) => port.dir === 'in');
-  const outPorts = tile.ports.filter((port) => port.dir === 'out');
-  const byRank = (a: ModelPort, b: ModelPort) =>
-    (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER);
-  return [...inPorts.sort(byRank), ...outPorts.sort(byRank)];
+  const sideOf = (port: ModelPort): TileSide => {
+    const sides = portSides?.[port.id];
+    return sides?.length === 1 ? sides[0] : port.dir === 'in' ? 'west' : 'east';
+  };
+  const rankOf = (port: ModelPort) => {
+    const side = sideOf(port);
+    const natural = port.dir === 'in' ? 'west' : 'east';
+    const anchor = side === natural ? port.id
+      : side === 'east' ? portSourceHandle(port.id) : portTargetHandle(port.id);
+    return rank.get(anchor) ?? rank.get(port.id) ?? Number.MAX_SAFE_INTEGER;
+  };
+  return [...tile.ports].sort((a, b) => {
+    const sideA = sideOf(a);
+    const sideB = sideOf(b);
+    if (sideA !== sideB) return sideA === 'west' ? -1 : 1;
+    return rankOf(a) - rankOf(b);
+  });
 }
 
 /**
